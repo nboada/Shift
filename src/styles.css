@@ -514,11 +514,23 @@ button.primary:disabled { opacity: 0.6; }
 }
 .threads li[data-id] { margin-top: 3px; }
 .threads li[data-id] { position: relative; }
-/* Quick reply, archive and delete on hover; inherits the row's hover/selected background so it covers the snippet beneath. */
-.threads .row-actions { position: absolute; right: 8px; bottom: 7px; display: none; background: inherit; }
+/* Quick reply, archive and delete on hover, in a small pill that covers the snippet beneath. */
+.threads .row-actions {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  display: none;
+  gap: 1px;
+  padding: 1px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.06);
+}
 .threads li[data-id]:hover .row-actions { display: flex; }
 /* Shorter than a toolbar button so they stay on the snippet line, clear of the subject and its label chips. */
-.threads .row-actions button.icon { width: 26px; height: 22px; }
+.threads .row-actions button.icon { width: 28px; height: 22px; border-radius: 999px; }
+.threads .row-actions button.icon:hover { background: var(--hover); }
 .threads li[data-id]:hover { background: var(--hover); }
 .threads li.selected { box-shadow: var(--pane-shadow); }
 .threads li.selected { background: var(--selected); }
@@ -1084,17 +1096,28 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 
 .toast {
   position: fixed;
-  inset: auto auto 16px 50%;
+  inset: auto auto 20px 50%;
   margin: 0;
   border: 0;
   transform: translateX(-50%);
-  max-width: calc(100vw - 32px);
-  padding: 8px 14px;
-  border-radius: 8px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 6px 6px 6px 14px;
+  border-radius: 12px;
   background: var(--text);
   color: var(--bg);
-  box-shadow: var(--shadow);
+  font-size: 13px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
 }
+.toast:popover-open { display: flex; align-items: center; gap: 8px; animation: toast-in 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 12px) scale(0.97); } }
+@media (prefers-reduced-motion: reduce) { .toast:popover-open { animation-name: fade-in; } }
+.toast-icon { font-size: 16px; opacity: 0.8; }
+.toast-text { flex: 1; min-width: 0; padding: 4px 0; line-height: 1.35; }
+.toast-action { padding: 4px 10px; border-radius: 7px; color: inherit; font-weight: 600; background: rgb(127 127 127 / 0.28); }
+.toast-action:hover { background: rgb(127 127 127 / 0.4); }
+.toast-close { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: inherit; font-size: 15px; opacity: 0.6; }
+.toast-close:hover { opacity: 1; background: rgb(127 127 127 / 0.25); }
 
 /* phones and narrow windows: one pane at a time */
 @media (max-width: 760px) {
@@ -1176,8 +1199,6 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
   pointer-events: none;
 }
 .link-status[hidden] { display: none; }
-.toast:popover-open { display: flex; align-items: center; gap: 12px; }
-.toast button { padding: 2px 8px; border-radius: 5px; color: inherit; font-weight: 600; background: rgb(127 127 127 / 0.25); }
 
 /* ---- settings window ---- */
 /* A light backdrop keeps the app visible, so appearance and inbox changes show live behind the window. */
