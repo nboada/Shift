@@ -11,12 +11,17 @@ export default {
     const { pathname } = new URL(request.url);
 
     if (pathname === "/api/early-access" && request.method === "POST") {
+      // A few sign-ups a minute per visitor is plenty; scripts flooding KV with junk addresses get turned away.
+      const { success } = await env.SIGNUP_LIMIT.limit({ key: request.headers.get("cf-connecting-ip") ?? "unknown" });
+      if (!success) return json({ error: "Too many tries. Wait a minute and try again." }, 429);
+      if (Number(request.headers.get("content-length") ?? 0) > 2048) return json({ error: "Request too large." }, 413);
       let body;
       try {
         body = await request.json();
       } catch {
         return json({ error: "Send the email as JSON." }, 400);
       }
+      if (!body || typeof body !== "object") return json({ error: "Send the email as JSON." }, 400);
       // A hidden field people never see; bots fill it in.
       if (body.website) return json({ download: null });
       const email = String(body.email ?? "").trim().toLowerCase();

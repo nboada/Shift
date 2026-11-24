@@ -1833,7 +1833,8 @@ fn safe_filename(name: &str) -> String {
 /// `dir/name`, or `dir/name (2).ext` and so on when that file already exists.
 /// Writes a downloaded attachment under a free name and marks it as from the internet, as browsers do. With the
 /// quarantine flag, Gatekeeper checks apps (also ones unzipped from it) and Office opens macro files in Protected View.
-fn write_download(dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<PathBuf> {
+/// Returns the saved path and whether the quarantine flag was set.
+fn write_download(dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<(PathBuf, bool)> {
     use std::io::Write;
     let mut path = free_path(dir, name);
     // create_new: never follows a symlink or overwrites a file that appeared since free_path looked.
@@ -1861,7 +1862,7 @@ fn write_download(dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<PathBu
     if !quarantined {
         eprintln!("couldn't set the quarantine flag on {}", path.display());
     }
-    Ok(path)
+    Ok((path, quarantined))
 }
 
 fn free_path(dir: &Path, name: &str) -> PathBuf {
@@ -1904,8 +1905,9 @@ async fn open_attachment(
     idx: i64,
 ) -> R<String> {
     let (name, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
-    let path = write_download(&app.path().download_dir()?, &safe_filename(&name), &bytes)?;
-    if opens_directly(&name) {
+    let (path, quarantined) = write_download(&app.path().download_dir()?, &safe_filename(&name), &bytes)?;
+    // Without the flag macOS wouldn't check the file before it runs, so show it in Finder instead of opening it.
+    if quarantined && opens_directly(&name) {
         tauri_plugin_opener::open_path(&path, None::<&str>)?;
     } else {
         tauri_plugin_opener::reveal_item_in_dir(&path)?;
@@ -2343,8 +2345,9 @@ mod tests {
     fn downloads_get_a_free_name_and_the_quarantine_flag() {
         let dir = std::env::temp_dir().join(format!("shift-q-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let first = write_download(&dir, "x.zip", b"one").unwrap();
-        let second = write_download(&dir, "x.zip", b"two").unwrap();
+        let (first, flagged) = write_download(&dir, "x.zip", b"one").unwrap();
+        let (second, _) = write_download(&dir, "x.zip", b"two").unwrap();
+        assert!(flagged, "the quarantine flag was set");
         assert_eq!(second, dir.join("x (2).zip"));
         assert_eq!(std::fs::read(&first).unwrap(), b"one");
         let flag = std::process::Command::new("/usr/bin/xattr")
