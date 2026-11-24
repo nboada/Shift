@@ -454,23 +454,29 @@ async fn sync_all(app: &AppHandle) {
 
 /// Release builds check shift.talkk.com.au for a newer version at launch and every six hours, install it in the
 /// background, then tell the UI so it can offer a restart. Dev and demo builds never update themselves.
+/// Release builds only: dev and demo builds have no signed update feed to install from.
+fn updates_enabled(app: &AppHandle) -> bool {
+    !cfg!(debug_assertions) && !app.state::<State>().demo
+}
+
+/// Checks the update feed and installs a newer version if there is one. Returns its version; the restart is the user's.
+async fn install_update(app: &AppHandle) -> anyhow::Result<Option<String>> {
+    use tauri_plugin_updater::UpdaterExt;
+    let Some(update) = app.updater()?.check().await? else {
+        return Ok(None);
+    };
+    update.download_and_install(|_, _| {}, || {}).await?;
+    Ok(Some(update.version))
+}
+
 fn spawn_update_checks(app: &AppHandle) {
-    if cfg!(debug_assertions) || app.state::<State>().demo {
+    if !updates_enabled(app) {
         return;
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        use tauri_plugin_updater::UpdaterExt;
         loop {
-            let result = async {
-                let Some(update) = app.updater()?.check().await? else {
-                    return anyhow::Ok(None);
-                };
-                update.download_and_install(|_, _| {}, || {}).await?;
-                anyhow::Ok(Some(update.version))
-            }
-            .await;
-            match result {
+            match install_update(&app).await {
                 Ok(Some(version)) => {
                     let _ = app.emit("update-ready", version);
                     return;
@@ -482,6 +488,42 @@ fn spawn_update_checks(app: &AppHandle) {
         }
     });
 }
+
+/// Shift → Check for Updates…: the same check, now, with the outcome shown as a toast either way.
+fn check_for_updates_now(app: &AppHandle) {
+    if !updates_enabled(app) {
+        let _ = app.emit("app-toast", "Updates only work in release builds");
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match install_update(&app).await {
+            Ok(Some(version)) => {
+                let _ = app.emit("update-ready", version);
+            }
+            Ok(None) => {
+                let msg = format!("You're up to date (Shift {})", app.package_info().version);
+                let _ = app.emit("app-toast", msg);
+            }
+            Err(e) => {
+                let _ = app.emit("app-toast", format!("Couldn't check for updates: {e:#}"));
+            }
+        }
+    });
+}
+
+/// macOS's default menu (About, Edit, Window…) with Check for Updates… under About Shift.
+fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem};
+    let menu = Menu::default(app)?;
+    if let Some(app_menu) = menu.items()?.first().and_then(|m| m.as_submenu()) {
+        let check = MenuItem::with_id(app, CHECK_UPDATES, "Check for Updates…", true, None::<&str>)?;
+        app_menu.insert(&check, 1)?;
+    }
+    Ok(menu)
+}
+
+const CHECK_UPDATES: &str = "check-updates";
 
 /// Settings → Notifications → Send a test: shows a notification the way new mail would, sound setting included.
 #[tauri::command(async)]
@@ -496,8 +538,39 @@ fn test_notification(app: AppHandle) -> R<()> {
     if cfg.sound {
         n = n.sound("default");
     }
+    // The button is clicked with Shift in front, where macOS would hide the banner.
+    #[cfg(target_os = "macos")]
+    PRESENT_NEXT.store(true, std::sync::atomic::Ordering::SeqCst);
     n.show().map_err(anyhow::Error::from)?;
     Ok(())
+}
+
+/// Set by the test notification: show the next banner even though Shift is the frontmost app.
+#[cfg(target_os = "macos")]
+static PRESENT_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// macOS hides an app's notification banners while it is frontmost unless its notification-centre delegate says
+/// otherwise. The delegate belongs to mac-notification-sys (under the notification plugin) and doesn't implement
+/// `shouldPresentNotification`, so it's added here: yes for the test notification only, so new mail still doesn't
+/// pop up over the inbox you're reading.
+#[cfg(target_os = "macos")]
+fn allow_test_banner() {
+    use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
+    unsafe extern "C-unwind" fn should_present(_: *mut AnyObject, _: Sel, _: *mut AnyObject, _: *mut AnyObject) -> Bool {
+        Bool::new(PRESENT_NEXT.swap(false, std::sync::atomic::Ordering::SeqCst))
+    }
+    let Some(class) = AnyClass::get(c"NotificationCenterDelegate") else {
+        return;
+    };
+    unsafe {
+        let imp: Imp = std::mem::transmute(should_present as unsafe extern "C-unwind" fn(_, _, _, _) -> Bool);
+        objc2::ffi::class_addMethod(
+            class as *const AnyClass as *mut AnyClass,
+            objc2::sel!(userNotificationCenter:shouldPresentNotification:),
+            imp,
+            c"B@:@@".as_ptr(),
+        );
+    }
 }
 
 // ---- AI (src/ai.rs): writing help in the composer, auto-labelling new mail, and inbox cleanup suggestions.
@@ -724,15 +797,26 @@ async fn ai_cleanup(
 /// Passed by the login item, so Shift starts hidden in the Dock and just syncs and notifies.
 const LAUNCHED_AT_LOGIN: &str = "--hidden";
 
+/// The login item: a LaunchAgent tied to Shift's bundle id, so macOS names it "Shift" in Login Items and in its
+/// "can run in the background" notice, rather than the developer on the signing certificate.
+fn login_item(app: &AppHandle) -> anyhow::Result<auto_launch::AutoLaunch> {
+    let exe = std::env::current_exe()?;
+    Ok(auto_launch::AutoLaunchBuilder::new()
+        .set_app_name("Shift")
+        .set_app_path(&exe.display().to_string())
+        .set_macos_launch_mode(auto_launch::MacOSLaunchMode::LaunchAgent)
+        .set_bundle_identifiers(&[&app.config().identifier])
+        .set_args(&[LAUNCHED_AT_LOGIN])
+        .build()?)
+}
+
 #[tauri::command(async)]
 fn open_at_login(app: AppHandle) -> R<bool> {
-    use tauri_plugin_autostart::ManagerExt;
-    Ok(app.autolaunch().is_enabled().map_err(anyhow::Error::from)?)
+    Ok(login_item(&app)?.is_enabled()?)
 }
 
 #[tauri::command(async)]
 fn set_open_at_login(app: AppHandle, enabled: bool) -> R<()> {
-    use tauri_plugin_autostart::ManagerExt;
     // A dev build would register target/debug/app as the login item.
     if cfg!(debug_assertions) {
         return Err(anyhow::anyhow!(
@@ -740,13 +824,13 @@ fn set_open_at_login(app: AppHandle, enabled: bool) -> R<()> {
         )
         .into());
     }
-    let launcher = app.autolaunch();
-    let result = if enabled {
-        launcher.enable()
+    let item = login_item(&app)?;
+    if enabled {
+        item.enable()?
     } else {
-        launcher.disable()
-    };
-    Ok(result.map_err(anyhow::Error::from)?)
+        item.disable()?
+    }
+    Ok(())
 }
 
 /// Restarts into the update `spawn_update_checks` installed.
@@ -1799,11 +1883,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![LAUNCHED_AT_LOGIN]),
-        ))
+        .on_menu_event(|app, event| {
+            if event.id() == CHECK_UPDATES {
+                check_for_updates_now(app);
+            }
+        })
         .setup(|app| {
+            app.set_menu(build_menu(app.handle())?)?;
             // The window is created hidden (tauri.conf.json) so a launch at login can stay in the Dock without a flash.
             if !std::env::args().any(|a| a == LAUNCHED_AT_LOGIN)
                 && let Some(window) = app.get_webview_window("main")
@@ -1818,6 +1904,21 @@ pub fn run() {
                 std::fs::rename(&old, &dir)?;
             }
             std::fs::create_dir_all(&dir)?;
+            #[cfg(target_os = "macos")]
+            allow_test_banner();
+            // Rewrites a login item saved by 0.2.0 and earlier, which had no bundle id and showed as the developer's name.
+            if !cfg!(debug_assertions)
+                && let Ok(item) = login_item(app.handle())
+                && item.is_enabled().unwrap_or(false)
+                && !std::fs::read_to_string(format!(
+                    "{}/Library/LaunchAgents/Shift.plist",
+                    std::env::var("HOME").unwrap_or_default()
+                ))
+                .unwrap_or_default()
+                .contains(&app.config().identifier)
+            {
+                let _ = item.enable();
+            }
             let demo = std::env::var_os("SHIFT_DEMO").is_some();
             let accounts = if demo {
                 // Two in-memory demo accounts, fresh every launch.

@@ -69,7 +69,12 @@ let accounts: string[] = [];
 let scope: string[] | null = null;
 const multi = () => accounts.length > 1;
 /** The account new emails come from: the one being viewed, else the first. */
-const defaultAccount = () => scope?.[0] ?? accounts[0];
+/** Where a new email is sent from: the account on screen when viewing one, else the default from Settings → Composer. */
+const defaultAccount = () => {
+  if (scope?.length === 1) return scope[0];
+  const pick = settings.composer.defaultFrom;
+  return pick && accounts.includes(pick) && (!scope || scope.includes(pick)) ? pick : scope?.[0] ?? accounts[0];
+};
 const accountName = (a: string) => accountSettings(a).title || a;
 let mailbox: string | null = "INBOX";
 let search: string | null = null;
@@ -186,7 +191,8 @@ async function renderMailboxes() {
   const system = arrange(SYSTEM, ([id]) => id ?? "ALL", order, hidden)
     .map(([id, name, icon]) => link("system", id, name, icon, badge && id === "INBOX" ? unread.get(id) : 0));
   const user = arrange(userLabels, (l) => l.id, order, hidden).map((l) => link("label", l.id, l.name, "", badge ? l.unread : 0, l.color));
-  $("#mailboxes").innerHTML = system.join("") + (user.length ? `<h3>Labels</h3>${user.join("")}` : "");
+  $("#mailboxes").innerHTML = system.join("") +
+    `<h3><span>Labels</span><button type="button" class="label-add" data-tip="New label" aria-label="New label">${iconHtml("plus")}</button></h3>${user.join("")}`;
 }
 
 function listTitle() {
@@ -433,7 +439,7 @@ async function showAiLabels(account: string, id: string) {
   const ids = await invoke<string[]>("ai_labels", { account, id }).catch(() => [] as string[]);
   if (!ids.length || selected !== id) return;
   const names = ids.map((l) => accountLabels.get(account)?.find((x) => x.id === l)?.name ?? l);
-  reader.querySelector("h1")?.insertAdjacentHTML("afterend", `<div class="ai-labelled">${iconHtml("wand")}<span>Labelled by AI: ${esc(names.join(", "))}</span><button type="button">Undo</button></div>`);
+  reader.querySelector("h1")?.insertAdjacentHTML("afterend", `<div class="ai-labelled">${iconHtml("message-ai")}<span>Labelled by AI: ${esc(names.join(", "))}</span><button type="button">Undo</button></div>`);
   reader.querySelector(".ai-labelled button")!.addEventListener("click", async (e) => {
     (e.currentTarget as HTMLButtonElement).disabled = true;
     try {
@@ -1493,7 +1499,7 @@ $("#send-later").addEventListener("click", async () => {
   menu.popup();
 });
 
-// ---- Write with AI: the wand button next to Send later. Edits the selection, or the part of the email the user
+// ---- Write with AI: the AI button next to Send later. Edits the selection, or the part of the email the user
 // wrote; in a reply it can also draft the reply, using what's typed so far as notes.
 
 const AI_EDITS: [label: string, instruction: string][] = [
@@ -1693,9 +1699,23 @@ $("#compose-btn").addEventListener("click", () => openComposer({ body: signature
 $("#mailboxes").addEventListener("click", (e) => {
   // Real links (href="#") so they're focusable and work with Return and VoiceOver; never navigate.
   e.preventDefault();
+  if ((e.target as Element).closest(".label-add")) return void newLabel();
   const a = (e.target as Element).closest<HTMLElement>("[data-mailbox]");
   if (a) openMailbox(a.dataset.mailbox || null);
 });
+
+/** The sidebar's + next to Labels: creates the label in every account on screen. Gmail labels belong to one account;
+ * the sidebar merges labels with the same name, so one created in each account shows as one label for all of them. */
+async function newLabel() {
+  const list = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
+  const where = list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} accounts`;
+  const name = await askText({ title: "New label", message: accounts.length > 1 ? `Created in Gmail for ${where}.` : "Created in Gmail.", confirm: "Create", value: "" });
+  if (!name) return;
+  const failed = (await Promise.allSettled(list.map((account) => invoke<string>("create_label", { account, name }))))
+    .flatMap((r, i) => (r.status === "rejected" ? [`${accountName(list[i])}: ${r.reason}`] : []));
+  if (failed.length) toast(`Couldn't create the label in ${failed.join("; ")}`);
+  await renderMailboxes();
+}
 
 /** Shows some accounts (null: all of them); keeps the current mailbox when it exists there. */
 function setScope(list: string[] | null) {
@@ -1997,14 +2017,14 @@ function paletteCommands(): Command[] {
   ];
   const sections: [string, string, string][] = [
     ["general", "General", "gear-six"], ["appearance", "Appearance", "palette"], ["accounts", "Accounts", "user-circle"],
-    ["ai", "AI", "wand"], ["inbox", "Inbox", "tray"], ["composer", "Composer", "pencil-simple-line"],
+    ["ai", "AI", "message-ai"], ["inbox", "Inbox", "tray"], ["composer", "Composer", "pencil-simple-line"],
     ["accessibility", "Accessibility", "text-aa"], ["swipes", "Swipes", "hand-swipe-left"], ["shortcuts", "Keyboard shortcuts", "keyboard"],
   ];
   return [
     ...email,
     { label: "New email", icon: "pencil-simple-line", key: k("compose"), group: "Mail", run: () => $("#compose-btn").click() },
     { label: "Check for mail", icon: "arrows-clockwise", key: k("sync"), group: "Mail", run: () => invoke("sync_now") },
-        { label: "Clean up Inbox with AI", icon: "wand", group: "Mail", run: () => void openCleanup() },
+        { label: "Clean up Inbox with AI", icon: "message-ai", group: "Mail", run: () => void openCleanup() },
     { label: settings.inbox.view === "smart" ? "Switch to plain list" : "Switch to Smart Inbox", icon: "stack", group: "Mail", run: () => $("#view-btn").click() },
     ...go,
     ...switchTo,
@@ -2226,10 +2246,14 @@ const tooltip = $("#tooltip");
 let tipTimer = 0;
 let tipTarget: HTMLElement | null = null;
 let tipHiddenAt = 0;
+// A popover, so it opens in the top layer above any open modal (composer, settings, sheets).
+const tipOpen = () => tooltip.matches(":popover-open");
 function hideTip() {
   clearTimeout(tipTimer);
-  if (!tooltip.hidden) tipHiddenAt = Date.now();
-  tooltip.hidden = true;
+  if (tipOpen()) {
+    tipHiddenAt = Date.now();
+    tooltip.hidePopover();
+  }
   tipTarget = null;
 }
 document.addEventListener("pointerover", (e) => {
@@ -2242,7 +2266,7 @@ document.addEventListener("pointerover", (e) => {
   tipTimer = window.setTimeout(() => {
     const [, label, key] = el.dataset.tip!.match(/^(.*?)(?: \((.+)\))?$/)!;
     tooltip.innerHTML = esc(label) + (key ? ` <kbd>${esc(key.toUpperCase())}</kbd>` : "");
-    tooltip.hidden = false;
+    tooltip.showPopover();
     const r = el.getBoundingClientRect();
     const below = r.bottom + 8 + tooltip.offsetHeight < window.innerHeight;
     tooltip.style.top = `${below ? r.bottom + 8 : r.top - 8 - tooltip.offsetHeight}px`;
@@ -2353,6 +2377,8 @@ listen<{ account?: string; thread?: string }>("open-from-notification", async ({
   await loadThreads();
   if (payload.thread && threads.some((t) => t.id === payload.thread)) await openThread(payload.thread);
 });
+// Messages from the backend, such as the outcome of Shift → Check for Updates….
+listen<string>("app-toast", (e) => toast(e.payload));
 listen<string>("update-ready", (e) => toastAction(`Shift ${e.payload} is ready`, "Restart", () => void invoke("restart_app"), 10 * 60_000));
 listen<string>("sync-error", (e) => toast(`Sync failed: ${e.payload}`));
 

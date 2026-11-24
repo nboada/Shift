@@ -11,7 +11,7 @@ const SECTIONS: [string, string, string][] = [
   ["general", "General", "gear-six"],
   ["appearance", "Appearance", "palette"],
   ["accounts", "Accounts", "user-circle"],
-  ["ai", "AI", "wand"],
+  ["ai", "AI", "message-ai"],
   ["notifications", "Notifications", "bell"],
   ["scheduling", "Scheduling", "calendar-blank"],
   ["inbox", "Inbox", "tray"],
@@ -250,7 +250,9 @@ const render: Record<string, () => string> = {
     group("Replying", row("Write replies", segmented("composer.replyIn", [["inline", "In the email"], ["window", "In a window"]]), "Replies and forwards open under the email, or in a window like a new email.") +
       row("Default reply", segmented("composer.defaultReply", [["reply", "Reply"], ["all", "Reply all"]]), "What R and ⌘R do. The other is always ⇧R.") +
       row("Quote the original message", toggle("composer.quoteOriginal"))) +
-    group("Sending", row("Undo send", segmented("composer.undoSendSeconds", [[0, "Off"], [5, "5s"], [10, "10s"], [20, "20s"]]), "Wait before sending so you can take it back.")),
+    group("Sending", (ctx.accounts().length > 1 ? row("Send new emails from", select("composer.defaultFrom", [["", "First account"], ...ctx.accounts().map((a): [string, string] => [a, accountSettings(a).title ? `${accountSettings(a).title} (${a})` : a])]),
+      "When viewing all accounts. Replies are sent from the account the email came to.") : "") +
+      row("Undo send", segmented("composer.undoSendSeconds", [[0, "Off"], [5, "5s"], [10, "10s"], [20, "20s"]]), "Wait before sending so you can take it back.")),
 
   accessibility: () =>
     group("Zoom", row("Zoom", select("accessibility.zoom", ZOOM_STEPS.map((z): [number, string] => [z, `${z}%`])), "Also ⌘+ ⌘− and ⌘0.")) +
