@@ -30,9 +30,13 @@ Replies and forwards open inline under the thread; new emails open in a resizabl
 
 Attach files with the paperclip or by dropping them on the composer (25 MB in total, Gmail's limit). Forwarding includes the original attachments. In the reader, attachments are listed under each message. Click one to save it to Downloads and open it. Apps, scripts and other unusual file types are shown in Finder instead of being opened. Inline images (`cid:`) load on demand.
 
+## Send later
+
+The clock next to Send schedules the email: Later today, Tomorrow morning, This weekend, Next week (set in Settings → Scheduling), or a date and time you pick. Gmail's API has no scheduled send, so the email is saved to Gmail Drafts and Shift sends it from the sync loop once it's due (within one sync interval). Shift has to be open at that time; anything overdue goes out the next time it opens. The **Scheduled** mailbox lists what's waiting: click one to edit it (that cancels its schedule until you send or schedule it again), or right-click to send now or cancel.
+
 ## Settings
 
-Open with the gear in the sidebar or `⌘,`. Preferences are saved to `settings.json` in the app data folder; AI provider keys go to the macOS Keychain. Notifications and Scheduling are placeholders until those features exist.
+Open with the gear in the sidebar or `⌘,`. Preferences are saved to `settings.json` in the app data folder; AI provider keys go to the macOS Keychain. Notifications is a placeholder until that feature exists.
 
 ## Keyboard shortcuts
 

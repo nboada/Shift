@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS attachments (
   filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
   attachment_id TEXT, content_id TEXT, data BLOB,
   PRIMARY KEY (message_id, idx)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS scheduled (
+  id INTEGER PRIMARY KEY, draft_id TEXT, send_at INTEGER NOT NULL, draft TEXT NOT NULL, ui TEXT NOT NULL);
 ";
 
 pub fn open(path: &std::path::Path) -> Result<Connection> {
@@ -49,6 +51,65 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
         conn.execute("UPDATE threads SET full = 0", [])?;
     }
     Ok(conn)
+}
+
+/// An email waiting for its send time: `draft` is the `Draft` JSON to send, `ui` what the composer needs to reopen it.
+#[derive(Serialize)]
+pub struct ScheduledRow {
+    pub account: String,
+    pub id: i64,
+    pub draft_id: Option<String>,
+    pub send_at: i64,
+    pub draft: serde_json::Value,
+    pub ui: serde_json::Value,
+}
+
+pub fn add_scheduled(
+    conn: &Connection,
+    draft_id: Option<&str>,
+    send_at: i64,
+    draft: &serde_json::Value,
+    ui: &serde_json::Value,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO scheduled (draft_id, send_at, draft, ui) VALUES (?1, ?2, ?3, ?4)",
+        params![draft_id, send_at, draft.to_string(), ui.to_string()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Every scheduled email, soonest first; with `due_by`, only those due by then.
+pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<ScheduledRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, draft_id, send_at, draft, ui FROM scheduled WHERE ?1 IS NULL OR send_at <= ?1 ORDER BY send_at",
+    )?;
+    let rows = stmt.query_map([due_by], |r| {
+        let json = |i| {
+            r.get::<_, String>(i)
+                .map(|s| serde_json::from_str(&s).unwrap_or_default())
+        };
+        Ok(ScheduledRow {
+            account: String::new(),
+            id: r.get(0)?,
+            draft_id: r.get(1)?,
+            send_at: r.get(2)?,
+            draft: json(3)?,
+            ui: json(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Moves a scheduled email to a new time, or with `None` drops the schedule (the Gmail draft stays).
+pub fn reschedule(conn: &Connection, id: i64, send_at: Option<i64>) -> Result<()> {
+    match send_at {
+        Some(t) => conn.execute(
+            "UPDATE scheduled SET send_at = ?2 WHERE id = ?1",
+            params![id, t],
+        )?,
+        None => conn.execute("DELETE FROM scheduled WHERE id = ?1", [id])?,
+    };
+    Ok(())
 }
 
 pub fn get_meta(conn: &Connection, k: &str) -> Result<Option<String>> {
@@ -437,6 +498,21 @@ mod tests {
             "payload": { "headers": [{ "name": "Subject", "value": "subj" }, { "name": "From", "value": "a@b.c" }, { "name": "To", "value": "to@x.y" }] }
         }]});
         serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn scheduled_due_and_reschedule() {
+        let conn = open(std::path::Path::new(":memory:")).unwrap();
+        let d = serde_json::json!({"to": "a@b.c"});
+        let ui = serde_json::json!({});
+        let early = add_scheduled(&conn, Some("d1"), 100, &d, &ui).unwrap();
+        let late = add_scheduled(&conn, None, 300, &d, &ui).unwrap();
+        assert_eq!(scheduled(&conn, Some(200)).unwrap().len(), 1);
+        assert_eq!(scheduled(&conn, None).unwrap()[0].draft["to"], "a@b.c");
+        reschedule(&conn, late, Some(50)).unwrap();
+        assert_eq!(scheduled(&conn, Some(200)).unwrap()[0].id, late);
+        reschedule(&conn, early, None).unwrap();
+        assert_eq!(scheduled(&conn, None).unwrap().len(), 1);
     }
 
     #[test]

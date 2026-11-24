@@ -11,6 +11,8 @@ import { createEditor } from "./editor";
 import { ask, askOpen } from "./dialog";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
+import { formatWhen, quickTimes } from "./schedule";
+import { Menu } from "@tauri-apps/api/menu";
 import { type Attachment, type OutFile, attachmentButton, checkSize, fileIcon, listedAttachments, readFile } from "./attachments";
 
 type Label = { id: string; name: string; kind: string; unread: number };
@@ -42,6 +44,7 @@ const SYSTEM: [string | null, string, string][] = [
   ["IMPORTANT", "Important", "bookmark-simple"],
   ["SENT", "Sent", "paper-plane-tilt"],
   ["DRAFT", "Drafts", "file"],
+  ["SCHEDULED", "Scheduled", "clock"],
   ["ARCHIVE", "Archive", "archive"],
   [null, "All Mail", "tray-arrow-down"],
   ["SPAM", "Spam", "warning-octagon"],
@@ -231,7 +234,7 @@ function renderThreads() {
   if (!smartInbox()) {
     let last = "";
     threadList.innerHTML = threads.map((t) => {
-      const group = search ? "" : dateGroup(t.date);
+      const group = search || mailbox === "SCHEDULED" ? "" : dateGroup(t.date);
       const head = group !== last ? `<li class="section">${group}</li>` : "";
       last = group;
       return head + threadRow(t);
@@ -257,7 +260,27 @@ function decodeEntities(s: string) {
   return t.value;
 }
 
+type Scheduled = {
+  id: number; account: string; draft_id: string | null; send_at: number;
+  draft: { to: string; attachments?: OutFile[] }; ui: { fields: Fields; opts: ComposeOptions };
+};
+/** Rows of the Scheduled view by list id; they are emails waiting in this Mac, not Gmail threads. */
+const scheduledRows = new Map<string, Scheduled>();
+
 async function loadThreads() {
+  if (mailbox === "SCHEDULED" && !search) {
+    const rows = await invoke<Scheduled[]>("scheduled", { accounts: scope });
+    scheduledRows.clear();
+    threads = rows.map((r) => {
+      scheduledRows.set(String(r.id), r);
+      return {
+        id: String(r.id), account: r.account, subject: r.ui.fields.subject ?? "", sender: `To: ${r.draft.to}`,
+        snippet: `Sends ${formatWhen(new Date(r.send_at))}`, date: r.send_at, count: 1,
+        unread: false, starred: false, primary: true, labels: "",
+      };
+    });
+    return renderThreads();
+  }
   threads = sortForInbox(
     search
       ? await invoke<Thread[]>("search", { query: search, accounts: scope })
@@ -304,6 +327,7 @@ function mountEmail(frame: HTMLIFrameElement, html: string) {
 }
 
 async function openThread(id: string) {
+  if (mailbox === "SCHEDULED") return editScheduled(id);
   if (compose?.inline) closeComposer();
   selected = id;
   app.dataset.open = "";
@@ -429,6 +453,7 @@ function removeAndAdvance(id: string) {
 function act(action: string, id = selected) {
   const t = threads.find((t) => t.id === id);
   if (!t) return;
+  if (mailbox === "SCHEDULED") return scheduledAction(action, t.id);
   // Replies need the thread's messages, so open it first.
   if (["reply", "replyAll", "forward"].includes(action) && t.id !== selected) {
     openThread(t.id).then(() => act(action, t.id));
@@ -534,6 +559,14 @@ threadList.addEventListener("contextmenu", (e) => {
   if (!t) return;
   closeMenu();
   li.classList.add("context");
+  if (mailbox === "SCHEDULED") {
+    return showMenu(null, [
+      { id: "edit", label: "Edit", icon: "pencil-simple" },
+      { id: "sendNow", label: "Send now", icon: "paper-plane-right" },
+      "-",
+      { id: "cancel", label: "Cancel send", icon: "x-circle", key: keyLabel("trash"), danger: true },
+    ], { x: e.clientX, y: e.clientY }, (id) => void scheduledAction(id, t.id));
+  }
   const items: MenuItem[] = [
     { id: "reply", label: "Reply", icon: "arrow-bend-up-left", key: keyLabel("reply") },
     { id: "replyAll", label: "Reply all", icon: "arrow-bend-double-up-left", key: keyLabel("replyAll") },
@@ -775,15 +808,20 @@ function reply(kind: "reply" | "all" | "forward") {
   );
 }
 
+function recipientProblem() {
+  const all = [rcpt.to.value, rcpt.cc.value, rcpt.bcc.value].flatMap(splitList);
+  if (!all.length) return "Add at least one recipient";
+  const bad = all.find((a) => !isValidAddress(a));
+  return bad ? `Check this address: ${bad}` : "";
+}
+
 composeForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const state = compose;
   if (!state) return;
   const error = (msg: string) => ($("#compose-error").textContent = msg);
-  const all = [rcpt.to.value, rcpt.cc.value, rcpt.bcc.value].flatMap(splitList);
-  if (!all.length) return error("Add at least one recipient");
-  const bad = all.find((a) => !isValidAddress(a));
-  if (bad) return error(`Check this address: ${bad}`);
+  const problem = recipientProblem();
+  if (problem) return error(problem);
   const draft = currentDraft(state);
   const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
   // Let any pending save finish first, so it can't recreate the draft after it's been sent.
@@ -822,6 +860,89 @@ composeForm.addEventListener("submit", async (e) => {
     button.disabled = false;
   }
 });
+
+// ---- Send later: the clock next to Send, and the Scheduled view.
+
+const laterCustom = $("#send-later-custom");
+const laterInput = laterCustom.querySelector("input")!;
+
+async function scheduleSend(at: Date) {
+  const state = compose;
+  if (!state) return;
+  const error = (msg: string) => ($("#compose-error").textContent = msg);
+  const problem = recipientProblem();
+  if (problem) return error(problem);
+  if (at.getTime() <= Date.now()) return error("Pick a time in the future");
+  const draft = currentDraft(state);
+  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
+  // Saved to Gmail Drafts first, so the email is safe there (and visible on other devices) until it goes out.
+  await saveDraft(state, draft);
+  try {
+    const id = await invoke<number>("schedule_send", {
+      account: state.account, draft, draftId: state.draftId, sendAt: at.getTime(),
+      ui: { fields, opts: { title: state.title, context: state.context } },
+    });
+    compose = null;
+    detachComposer();
+    laterCustom.hidden = true;
+    toastAction(`Scheduled for ${formatWhen(at)}`, "Undo", () => {
+      invoke("reschedule", { account: state.account, id, sendAt: null })
+        .then(() => openComposer(fields, { ...state, touched: true }));
+    }, 6000);
+  } catch (err) {
+    error(String(err));
+  }
+}
+
+$("#send-later").addEventListener("click", async () => {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const local = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const times = quickTimes(new Date(), settings.scheduling);
+  const menu = await Menu.new({
+    items: [
+      ...times.map((t) => ({ text: `${t.label}  ·  ${formatWhen(t.at)}`, action: () => scheduleSend(t.at) })),
+      { item: "Separator" as const },
+      {
+        text: "Pick Date & Time…",
+        action: () => {
+          laterInput.value = local(times.find((t) => t.id === "tomorrow")!.at);
+          laterInput.min = local(new Date());
+          laterCustom.hidden = false;
+          laterInput.focus();
+        },
+      },
+    ],
+  });
+  menu.popup();
+});
+laterCustom.querySelector("button")!.addEventListener("click", () => laterInput.value && scheduleSend(new Date(laterInput.value)));
+laterInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.metaKey) {
+    e.preventDefault();
+    if (laterInput.value) scheduleSend(new Date(laterInput.value));
+  }
+});
+
+/** Opening a scheduled email cancels its schedule; send or schedule it again, or close to keep it as a draft. */
+async function editScheduled(id: string) {
+  const r = scheduledRows.get(id);
+  if (!r) return;
+  await invoke("reschedule", { account: r.account, id: r.id, sendAt: null });
+  await openComposer(r.ui.fields, {
+    ...r.ui.opts, account: r.account, draftId: r.draft_id, attachments: r.draft.attachments ?? [], touched: true, inline: false,
+  });
+  toast("Not scheduled while you edit");
+}
+
+function scheduledAction(action: string, id: string) {
+  const r = scheduledRows.get(id);
+  if (!r) return;
+  if (action === "edit") return editScheduled(id);
+  if (action === "sendNow") return invoke("reschedule", { account: r.account, id: r.id, sendAt: Date.now() });
+  if (action === "cancel" || action === "trash") {
+    return invoke("reschedule", { account: r.account, id: r.id, sendAt: null }).then(() => toast("Send cancelled. The email is in Drafts."));
+  }
+}
 
 // ---- Composer attachments: the paperclip, drag and drop, and removable chips.
 
@@ -1548,6 +1669,7 @@ function start(list: string[]) {
 }
 
 listen("mail-changed", refresh);
+listen("scheduled-sent", () => toast("Scheduled email sent"));
 listen<string>("sync-error", (e) => toast(`Sync failed: ${e.payload}`));
 
 loadSettings()

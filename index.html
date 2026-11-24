@@ -121,6 +121,11 @@
         </div>
         <footer>
           <span id="compose-error" class="error"></span>
+          <span id="send-later-custom" class="send-later-custom" hidden>
+            <input type="datetime-local" aria-label="Send at" />
+            <button type="button" class="secondary">Schedule</button>
+          </span>
+          <button type="button" class="icon" id="send-later" data-tip="Send later"><i class="ph ph-clock"></i></button>
           <button type="submit" class="primary"><i class="ph ph-paper-plane-right"></i> Send</button>
         </footer>
       </form>
