@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rename-label"
+description = "Enables the rename_label command without any pre-configured scope."
+commands.allow = ["rename_label"]
+
+[[permission]]
+identifier = "deny-rename-label"
+description = "Denies the rename_label command without any pre-configured scope."
+commands.deny = ["rename_label"]
