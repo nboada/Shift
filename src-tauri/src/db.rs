@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS attachments (
   PRIMARY KEY (message_id, idx)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS scheduled (
   id INTEGER PRIMARY KEY, draft_id TEXT, send_at INTEGER NOT NULL, draft TEXT NOT NULL, ui TEXT NOT NULL,
-  sending INTEGER NOT NULL DEFAULT 0);
+  sending INTEGER NOT NULL DEFAULT 0, error TEXT);
 CREATE TABLE IF NOT EXISTS pending_ops (
   seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, add_labels TEXT NOT NULL, remove_labels TEXT NOT NULL,
   trash INTEGER NOT NULL);
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS ai_labels (
 ";
 
 /// Schema version, kept in `PRAGMA user_version`. Bump it and add an `if version < N` step to `open` for each change.
-const VERSION: i64 = 1;
+const VERSION: i64 = 2;
 
 pub fn open(path: &std::path::Path) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
@@ -57,12 +57,33 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
     if version < 1 {
         upgrade_unversioned(&tx, had_attachments)?;
     }
+    if version < 2 {
+        add_column(&tx, "scheduled", "error TEXT")?;
+        // Older versions cached bodies Gmail stores apart as blank, and other charsets as U+FFFD: fetch them again.
+        tx.execute(
+            "UPDATE threads SET full = 0 WHERE full = 1 AND id IN (SELECT thread_id FROM messages
+               WHERE (html IS NULL AND text IS NULL) OR instr(coalesce(html, '') || coalesce(text, ''), char(65533)) > 0)",
+            [],
+        )?;
+    }
     tx.execute_batch(&format!("PRAGMA user_version = {VERSION}"))?;
     tx.commit()?;
     // A send claimed when Shift quit or crashed never finished from this side: let it go out again. A draft-backed
     // send that did reach Gmail comes back 404 and is dropped, so this can't duplicate it.
     conn.execute("UPDATE scheduled SET sending = 0", [])?;
     Ok(conn)
+}
+
+/// Whether opening failed because the file is damaged or isn't a database, rather than busy or unreadable.
+pub fn is_corrupt(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
+            matches!(
+                e.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+            )
+        })
+    })
 }
 
 /// Adds a column, or returns false when the database already has it.
@@ -116,6 +137,10 @@ pub struct ScheduledRow {
     pub send_at: i64,
     pub draft: serde_json::Value,
     pub ui: serde_json::Value,
+    /// Being sent right now (claimed).
+    pub sending: bool,
+    /// Why the last attempt failed; it's retried each sync.
+    pub error: Option<String>,
 }
 
 pub fn add_scheduled(
@@ -141,16 +166,16 @@ pub fn claim(conn: &Connection, id: i64, now: i64) -> Result<bool> {
     )? == 1)
 }
 
-/// Gives a claimed row back after a failed send, so the next tick retries it.
-pub fn release(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute("UPDATE scheduled SET sending = 0 WHERE id = ?1", [id])?;
+/// Gives a claimed row back after a failed send, with why, so the next tick retries it and the list says so.
+pub fn release(conn: &Connection, id: i64, error: &str) -> Result<()> {
+    conn.execute("UPDATE scheduled SET sending = 0, error = ?2 WHERE id = ?1", params![id, error])?;
     Ok(())
 }
 
 /// Every scheduled email, soonest first; with `due_by`, only those due by then.
 pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<ScheduledRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, draft_id, send_at, draft, ui FROM scheduled WHERE ?1 IS NULL OR send_at <= ?1 ORDER BY send_at",
+        "SELECT id, draft_id, send_at, draft, ui, sending, error FROM scheduled WHERE ?1 IS NULL OR send_at <= ?1 ORDER BY send_at",
     )?;
     let rows = stmt.query_map([due_by], |r| {
         let json = |i| {
@@ -164,14 +189,28 @@ pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<Scheduled
             send_at: r.get(2)?,
             draft: json(3)?,
             ui: json(4)?,
+            sending: r.get(5)?,
+            error: r.get(6)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// The files attached to one scheduled email (the list leaves them out: they can be megabytes each).
-pub fn scheduled_files(conn: &Connection, id: i64) -> Result<serde_json::Value> {
-    let draft: String = conn.query_row("SELECT draft FROM scheduled WHERE id = ?1", [id], |r| r.get(0))?;
+/// Takes a scheduled email back for editing: drops its schedule and returns its files (the list leaves them out:
+/// they can be megabytes each). Refused once it's being sent, or when it has already gone.
+pub fn take_scheduled(conn: &mut Connection, id: i64) -> Result<serde_json::Value> {
+    let tx = conn.transaction()?;
+    let row: Option<(String, bool)> = tx
+        .query_row("SELECT draft, sending FROM scheduled WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((draft, sending)) = row else {
+        anyhow::bail!("It has already been sent");
+    };
+    if sending {
+        anyhow::bail!("It's already being sent");
+    }
+    tx.execute("DELETE FROM scheduled WHERE id = ?1", [id])?;
+    tx.commit()?;
     let mut draft: serde_json::Value = serde_json::from_str(&draft)?;
     Ok(draft["attachments"].take())
 }
@@ -181,7 +220,7 @@ pub fn scheduled_files(conn: &Connection, id: i64) -> Result<serde_json::Value> 
 pub fn reschedule(conn: &Connection, id: i64, send_at: Option<i64>) -> Result<()> {
     let changed = match send_at {
         Some(t) => conn.execute(
-            "UPDATE scheduled SET send_at = ?2 WHERE id = ?1 AND sending = 0",
+            "UPDATE scheduled SET send_at = ?2, error = NULL WHERE id = ?1 AND sending = 0",
             params![id, t],
         )?,
         None => conn.execute("DELETE FROM scheduled WHERE id = ?1 AND sending = 0", [id])?,
@@ -928,6 +967,29 @@ mod tests {
     }
 
     #[test]
+    fn taking_a_scheduled_email_back_is_refused_once_it_is_sending_or_sent() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        let draft = serde_json::json!({ "attachments": [{ "name": "a.txt" }] });
+        let id = add_scheduled(&c, Some("d"), 100, &draft, &serde_json::json!({})).unwrap();
+        assert!(claim(&c, id, 100).unwrap());
+        assert!(take_scheduled(&mut c, id).is_err(), "being sent");
+        release(&c, id, "offline").unwrap();
+        assert_eq!(take_scheduled(&mut c, id).unwrap()[0]["name"], "a.txt");
+        assert!(scheduled(&c, None).unwrap().is_empty(), "off the schedule");
+        assert!(take_scheduled(&mut c, id).is_err(), "already gone (sent)");
+    }
+
+    #[test]
+    fn only_a_damaged_file_counts_as_corrupt() {
+        let path = std::env::temp_dir().join(format!("shift-corrupt-{}.sqlite3", std::process::id()));
+        std::fs::write(&path, b"definitely not sqlite, long enough to have a header").unwrap();
+        assert!(is_corrupt(&open(&path).unwrap_err()));
+        let _ = std::fs::remove_file(&path);
+        assert!(!is_corrupt(&anyhow::anyhow!("database is locked")));
+    }
+
+    #[test]
     fn a_claimed_send_cannot_be_cancelled() {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(SCHEMA).unwrap();
@@ -937,7 +999,12 @@ mod tests {
         assert!(claim(&c, id, 100).unwrap());
         assert!(!claim(&c, id, 100).unwrap(), "only one sender gets it");
         assert!(reschedule(&c, id, None).is_err(), "cancel refused while sending");
-        release(&c, id).unwrap();
+        assert!(scheduled(&c, None).unwrap()[0].sending);
+        release(&c, id, "Gmail API 400: invalid To").unwrap();
+        let row = &scheduled(&c, None).unwrap()[0];
+        assert!(!row.sending && row.error.as_deref() == Some("Gmail API 400: invalid To"), "the Outbox shows why");
+        reschedule(&c, id, Some(200)).unwrap();
+        assert_eq!(scheduled(&c, None).unwrap()[0].error, None, "a new time clears the old failure");
         reschedule(&c, id, None).unwrap();
         assert!(scheduled(&c, None).unwrap().is_empty(), "cancelled once released");
         reschedule(&c, id, None).unwrap(); // gone already: nothing to refuse

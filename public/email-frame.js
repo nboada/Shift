@@ -78,6 +78,21 @@
     if (/^(https?|mailto):/i.test(url)) post({ type: "link", url });
   });
 
+  // Where a link goes, shown by the app while it's hovered (the text of a link can say anything).
+  let hovered = null;
+  doc.addEventListener("mouseover", (e) => {
+    const a = e.target.closest?.("a[href], area[href]") ?? null;
+    if (a === hovered) return;
+    hovered = a;
+    let url = "";
+    try { url = a ? new URL(a.getAttribute("href"), "about:blank").href : ""; } catch {}
+    post({ type: "hover", url: /^(https?|mailto):/i.test(url) ? url : "" });
+  });
+  doc.documentElement.addEventListener("mouseleave", () => {
+    hovered = null;
+    post({ type: "hover", url: "" });
+  });
+
   // Keys pressed after clicking into the email land here; the app's shortcuts get a copy.
   doc.addEventListener("keydown", (e) => {
     const { key, code, metaKey, ctrlKey, altKey, shiftKey } = e;
@@ -88,7 +103,9 @@
   addEventListener("message", (e) => {
     if (e.source !== parent || e.data?.type !== "cid") return;
     for (const img of doc.querySelectorAll('img[src^="cid:" i]')) {
-      if (decodeURIComponent(img.getAttribute("src").slice(4)) === e.data.cid) img.src = e.data.src;
+      let ref = img.getAttribute("src").slice(4);
+      try { ref = decodeURIComponent(ref); } catch {}
+      if (ref.toLowerCase() === String(e.data.cid).toLowerCase()) img.src = e.data.src;
     }
   });
 })();
