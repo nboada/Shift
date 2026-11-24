@@ -21,7 +21,7 @@ scripts/release.sh [--publish] "notes"   # signed, notarized universal build; --
 
 The site's changelog is one Markdown file per release in `site/src/content/changelog/`. The roadmap page lists GitHub Issues labelled `roadmap: now`, `roadmap: next` or `roadmap: later` (titles only), read at build time.
 
-Run all four checks (`bun test`, `bun run build`, `cargo test`, `cargo clippy`) before calling a change done. `tauri dev` and `demo` both need port 1420, so only one can run at a time. To release, bump `version` in `tauri.conf.json` and run `scripts/release.sh`; release builds check `updates/latest.json` at launch and every six hours and offer a restart. The script's one-time Keychain and signing-key setup is in its header. `build.rs` bakes the OAuth client in at compile time, so a changed `.env.local` takes a Rust rebuild.
+Run all four checks (`bun test`, `bun run build`, `cargo test`, `cargo clippy`) before calling a change done. `tauri dev` and `demo` both need port 1420, so only one can run at a time. To release, bump `version` in `tauri.conf.json`, commit, and run `scripts/release.sh`: it refuses uncommitted changes, runs the four checks, stages in `site/.release` (never in `site/public`, whose files Cloudflare would serve ahead of the R2 feed), and tags `v<version>` on publish. Release builds check `updates/latest.json` (served from R2 by the Worker) at launch and every six hours and offer a restart. The script's one-time Keychain and signing-key setup is in its header. `build.rs` bakes the OAuth client in at compile time, so a changed `.env.local` takes a Rust rebuild.
 
 ## Architecture
 
@@ -35,7 +35,7 @@ Run all four checks (`bun test`, `bun run build`, `cargo test`, `cargo clippy`) 
 
 **Settings**: one JSON document. `src/settings.ts` holds `DEFAULTS`, merges the saved file over them, applies changes right away via listeners and dotted paths (`setSetting("appearance.theme", …)`), and saves about 300 ms later through `set_settings`. Rust reads the same file (`settings.rs`) for backend values such as the sync interval and unified-view opt-outs, so a setting the backend uses must have the same key on both sides. AI provider keys go to the Keychain, not the JSON file. `settings-ui.ts` builds the settings window.
 
-**Frontend**: `main.ts` holds the app state as module-level variables (`accounts`, `scope`, `mailbox`, `threads`, `selected`) and renders by setting `innerHTML`. Escape interpolated text with `esc()`. The other files are small modules with their own tests:
+**Frontend**: `main.ts` holds the app state as module-level variables (`accounts`, `scope`, `mailbox`, `threads`, `selected`) and renders by setting `innerHTML`. Escape interpolated text with `esc()`. Email HTML is sanitised with DOMPurify (`cleanEmail`) before it goes into the reader's iframe, whose own CSP blocks scripts and, with remote images off, every network load; the sandbox allows same-origin and scripts only so the app can size the frame and catch clicks. The other files are small modules with their own tests:
 - `keys.ts`: the action list and default bindings. Settings can remap every binding.
 - `compose.ts`: the editor's extensions, the plain-text version of the body (`docToText`) and the HTML as sent (`emailHtml`). `editor.ts` builds the Tiptap editor and its format bar.
 - `attachments.ts`: file chips, icons and sizes for the reader and the composer.
