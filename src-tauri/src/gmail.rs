@@ -10,8 +10,16 @@ use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::time::Duration;
 
-const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
-const UPLOAD: &str = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
+const HOST: &str = "https://gmail.googleapis.com";
+
+/// Where Gmail is: tests point it at a local stand-in (`fake_gmail`).
+fn host() -> String {
+    #[cfg(test)]
+    if let Some(h) = crate::fake_gmail::host() {
+        return h;
+    }
+    HOST.into()
+}
 /// Raw messages up to this size are sent inline as base64 JSON; bigger ones use the upload endpoint.
 const MAX_JSON_RAW: usize = 3 * 1024 * 1024;
 const BOUNDARY: &str = "shift-upload-7d1f3a9c2b";
@@ -331,12 +339,12 @@ impl Gmail<'_> {
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T> {
-        let url = format!("{BASE}{path}");
+        let url = format!("{}/gmail/v1/users/me{path}", host());
         self.call(|| self.http.get(&url).query(query)).await
     }
 
     async fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
-        let url = format!("{BASE}{path}");
+        let url = format!("{}/gmail/v1/users/me{path}", host());
         self.call(|| self.http.post(&url).json(body)).await
     }
 
@@ -578,13 +586,13 @@ impl Gmail<'_> {
     }
 
     pub async fn patch_label(&self, id: &str, body: &Value) -> Result<()> {
-        let url = format!("{BASE}/labels/{id}");
+        let url = format!("{}/gmail/v1/users/me/labels/{id}", host());
         let _: Value = self.call(|| self.http.patch(&url).json(body)).await?;
         Ok(())
     }
 
     pub async fn delete_label(&self, id: &str) -> Result<()> {
-        let url = format!("{BASE}/labels/{id}");
+        let url = format!("{}/gmail/v1/users/me/labels/{id}", host());
         let _: Value = self.call(|| self.http.delete(&url)).await?;
         Ok(())
     }
@@ -620,7 +628,7 @@ impl Gmail<'_> {
         // would send twice or leave a duplicate draft. (Updating a draft with PUT is safe to repeat.)
         let retry_5xx = method != reqwest::Method::POST;
         if raw.len() <= MAX_JSON_RAW {
-            let (url, body) = (format!("{BASE}{path}"), wrap(message_json(raw, thread_id)));
+            let (url, body) = (format!("{}/gmail/v1/users/me{path}", host()), wrap(message_json(raw, thread_id)));
             return self
                 .call_opts(
                     || self.http.request(method.clone(), &url).json(&body),
@@ -632,7 +640,7 @@ impl Gmail<'_> {
         if let Some(t) = thread_id {
             meta["threadId"] = t.into();
         }
-        let (url, body) = (format!("{UPLOAD}{path}"), upload_body(&wrap(meta), raw));
+        let (url, body) = (format!("{}/upload/gmail/v1/users/me{path}", host()), upload_body(&wrap(meta), raw));
         self.call_opts(
             || {
                 self.http
@@ -711,7 +719,7 @@ impl Gmail<'_> {
     }
 
     pub async fn delete_draft(&self, id: &str) -> Result<()> {
-        let url = format!("{BASE}/drafts/{id}");
+        let url = format!("{}/gmail/v1/users/me/drafts/{id}", host());
         let _: Value = self.call(|| self.http.delete(&url)).await?;
         Ok(())
     }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-modify-many"
+description = "Enables the modify_many command without any pre-configured scope."
+commands.allow = ["modify_many"]
+
+[[permission]]
+identifier = "deny-modify-many"
+description = "Denies the modify_many command without any pre-configured scope."
+commands.deny = ["modify_many"]
