@@ -59,6 +59,12 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
     }
     if version < 2 {
         add_column(&tx, "scheduled", "error TEXT")?;
+        // Older versions cached bodies Gmail stores apart as blank, and other charsets as U+FFFD: fetch them again.
+        tx.execute(
+            "UPDATE threads SET full = 0 WHERE full = 1 AND id IN (SELECT thread_id FROM messages
+               WHERE (html IS NULL AND text IS NULL) OR instr(coalesce(html, '') || coalesce(text, ''), char(65533)) > 0)",
+            [],
+        )?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {VERSION}"))?;
     tx.commit()?;
@@ -66,6 +72,18 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
     // send that did reach Gmail comes back 404 and is dropped, so this can't duplicate it.
     conn.execute("UPDATE scheduled SET sending = 0", [])?;
     Ok(conn)
+}
+
+/// Whether opening failed because the file is damaged or isn't a database, rather than busy or unreadable.
+pub fn is_corrupt(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
+            matches!(
+                e.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+            )
+        })
+    })
 }
 
 /// Adds a column, or returns false when the database already has it.
@@ -178,9 +196,21 @@ pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<Scheduled
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// The files attached to one scheduled email (the list leaves them out: they can be megabytes each).
-pub fn scheduled_files(conn: &Connection, id: i64) -> Result<serde_json::Value> {
-    let draft: String = conn.query_row("SELECT draft FROM scheduled WHERE id = ?1", [id], |r| r.get(0))?;
+/// Takes a scheduled email back for editing: drops its schedule and returns its files (the list leaves them out:
+/// they can be megabytes each). Refused once it's being sent, or when it has already gone.
+pub fn take_scheduled(conn: &mut Connection, id: i64) -> Result<serde_json::Value> {
+    let tx = conn.transaction()?;
+    let row: Option<(String, bool)> = tx
+        .query_row("SELECT draft, sending FROM scheduled WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((draft, sending)) = row else {
+        anyhow::bail!("It has already been sent");
+    };
+    if sending {
+        anyhow::bail!("It's already being sent");
+    }
+    tx.execute("DELETE FROM scheduled WHERE id = ?1", [id])?;
+    tx.commit()?;
     let mut draft: serde_json::Value = serde_json::from_str(&draft)?;
     Ok(draft["attachments"].take())
 }
@@ -934,6 +964,29 @@ mod tests {
         done_pending(&c, ops[0].seq).unwrap();
         done_pending(&c, ops[1].seq).unwrap();
         assert!(!has_pending(&c, "t"));
+    }
+
+    #[test]
+    fn taking_a_scheduled_email_back_is_refused_once_it_is_sending_or_sent() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        let draft = serde_json::json!({ "attachments": [{ "name": "a.txt" }] });
+        let id = add_scheduled(&c, Some("d"), 100, &draft, &serde_json::json!({})).unwrap();
+        assert!(claim(&c, id, 100).unwrap());
+        assert!(take_scheduled(&mut c, id).is_err(), "being sent");
+        release(&c, id, "offline").unwrap();
+        assert_eq!(take_scheduled(&mut c, id).unwrap()[0]["name"], "a.txt");
+        assert!(scheduled(&c, None).unwrap().is_empty(), "off the schedule");
+        assert!(take_scheduled(&mut c, id).is_err(), "already gone (sent)");
+    }
+
+    #[test]
+    fn only_a_damaged_file_counts_as_corrupt() {
+        let path = std::env::temp_dir().join(format!("shift-corrupt-{}.sqlite3", std::process::id()));
+        std::fs::write(&path, b"definitely not sqlite, long enough to have a header").unwrap();
+        assert!(is_corrupt(&open(&path).unwrap_err()));
+        let _ = std::fs::remove_file(&path);
+        assert!(!is_corrupt(&anyhow::anyhow!("database is locked")));
     }
 
     #[test]

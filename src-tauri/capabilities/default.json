@@ -54,7 +54,7 @@
     "allow-set-ai-key",
     "allow-has-ai-key",
     "allow-delete-ai-key",
-    "allow-scheduled-files",
+    "allow-take-scheduled",
     "allow-modify-many"
   ]
 }

@@ -28,6 +28,9 @@ struct Account {
     sending: tokio::sync::Mutex<()>,
     /// Held while auto-label runs, which happens beside the sync rather than inside it.
     labeling: tokio::sync::Mutex<()>,
+    /// Label changes reach Gmail one at a time, in the order they were made (tokio's lock is first come, first
+    /// served), so an Undo can't overtake the delete it undoes.
+    changes: tokio::sync::Mutex<()>,
 }
 
 impl Account {
@@ -39,6 +42,7 @@ impl Account {
             syncing: Default::default(),
             sending: Default::default(),
             labeling: Default::default(),
+            changes: Default::default(),
         })
     }
 
@@ -161,9 +165,20 @@ fn load_accounts(dir: &Path) -> anyhow::Result<(Vec<Arc<Account>>, Vec<String>)>
                 Ok((None, _)) => {}
                 Err(e) => {
                     eprintln!("Couldn't open {}: {e:#}", path.display());
-                    for suffix in ["", "-wal", "-shm"] {
-                        let from = format!("{}{suffix}", path.display());
-                        let _ = std::fs::rename(&from, format!("{from}.broken"));
+                    // Only a damaged file is moved aside (a busy or unreadable one may open next time), under a
+                    // name of its own so an earlier one isn't replaced.
+                    if db::is_corrupt(&e) {
+                        let secs = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_secs());
+                        for suffix in ["", "-wal", "-shm"] {
+                            let from = format!("{}{suffix}", path.display());
+                            if Path::new(&from).exists()
+                                && let Err(e) = std::fs::rename(&from, format!("{from}.broken-{secs}"))
+                            {
+                                eprintln!("Couldn't set {from} aside: {e}");
+                            }
+                        }
                     }
                     broken.push(path.file_stem().unwrap_or_default().to_string_lossy().into_owned());
                 }
@@ -1492,6 +1507,7 @@ async fn modify(
     trash: bool,
 ) -> R<()> {
     let a = s.account(&account)?;
+    let _order = a.changes.lock().await;
     db::change_labels(&mut a.db(), &id, &add, &remove)?;
     let _ = app.emit(CHANGED, ());
     if s.demo {
@@ -1533,6 +1549,9 @@ async fn push_change(
 /// `modify` for several threads of one account (bulk actions, Clean up). Label changes reach Gmail in one
 /// `messages.batchModify` per 1000 messages instead of a call per thread; Trash has no batch form, so moving in or
 /// out of it goes thread by thread.
+// shortcut: the batch covers the messages in the cache, so a reply that arrived since the last sync keeps its labels
+// (an archived conversation comes back with that unseen reply), and one failed batch counts the whole account as
+// failed; switch to threads.modify per thread if that shows up.
 #[tauri::command]
 async fn modify_many(
     app: AppHandle,
@@ -1544,6 +1563,7 @@ async fn modify_many(
     trash: bool,
 ) -> R<()> {
     let a = s.account(&account)?;
+    let _order = a.changes.lock().await;
     for id in &ids {
         db::change_labels(&mut a.db(), id, &add, &remove)?;
     }
@@ -1611,6 +1631,7 @@ async fn refetch(app: &AppHandle, a: &Account, g: &Gmail<'_>, id: &str) {
 /// Sends changes made while Gmail couldn't be reached, oldest first. Stops at the first one that still can't get
 /// through (the rest stay queued, in order); one Gmail refuses is dropped and its thread re-fetched.
 async fn replay_pending(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
+    let _order = a.changes.lock().await;
     let ops = db::pending_ops(&a.db())?;
     for op in ops {
         match apply_remote(g, &op.thread, &op.add, &op.remove, op.trash).await {
@@ -1923,10 +1944,10 @@ fn send_when_due(app: &AppHandle, account: String, at: i64) {
     });
 }
 
-/// The files of one scheduled email, for reopening it in the composer.
+/// Takes a scheduled email back into the composer: its schedule is dropped and its files returned.
 #[tauri::command(async)]
-fn scheduled_files(s: tauri::State<State>, account: String, id: i64) -> R<serde_json::Value> {
-    Ok(db::scheduled_files(&s.account(&account)?.db(), id)?)
+fn take_scheduled(s: tauri::State<State>, account: String, id: i64) -> R<serde_json::Value> {
+    Ok(db::take_scheduled(&mut s.account(&account)?.db(), id)?)
 }
 
 #[tauri::command(async)]
@@ -2117,6 +2138,15 @@ fn safe_filename(name: &str) -> String {
 /// Writes a downloaded attachment under a free name and marks it as from the internet, as browsers do. With the
 /// quarantine flag, Gatekeeper checks apps (also ones unzipped from it) and Office opens macro files in Protected View.
 /// Returns the saved path and whether the quarantine flag was set.
+/// Whether macOS will check the file before it runs (it carries `com.apple.quarantine`).
+fn quarantine_flag(path: &Path) -> bool {
+    std::process::Command::new("/usr/bin/xattr")
+        .args(["-p", "com.apple.quarantine"])
+        .arg(path)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 fn write_download(dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<(PathBuf, bool)> {
     use std::io::Write;
     let mut path = free_path(dir, name);
@@ -2189,7 +2219,8 @@ async fn open_attachment(
 ) -> R<String> {
     let key = (account.clone(), message.clone(), idx);
     let saved = s.opened.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
-    let (path, quarantined) = match saved.filter(|(p, _)| p.exists()) {
+    let still_ours = |(p, q): &(PathBuf, bool)| p.exists() && (!q || quarantine_flag(p));
+    let (path, quarantined) = match saved.filter(still_ours) {
         Some(found) => found,
         None => {
             let (name, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
@@ -2463,7 +2494,7 @@ pub fn run() {
             delete_draft,
             schedule_send,
             scheduled,
-            scheduled_files,
+            take_scheduled,
             reschedule,
             attachment_data,
             open_attachment,
@@ -2566,7 +2597,11 @@ mod tests {
             ["me@x.com"]
         );
         assert_eq!(broken, ["bad@x.com"]);
-        assert!(dir.join("accounts").join("bad@x.com.sqlite3.broken").exists());
+        assert!(std::fs::read_dir(dir.join("accounts")).unwrap().any(|e| e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("bad@x.com.sqlite3.broken-")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

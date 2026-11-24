@@ -103,7 +103,9 @@
   addEventListener("message", (e) => {
     if (e.source !== parent || e.data?.type !== "cid") return;
     for (const img of doc.querySelectorAll('img[src^="cid:" i]')) {
-      if (decodeURIComponent(img.getAttribute("src").slice(4)) === e.data.cid) img.src = e.data.src;
+      let ref = img.getAttribute("src").slice(4);
+      try { ref = decodeURIComponent(ref); } catch {}
+      if (ref.toLowerCase() === String(e.data.cid).toLowerCase()) img.src = e.data.src;
     }
   });
 })();
