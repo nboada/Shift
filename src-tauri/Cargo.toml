@@ -47,9 +47,6 @@ codegen-units = 1
 lto = true
 opt-level = 3
 panic = "abort"
-strip = true
-
-# Proc macros and build scripts are dlopened at build time, and dyld on macOS 27 refuses a stripped one whose string
-# table lands 4-byte aligned ("mis-aligned LINKEDIT string pool"), so only the shipped binary is stripped.
-[profile.release.build-override]
+# Not stripped: rustc's strip step can leave the string table 4-byte aligned, and dyld on macOS 27 refuses such a binary
+# or proc macro ("mis-aligned LINKEDIT string pool"). The linker's own output is aligned; stripping saved about 2 MB.
 strip = false
