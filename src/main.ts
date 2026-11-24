@@ -348,25 +348,32 @@ type Scheduled = {
 /** Rows of the Scheduled view by list id; they are emails waiting in this Mac, not Gmail threads. */
 const scheduledRows = new Map<string, Scheduled>();
 
+/** Bumped on every list load, so a slow result (a search, another mailbox) can't land after the user moved on. */
+let loadSeq = 0;
+
 async function loadThreads() {
+  const seq = ++loadSeq;
   if (mailbox === "SCHEDULED" && !search) {
     const rows = await invoke<Scheduled[]>("scheduled", { accounts: scope });
+    if (seq !== loadSeq) return;
     scheduledRows.clear();
     threads = rows.map((r) => {
-      scheduledRows.set(String(r.id), r);
+      // Row ids are numbered per account, so two accounts can both have row 1: the list id carries the account.
+      const id = `${r.account}:${r.id}`;
+      scheduledRows.set(id, r);
       return {
-        id: String(r.id), account: r.account, subject: r.ui.fields.subject ?? "", sender: `To: ${r.draft.to}`,
+        id, account: r.account, subject: r.ui.fields.subject ?? "", sender: `To: ${r.draft.to}`,
         snippet: `Sends ${formatWhen(new Date(r.send_at))}`, date: r.send_at, count: 1,
         unread: false, starred: false, primary: true, labels: "",
       };
     });
     return renderThreads();
   }
-  threads = sortForInbox(
-    search
-      ? await invoke<Thread[]>("search", { query: search, accounts: scope })
-      : await invoke<Thread[]>("threads", { label: mailbox, accounts: scope }),
-  );
+  const list = search
+    ? await invoke<Thread[]>("search", { query: search, accounts: scope })
+    : await invoke<Thread[]>("threads", { label: mailbox, accounts: scope });
+  if (seq !== loadSeq) return;
+  threads = sortForInbox(list);
   renderThreads();
 }
 
@@ -559,13 +566,17 @@ async function openThread(id: string) {
   renderThreads();
   setView("reader");
   const thread = threads.find((t) => t.id === id);
+  // Into a local first: if the user opened another email meanwhile, this late answer must not replace `messages`,
+  // which Reply and Forward read.
+  let loaded: Message[];
   try {
-    messages = await invoke<Message[]>("thread", { account: thread?.account ?? defaultAccount(), id });
+    loaded = await invoke<Message[]>("thread", { account: thread?.account ?? defaultAccount(), id });
   } catch (e) {
-    reader.innerHTML = `<div class="placeholder">${esc(String(e))}</div>`;
+    if (selected === id) reader.innerHTML = `<div class="placeholder">${esc(String(e))}</div>`;
     return;
   }
   if (selected !== id) return;
+  messages = loaded;
   reader.innerHTML = `<h1>${esc(messages[0]?.subject || thread?.subject || "(no subject)")}</h1>`;
   for (const m of messages) {
     const el = document.createElement("section");
@@ -1324,7 +1335,12 @@ function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
       { subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`, body: signature(account) + quoted(last, header) },
       { title: "Forward", inline: settings.composer.replyIn === "inline", account },
     );
-    return opened.then(() => forwardAttachments(last, account));
+    return opened.then(() => {
+      const state = compose;
+      const files = forwardAttachments(last, account);
+      if (state) pendingFiles.set(state, files.finally(() => pendingFiles.delete(state)));
+      return files;
+    });
   }
   const mine = !notMe(last.sender);
   const primary = mine ? splitAddresses(last.recipients) : [last.sender];
@@ -1354,13 +1370,30 @@ function recipientProblem() {
   return bad ? `Check this address: ${bad}` : "";
 }
 
+/** Composers being sent or scheduled: a second ⌘↩ or click during the first must not send the email twice. */
+const submitting = new WeakSet<ComposeState>();
+/** A forward's files still downloading; Send and Send later wait for them so the email doesn't go out without them. */
+const pendingFiles = new WeakMap<ComposeState, Promise<void>>();
+
+/** Waits for a forward's files, saying so while it does. */
+async function filesReady(state: ComposeState) {
+  const pending = pendingFiles.get(state);
+  if (!pending) return;
+  $("#compose-error").textContent = "Attaching files…";
+  await pending;
+  $("#compose-error").textContent = "";
+}
+
 composeForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const state = compose;
-  if (!state) return;
+  if (!state || submitting.has(state)) return;
   const error = (msg: string) => ($("#compose-error").textContent = msg);
   const problem = recipientProblem();
   if (problem) return error(problem);
+  submitting.add(state);
+  await filesReady(state);
+  if (compose !== state) return void submitting.delete(state);
   const draft = currentDraft(state);
   const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
   // Let any pending save finish first, so it can't recreate the draft after it's been sent.
@@ -1401,6 +1434,8 @@ composeForm.addEventListener("submit", async (e) => {
     detachComposer();
     toast("Message sent");
   } catch (err) {
+    // Still open: the user can fix the problem and send again.
+    submitting.delete(state);
     error(String(err));
   } finally {
     button.disabled = false;
@@ -1480,11 +1515,14 @@ document.addEventListener("pointerdown", (e) => {
 
 async function scheduleSend(at: Date) {
   const state = compose;
-  if (!state) return;
+  if (!state || submitting.has(state)) return;
   const error = (msg: string) => ($("#compose-error").textContent = msg);
   const problem = recipientProblem();
   if (problem) return error(problem);
   if (at.getTime() <= Date.now()) return error("Pick a time in the future");
+  submitting.add(state);
+  await filesReady(state);
+  if (compose !== state) return void submitting.delete(state);
   const draft = currentDraft(state);
   const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
   // Saved to Gmail Drafts first, so the email is safe there (and visible on other devices) until it goes out.
@@ -1502,6 +1540,7 @@ async function scheduleSend(at: Date) {
         .then(() => openComposer(fields, { ...state, touched: true }));
     }, 6000);
   } catch (err) {
+    submitting.delete(state);
     error(String(err));
   }
 }
@@ -1899,6 +1938,7 @@ async function runLive(form: HTMLFormElement, value: string) {
   ]);
   if (seq !== liveSeq) return; // a newer keystroke already ran
   search = value;
+  loadSeq++; // a list load still in flight mustn't replace these results
   threads = rows;
   renderThreads();
   suggestions = value.includes("from:") ? [] : senders;
