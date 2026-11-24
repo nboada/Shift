@@ -1,0 +1,73 @@
+---
+import "../styles/site.css";
+import interFont from "@fontsource-variable/inter/files/inter-latin-opsz-normal.woff2?url";
+import iconFont from "@phosphor-icons/web/regular/Phosphor.woff2?url";
+
+interface Props {
+  title: string;
+  description: string;
+  path: string;
+  // The light/dark switch only matters on pages with drawings of the app.
+  appToggle?: boolean;
+}
+const { title, description, path, appToggle = false } = Astro.props;
+const nav = [
+  ["/#features", "Features"],
+  ["/roadmap", "Roadmap"],
+  ["/changelog", "Changelog"],
+];
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={`https://shift.talkk.com.au${path}`} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content="https://shift.talkk.com.au/icon.png" />
+    <meta name="theme-color" content="#ffffff" />
+    <link rel="icon" href="/favicon.png" />
+    <link rel="preload" href={interFont} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={iconFont} as="font" type="font/woff2" crossorigin />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="brand" href="/"><img src="/icon.png" alt="" width="26" height="26" />Shift</a>
+        <nav aria-label="Main">
+          {nav.map(([href, label]) => <a href={href} aria-current={href === path ? "page" : undefined}>{label}</a>)}
+        </nav>
+        <div class="header-actions">
+          {appToggle && (
+            <div class="segmented" role="group" aria-label="App appearance">
+              <button type="button" data-app-theme="light" aria-pressed="true" aria-label="Light app" title="Light app"><i class="ph ph-sun" aria-hidden="true"></i></button>
+              <button type="button" data-app-theme="dark" aria-pressed="false" aria-label="Dark app" title="Dark app"><i class="ph ph-moon" aria-hidden="true"></i></button>
+            </div>
+          )}
+          <a class="pill small" href="/#get">Early access</a>
+        </div>
+      </div>
+    </header>
+
+    <slot />
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="foot-brand">
+          <a class="brand" href="/"><img src="/icon.png" alt="" width="22" height="22" />Shift</a>
+          <p>Project by <a href="https://talkk.com.au">TALKK Web Design</a></p>
+        </div>
+        <nav aria-label="Product"><h3>Shift</h3><a href="/#features">Features</a><a href="/roadmap">Roadmap</a><a href="/changelog">Changelog</a><a href="/#get">Early access</a></nav>
+        <nav aria-label="Legal"><h3>Legal</h3><a href="/privacy">Privacy policy</a><a href="/terms">Terms of use</a></nav>
+        <nav aria-label="Contact"><h3>Contact</h3><a href="mailto:hello@talkk.com.au">hello@talkk.com.au</a></nav>
+      </div>
+    </footer>
+    <script>
+      import "../scripts/site.ts";
+    </script>
+  </body>
+</html>

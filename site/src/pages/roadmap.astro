@@ -1,0 +1,40 @@
+---
+import Base from "../layouts/Base.astro";
+import { loadRoadmap } from "../lib/roadmap";
+
+const { stages, done } = await loadRoadmap();
+const empty = stages.every((s) => s.items.length === 0);
+---
+<Base title="Roadmap · Shift" description="What's being built for Shift, the fast Gmail app for Mac, and what's coming next." path="/roadmap">
+  <main id="main" class="wrap page">
+    <header class="page-head">
+      <h1>Roadmap</h1>
+      <p>What we're working on for Shift, and what comes after. Plans change as we learn from early access, so treat the later columns as intentions.</p>
+    </header>
+
+    {empty ? (
+      <p class="roadmap-empty">The roadmap is being written. Check back soon, or <a href="/changelog">see what's shipped so far</a>.</p>
+    ) : (
+      <div class="board">
+        {stages.map((s) => (
+          <section class="lane" data-stage={s.heading.toLowerCase()} aria-labelledby={`lane-${s.heading}`}>
+            <h2 id={`lane-${s.heading}`}><i class="lane-dot" aria-hidden="true"></i>{s.heading}<span>{s.note}</span></h2>
+            {s.items.length ? (
+              <ul>{s.items.map((i) => <li>{i.title}</li>)}</ul>
+            ) : (
+              <p class="lane-empty">Nothing here right now.</p>
+            )}
+          </section>
+        ))}
+      </div>
+    )}
+
+    {done.length > 0 && (
+      <section class="shipped" aria-labelledby="shipped">
+        <h2 id="shipped">Recently shipped</h2>
+        <ul>{done.map((i) => <li><i class="ph ph-check-circle" aria-hidden="true"></i>{i.title}</li>)}</ul>
+        <a href="/changelog">Full changelog</a>
+      </section>
+    )}
+  </main>
+</Base>
