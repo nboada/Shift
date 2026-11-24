@@ -1041,8 +1041,10 @@ menu.addEventListener("keydown", (e) => {
 });
 
 const NEW_LABEL = "\u0000new-label";
+/** Gmail labels that act as folders: mail sits in at most one, and Archive is none of them. */
+const FOLDERS = ["INBOX", "SPAM", "TRASH"];
 
-/** Move: file the thread under one mailbox (leaving the Inbox). Label: toggle labels, menu stays open. */
+/** Move: file the thread under one folder. Label: toggle labels, menu stays open. */
 function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: number }) {
   const anchor = document.querySelector(`[data-action="${kind}"]`)!;
   if (!pos && menuAnchor === anchor && !menu.hidden) return closeMenu();
@@ -1053,8 +1055,10 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
   const has = new Set(t.labels.split(" "));
   const own = accountLabels.get(t.account) ?? [];
   const items: MenuItem[] = kind === "move"
-    ? [{ id: "INBOX", label: "Inbox", icon: "tray" }, ...own.map((l) => ({ id: l.id, label: l.name, icon: "", dot: l.color ?? "none" })),
-        { id: "SPAM", label: "Spam", icon: "warning-octagon" }].map((x) => ({ ...x, disabled: has.has(x.id) }))
+    ? [{ id: "INBOX", label: "Inbox", icon: "tray", disabled: has.has("INBOX") },
+        { id: "ARCHIVE", label: "Archive", icon: "archive", disabled: !FOLDERS.some((f) => has.has(f)) },
+        { id: "SPAM", label: "Spam", icon: "warning-octagon", disabled: has.has("SPAM") },
+        { id: "TRASH", label: "Trash", icon: "trash", disabled: has.has("TRASH") }]
     : [...own.map((l): MenuItem => ({ id: l.id, label: l.name, icon: "", dot: l.color ?? "none", checked: has.has(l.id) })),
         ...(own.length ? ["-" as const] : []), { id: NEW_LABEL, label: "New label…", icon: "plus" }];
   showMenu(kind === "move" ? "Move to" : "Labels", items, pos, (id) => {
@@ -1078,11 +1082,9 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
       openMenu("label", t, menuPos);
       return true;
     }
-    // A merged label mailbox (`name:<name>`) is this account's label of that name.
-    const current = mailbox?.startsWith("name:") ? own.find((l) => l.name === mailbox!.slice(5))?.id : mailbox;
-    const remove = ["INBOX", current].filter((l): l is string => !!l && l !== id && has.has(l));
+    if (id === "TRASH") return void act("trash", t.id);
     if (mailbox !== null && mailbox !== id) removeAndAdvance(t.id);
-    undoable(t, [id], remove);
+    undoable(t, id === "ARCHIVE" ? [] : [id], FOLDERS.filter((f) => f !== id && has.has(f)));
   });
   menuAnchor = anchor;
 }

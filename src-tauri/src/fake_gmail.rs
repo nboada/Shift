@@ -17,7 +17,7 @@ static HOST: Mutex<Option<String>> = Mutex::new(None);
 static RUNNING: Mutex<()> = Mutex::new(());
 
 pub fn host() -> Option<String> {
-    HOST.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    HOST.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
 
 pub struct FakeGmail {
@@ -33,14 +33,14 @@ impl FakeGmail {
 
 impl Drop for FakeGmail {
     fn drop(&mut self) {
-        *HOST.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *HOST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
 /// Starts the fake; `handler` gets each request with the earlier ones and returns the status and JSON body.
 /// Call it inside the async runtime (`tauri::async_runtime::block_on`).
 pub fn start(handler: impl Fn(&Request, &[Request]) -> (u16, String) + Send + Sync + 'static) -> FakeGmail {
-    let running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    let running = RUNNING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     std_listener.set_nonblocking(true).unwrap();
     let listener = tokio::net::TcpListener::from_std(std_listener).unwrap();

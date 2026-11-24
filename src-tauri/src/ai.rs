@@ -221,7 +221,7 @@ async fn send(req: reqwest::RequestBuilder) -> Result<Value> {
 pub fn json_in(text: &str) -> Result<Value> {
     let start = text.find('{').context("The AI didn't return JSON")?;
     let end = text.rfind('}').context("The AI didn't return JSON")?;
-    Ok(serde_json::from_str(&text[start..=end])?)
+    Ok(serde_json::from_str(text.get(start..=end).context("The AI didn't return JSON")?)?)
 }
 
 /// Effort for Write with AI and Draft a reply: medium is plenty for a short email and quicker than high (Claude Sonnet
@@ -310,5 +310,6 @@ mod tests {
             2
         );
         assert!(json_in("no json here").is_err());
+        assert!(json_in("} reversed {").is_err());
     }
 }
