@@ -982,6 +982,7 @@ function closeMenu() {
   if (!menu.hidden && menu.contains(document.activeElement)) menuReturn?.focus();
   menuReturn = null;
   menu.hidden = true;
+  if (menu.matches(":popover-open")) menu.hidePopover();
   menuAnchor = null;
   threadList.querySelector(".context")?.classList.remove("context");
 }
@@ -1002,6 +1003,14 @@ function showMenu(title: string | null, items: MenuItem[], pos: { x: number; y: 
     if (!pick(item.dataset.target!)) closeMenu();
   };
   menu.hidden = false;
+  // A popover, so it shows above an open modal (the composer); and inside that modal, since everything outside it is
+  // inert while it's open.
+  const host = document.querySelector("dialog:modal") ?? document.body;
+  if (menu.parentElement !== host) {
+    if (menu.matches(":popover-open")) menu.hidePopover();
+    host.append(menu);
+  }
+  if (!menu.matches(":popover-open")) menu.showPopover();
   menu.style.left = `${Math.max(8, Math.min(pos.x, window.innerWidth - menu.offsetWidth - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(pos.y, window.innerHeight - menu.offsetHeight - 8))}px`;
   const items$ = menuItems();
@@ -1730,12 +1739,12 @@ $("#send-later").addEventListener("click", async () => {
 // ---- Write with AI: the AI button next to Send later. Edits the selection, or the part of the email the user
 // wrote; in a reply it can also draft the reply, using what's typed so far as notes.
 
-const AI_EDITS: [label: string, instruction: string][] = [
-  ["Improve writing", "Improve the writing: clearer and more natural, same meaning, roughly the same length."],
-  ["Make shorter", "Make it shorter and more direct, keeping everything important."],
-  ["Make friendlier", "Make it warmer and friendlier."],
-  ["Make more formal", "Make it more formal and professional."],
-  ["Fix spelling & grammar", "Fix spelling, grammar and punctuation only. Change nothing else."],
+const AI_EDITS: [label: string, icon: string, instruction: string][] = [
+  ["Improve writing", "wand", "Improve the writing: clearer and more natural, same meaning, roughly the same length."],
+  ["Make shorter", "arrows-diagonal-minimize-2", "Make it shorter and more direct, keeping everything important."],
+  ["Make friendlier", "mood-smile", "Make it warmer and friendlier."],
+  ["Make more formal", "tie", "Make it more formal and professional."],
+  ["Fix spelling & grammar", "text-spellcheck", "Fix spelling, grammar and punctuation only. Change nothing else."],
 ];
 
 /** The selection, or everything above the signature and the quoted original (and its "On …, X wrote:" line). */
@@ -1747,7 +1756,7 @@ function ownText(): { from: number; to: number; text: string } {
   doc.forEach((node, offset) => {
     if (stop) return;
     const text = node.textContent.trim();
-    stop = node.type.name === "signature" || node.type.name === "blockquote" || text.startsWith("-- ")
+    stop = ["signature", "blockquote", "quote"].includes(node.type.name) || text.startsWith("-- ")
       || /^On .+ wrote:$/s.test(text) || /^-{5,} Forwarded message/.test(text);
     if (!stop) to = offset + node.nodeSize;
   });
@@ -1777,32 +1786,41 @@ async function aiWrite(run: () => Promise<string>, range: { from: number; to: nu
   }
 }
 
-$("#ai-write").addEventListener("click", async () => {
+$("#ai-write").addEventListener("click", () => {
   const state = compose;
+  const anchor = $<HTMLButtonElement>("#ai-write");
   if (!state) return;
+  if (menuAnchor === anchor && !menu.hidden) return closeMenu();
   const own = ownText();
   const rewrite = (instruction: string) => aiWrite(() => invoke<string>("ai_rewrite", { text: own.text, instruction, rules: settings.ai.writingRules }), own);
-  const items: ({ text: string; action: () => void; enabled?: boolean } | { item: "Separator" })[] = [];
-  if (state.context && messages.length) {
-    items.push({
-      text: own.text ? "Draft a reply from my notes" : "Draft a reply",
-      action: () => {
-        const name = accountSettings(state.account).name;
-        const conversation = messages.slice(-8)
-          .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
-          .join("\n\n---\n\n");
-        void aiWrite(() => invoke<string>("ai_draft_reply", { conversation, notes: own.text, me: name ? `${name} <${state.account}>` : state.account, rules: settings.ai.writingRules }), own);
-      },
-    }, { item: "Separator" });
-  }
-  for (const [label, instruction] of AI_EDITS) items.push({ text: label, enabled: !!own.text, action: () => void rewrite(instruction) });
-  items.push({ item: "Separator" }, {
-    text: "Custom instruction…",
-    enabled: !!own.text,
-    action: () => void askText({ title: "Rewrite with AI", message: "Say what to change, for example \"Make it sound more confident\".", confirm: "Rewrite", value: "" })
-      .then((instruction) => void (instruction && rewrite(instruction))),
+  const draftReply = () => {
+    const name = accountSettings(state.account).name;
+    const conversation = messages.slice(-8)
+      .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
+      .join("\n\n---\n\n");
+    void aiWrite(() => invoke<string>("ai_draft_reply", { conversation, notes: own.text, me: name ? `${name} <${state.account}>` : state.account, rules: settings.ai.writingRules }), own);
+  };
+  // Edits only once there's text to edit, rather than a list of greyed-out ones.
+  const items: MenuItem[] = [
+    ...(state.context && messages.length
+      ? [{ id: "draft", label: own.text ? "Draft a reply from my notes" : "Draft a reply", icon: "message-reply" }, ...(own.text ? ["-" as const] : [])]
+      : []),
+    ...(own.text
+      ? [...AI_EDITS.map(([label, icon], i): MenuItem => ({ id: `edit-${i}`, label, icon })), "-" as const,
+        { id: "custom", label: "Custom instruction…", icon: "pencil" }]
+      : [{ id: "none", label: "Write something to edit it with AI", icon: "info-circle", disabled: true }]),
+  ];
+  const r = anchor.getBoundingClientRect();
+  showMenu(editor.state.selection.empty ? null : "Edit the selection", items, { x: r.left, y: r.bottom + 6 }, (id) => {
+    if (id === "draft") draftReply();
+    else if (id === "custom") {
+      void askText({ title: "Rewrite with AI", message: "Say what to change, for example \"Make it sound more confident\".", confirm: "Rewrite", value: "" })
+        .then((instruction) => void (instruction && rewrite(instruction)));
+    } else if (id.startsWith("edit-")) void rewrite(AI_EDITS[Number(id.slice(5))][2]);
   });
-  (await Menu.new({ items })).popup();
+  menuAnchor = anchor;
+  // The button sits at the bottom of the composer: open upward when there's no room below.
+  if (r.bottom + 6 + menu.offsetHeight > window.innerHeight - 8) menu.style.top = `${Math.max(8, r.top - menu.offsetHeight - 6)}px`;
 });
 
 /** Opening a scheduled email pauses it while it's edited; closing the composer schedules it again for the same time. */
@@ -2714,3 +2732,4 @@ loadSettings()
       });
     }
   });
+
