@@ -388,8 +388,11 @@ function refresh() {
   // mail-changed per thread) into one repaint.
   setTimeout(async () => {
     refreshQueued = false;
+    // Something changed in the cache, so messages loaded ahead may be out of date.
+    nearby.clear();
     await renderMailboxes();
     if (!search) await loadThreads();
+    if (selected) prefetchAround(selected);
   }, 60);
 }
 
@@ -560,6 +563,24 @@ function scrollToLatest() {
   grow.observe(all.at(-1)!);
 }
 
+/** Messages of the open email and its neighbours, loaded ahead so moving on (j/k, archive, delete, move) doesn't wait. */
+const nearby = new Map<string, Promise<Message[]>>();
+function loadMessages(account: string, id: string) {
+  const key = `${account} ${id}`;
+  let p = nearby.get(key);
+  if (!p) {
+    p = invoke<Message[]>("thread", { account, id });
+    nearby.set(key, p);
+    p.catch(() => nearby.delete(key));
+  }
+  return p;
+}
+function prefetchAround(id: string) {
+  const i = threads.findIndex((t) => t.id === id);
+  if (i < 0 || mailbox === "SCHEDULED") return;
+  for (const t of [threads[i + 1], threads[i - 1]]) if (t) loadMessages(t.account, t.id).catch(() => {});
+}
+
 async function openThread(id: string) {
   $("#link-status").hidden = true;
   if (mailbox === "SCHEDULED") return editScheduled(id);
@@ -577,7 +598,7 @@ async function openThread(id: string) {
   // which Reply and Forward read.
   let loaded: Message[];
   try {
-    loaded = await invoke<Message[]>("thread", { account: thread?.account ?? defaultAccount(), id });
+    loaded = await loadMessages(thread?.account ?? defaultAccount(), id);
   } catch (e) {
     if (selected === id) reader.innerHTML = `<div class="placeholder">${esc(String(e))}</div>`;
     return;
@@ -638,6 +659,7 @@ async function openThread(id: string) {
   }
   reader.scrollTop = 0;
   scrollToLatest();
+  prefetchAround(id);
   void showAiLabels(thread?.account ?? defaultAccount(), id);
   if (thread?.unread && settings.general.markReadOnOpen) {
     keptUnread.add(id);
