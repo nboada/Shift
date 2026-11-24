@@ -152,19 +152,23 @@ async function archive(group: HTMLElement) {
   const boxes = [...group.querySelectorAll<HTMLInputElement>("li input:checked")];
   const list = boxes.map((b) => ({ account: b.dataset.account!, id: b.dataset.id! }));
   if (!list.length) return;
-  group.querySelector<HTMLButtonElement>("[data-archive]")!.disabled = true;
-  try {
-    await setInbox(list, false);
-  } catch (err) {
-    ctx.toast(`Couldn't archive everything: ${err}`);
+  const button = group.querySelector<HTMLButtonElement>("[data-archive]")!;
+  button.disabled = true;
+  // Each email on its own: only those Gmail archived leave the list and count toward "Archived N"; the rest stay ticked.
+  const results = await Promise.allSettled(list.map((item) => setInbox([item], false)));
+  const archived = list.filter((_, i) => results[i].status === "fulfilled");
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  boxes.forEach((b, i) => results[i].status === "fulfilled" && b.closest("li")!.remove());
+  if (failed) ctx.toast(`Couldn't archive ${list.length - archived.length} of ${list.length}: ${failed.reason}`);
+  button.disabled = false;
+  if (archived.length) {
+    // In the sheet, next to the group it came from, so Undo stays at hand while reviewing the rest.
+    const done = document.createElement("div");
+    done.className = "cu-done";
+    done.dataset.list = JSON.stringify(archived);
+    done.innerHTML = `${iconHtml("circle-check")}<span>Archived ${archived.length} ${archived.length === 1 ? "email" : "emails"}</span><button type="button" data-undo>Undo</button>`;
+    group.before(done);
   }
-  boxes.forEach((b) => b.closest("li")!.remove());
-  // In the sheet, next to the group it came from, so Undo stays at hand while reviewing the rest.
-  const done = document.createElement("div");
-  done.className = "cu-done";
-  done.dataset.list = JSON.stringify(list);
-  done.innerHTML = `${iconHtml("circle-check")}<span>Archived ${list.length} ${list.length === 1 ? "email" : "emails"}</span><button type="button" data-undo>Undo</button>`;
-  group.before(done);
   if (!group.querySelector("li")) group.remove();
   else updateCounts(group);
 }
