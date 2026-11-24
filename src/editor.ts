@@ -6,7 +6,7 @@ import { renderSignaturePreview } from "./settings-ui";
 type Command = "bold" | "italic" | "underline" | "link" | "bulletList" | "orderedList" | "blockquote";
 
 /** Tiptap editor for the composer body, with the floating format bar that shows over a selection. */
-export function createEditor(element: HTMLElement, bar: HTMLElement, onChange: () => void) {
+export function createEditor(element: HTMLElement, bar: HTMLElement, onChange: () => void, signatureHtml: () => string) {
   const linkInput = bar.querySelector<HTMLInputElement>("input")!;
   let linking = false;
 
@@ -22,7 +22,7 @@ export function createEditor(element: HTMLElement, bar: HTMLElement, onChange: (
           frame.setAttribute("sandbox", "allow-same-origin");
           frame.title = "Signature";
           dom.append(frame);
-          renderSignaturePreview(frame);
+          renderSignaturePreview(frame, signatureHtml());
           return { dom };
         },
       }),

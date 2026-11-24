@@ -2,10 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- In the page rather than tauri.conf.json: Tauri skips its CSP for the dev server and nonces styles in release,
+         which would block the inline style attributes emails rely on. Email frames inherit this and tighten it. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420; media-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Shift</title>
     <link rel="stylesheet" href="/src/styles.css" />
     <script type="module" src="/src/main.ts"></script>
+    <style id="label-colors"></style>
   </head>
   <body>
     <section id="signin" class="signin" data-tauri-drag-region hidden>
@@ -27,7 +31,10 @@
       </header>
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-top" data-tauri-drag-region></div>
-        <button id="compose-btn" class="compose" data-tip="New email (⌘N)"><i class="ph ph-pencil-simple-line"></i> New Email</button>
+        <div class="compose-row">
+          <button id="compose-btn" class="compose" data-tip="New email (⌘N)"><i class="ph ph-pencil-simple-line"></i> Compose</button>
+          <button id="sync-btn" class="icon" data-tip="Check for mail" aria-label="Check for mail"><i class="ph ph-arrows-clockwise"></i></button>
+        </div>
         <nav id="mailboxes" class="mailboxes"></nav>
         <div class="account">
           <button id="account-btn" class="account-btn" aria-haspopup="menu">
@@ -43,8 +50,8 @@
         <header class="toolbar" data-tauri-drag-region>
           <button class="icon back" data-back="mailboxes" data-tip="Mailboxes"><i class="ph ph-sidebar-simple"></i></button>
           <h2 id="list-title" data-tauri-drag-region></h2>
+          <button id="empty-btn" class="empty-btn" hidden><i class="ph ph-trash"></i><span></span></button>
           <button id="view-btn" class="icon"><i class="ph"></i></button>
-          <button id="sync-btn" class="icon" data-tip="Check for mail"><i class="ph ph-arrows-clockwise"></i></button>
         </header>
         <form class="search search-list">
           <i class="ph ph-magnifying-glass"></i>
@@ -154,6 +161,7 @@
     <dialog id="ask" class="ask" aria-labelledby="ask-title">
       <h3 id="ask-title"></h3>
       <p></p>
+      <input type="text" hidden autocomplete="off" spellcheck="false" aria-labelledby="ask-title" />
       <footer>
         <button type="button" class="secondary" data-cancel></button>
         <button type="button" class="primary" data-ok></button>

@@ -46,6 +46,7 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
         "ALTER TABLE threads ADD COLUMN full INTEGER NOT NULL DEFAULT 0",
         [],
     );
+    let _ = conn.execute("ALTER TABLE labels ADD COLUMN color TEXT", []);
     // Bodies cached before attachments were stored carry none; mark them for a re-fetch on open.
     if !had_attachments {
         conn.execute("UPDATE threads SET full = 0", [])?;
@@ -118,6 +119,11 @@ pub fn get_meta(conn: &Connection, k: &str) -> Result<Option<String>> {
         .optional()?)
 }
 
+pub fn delete_meta(conn: &Connection, k: &str) -> Result<()> {
+    conn.execute("DELETE FROM meta WHERE k = ?1", [k])?;
+    Ok(())
+}
+
 pub fn set_meta(conn: &Connection, k: &str, v: &str) -> Result<()> {
     conn.execute("INSERT OR REPLACE INTO meta (k, v) VALUES (?1, ?2)", [k, v])?;
     Ok(())
@@ -133,8 +139,13 @@ pub fn replace_labels(conn: &mut Connection, labels: &[gmail::Label]) -> Result<
     tx.execute("DELETE FROM labels", [])?;
     for l in labels {
         tx.execute(
-            "INSERT INTO labels (id, name, kind) VALUES (?1, ?2, ?3)",
-            params![l.id, l.name, l.kind],
+            "INSERT INTO labels (id, name, kind, color) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                l.id,
+                l.name,
+                l.kind,
+                l.color.as_ref().map(|c| &c.background)
+            ],
         )?;
     }
     tx.commit()?;
@@ -190,6 +201,13 @@ pub fn upsert_thread(conn: &mut Connection, t: &gmail::Thread, full: bool) -> Re
     Ok(())
 }
 
+/// Every cached thread carrying `label`, whatever else it carries (unlike `threads`, which hides Trash/Spam elsewhere).
+pub fn thread_ids(conn: &Connection, label: &str) -> Result<Vec<String>> {
+    let mut st = conn.prepare_cached("SELECT thread_id FROM thread_labels WHERE label_id = ?1")?;
+    let rows = st.query_map([label], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 pub fn delete_thread(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM threads WHERE id = ?1", [id])?;
     Ok(())
@@ -221,16 +239,55 @@ pub fn change_labels(
 #[derive(Serialize)]
 pub struct LabelRow {
     pub id: String,
-    name: String,
+    pub name: String,
     pub kind: String,
     pub unread: i64,
+    /// Gmail's background colour for the label, when one is set.
+    pub color: Option<String>,
+}
+
+/// Clears UNREAD on every thread `threads(label)` lists; returns the ids it changed.
+pub fn mark_read(conn: &mut Connection, label: Option<&str>) -> Result<Vec<String>> {
+    let ids: Vec<String> = threads(conn, label)?
+        .into_iter()
+        .filter(|t| t.unread)
+        .map(|t| t.id)
+        .collect();
+    for id in &ids {
+        change_labels(conn, id, &[], &["UNREAD".into()])?;
+    }
+    Ok(ids)
+}
+
+pub fn rename_label(conn: &Connection, id: &str, name: &str) -> Result<()> {
+    conn.execute("UPDATE labels SET name = ?2 WHERE id = ?1", [id, name])?;
+    Ok(())
+}
+
+pub fn set_label_color(conn: &Connection, id: &str, color: &str) -> Result<()> {
+    conn.execute("UPDATE labels SET color = ?2 WHERE id = ?1", [id, color])?;
+    Ok(())
+}
+
+pub fn delete_label(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM thread_labels WHERE label_id = ?1", [id])?;
+    conn.execute("DELETE FROM labels WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+pub fn label_id(conn: &Connection, name: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT id FROM labels WHERE name = ?1", [name], |r| {
+            r.get(0)
+        })
+        .optional()?)
 }
 
 pub fn labels(conn: &Connection) -> Result<Vec<LabelRow>> {
     let mut st = conn.prepare(
         "SELECT l.id, l.name, l.kind,
            (SELECT count(*) FROM thread_labels a JOIN thread_labels u ON u.thread_id = a.thread_id AND u.label_id = 'UNREAD'
-            WHERE a.label_id = l.id)
+            WHERE a.label_id = l.id), l.color
          FROM labels l ORDER BY l.kind DESC, l.name COLLATE NOCASE",
     )?;
     let rows = st.query_map([], |r| {
@@ -239,6 +296,7 @@ pub fn labels(conn: &Connection) -> Result<Vec<LabelRow>> {
             name: r.get(1)?,
             kind: r.get(2)?,
             unread: r.get(3)?,
+            color: r.get(4)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -312,6 +370,30 @@ pub fn threads_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<ThreadRow
             out.push(row);
         }
     }
+    Ok(out)
+}
+
+pub struct NewMail {
+    pub sender: String,
+    pub subject: String,
+    pub date: i64,
+    /// False for Gmail's Promotions/Social/Updates/Forums tabs.
+    pub primary: bool,
+}
+
+/// Unread Inbox threads whose latest message is newer than `since` (ms), oldest first.
+pub fn new_mail(conn: &Connection, since: i64) -> Result<Vec<NewMail>> {
+    let mut out: Vec<NewMail> = threads(conn, Some("INBOX"))?
+        .into_iter()
+        .filter(|t| t.unread && t.date > since)
+        .map(|t| NewMail {
+            sender: t.sender,
+            subject: t.subject,
+            date: t.date,
+            primary: t.primary,
+        })
+        .collect();
+    out.reverse();
     Ok(out)
 }
 
@@ -513,6 +595,57 @@ mod tests {
         assert_eq!(scheduled(&conn, Some(200)).unwrap()[0].id, late);
         reschedule(&conn, early, None).unwrap();
         assert_eq!(scheduled(&conn, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mark_read_and_delete_label() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        c.execute(
+            "INSERT INTO labels (id, name, kind) VALUES ('Label_1', 'Later', 'user')",
+            [],
+        )
+        .unwrap();
+        upsert_thread(&mut c, &thread("a", &["Label_1", "UNREAD"], "2"), false).unwrap();
+        upsert_thread(&mut c, &thread("b", &["INBOX", "UNREAD"], "3"), false).unwrap();
+        assert_eq!(mark_read(&mut c, Some("Label_1")).unwrap(), ["a"]);
+        assert!(!threads(&c, Some("Label_1")).unwrap()[0].unread);
+        assert!(
+            threads(&c, Some("INBOX")).unwrap()[0].unread,
+            "other mailboxes untouched"
+        );
+        delete_label(&c, "Label_1").unwrap();
+        assert!(threads(&c, Some("Label_1")).unwrap().is_empty());
+        assert_eq!(label_id(&c, "Later").unwrap(), None);
+    }
+
+    #[test]
+    fn new_mail_is_unread_inbox_after_the_watermark() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        upsert_thread(&mut c, &thread("old", &["INBOX", "UNREAD"], "100"), false).unwrap();
+        upsert_thread(&mut c, &thread("new", &["INBOX", "UNREAD"], "300"), false).unwrap();
+        upsert_thread(&mut c, &thread("read", &["INBOX"], "400"), false).unwrap();
+        upsert_thread(&mut c, &thread("archived", &["UNREAD"], "500"), false).unwrap();
+        let mail = new_mail(&c, 200).unwrap();
+        assert_eq!(mail.iter().map(|m| m.date).collect::<Vec<_>>(), [300]);
+    }
+
+    #[test]
+    fn label_id_by_name() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        c.execute(
+            "INSERT INTO labels (id, name, kind) VALUES ('Label_7', 'Notes', 'user')",
+            [],
+        )
+        .unwrap();
+        upsert_thread(&mut c, &thread("a", &["Label_7"], "2"), false).unwrap();
+        let id = label_id(&c, "Notes").unwrap();
+        assert_eq!(id.as_deref(), Some("Label_7"));
+        assert_eq!(threads(&c, id.as_deref()).unwrap().len(), 1);
+        assert_eq!(label_id(&c, "Missing").unwrap(), None);
     }
 
     #[test]

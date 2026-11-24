@@ -91,6 +91,14 @@ pub struct Label {
     pub name: String,
     #[serde(rename = "type", default)]
     pub kind: String,
+    #[serde(default)]
+    pub color: Option<LabelColor>,
+}
+
+#[derive(Deserialize)]
+pub struct LabelColor {
+    #[serde(rename = "backgroundColor")]
+    pub background: String,
 }
 
 impl Message {
@@ -196,6 +204,14 @@ fn upload_body(meta: &Value, raw: &[u8]) -> Vec<u8> {
     body
 }
 
+/// The account signed in before Shift asked for full access, so Gmail refuses calls that need it.
+pub fn is_scope_error(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<ApiError>().is_some_and(|e| {
+        e.status == 403
+            && (e.body.contains("insufficientPermissions") || e.body.contains("SCOPE_INSUFFICIENT"))
+    })
+}
+
 pub fn is_not_found(e: &anyhow::Error) -> bool {
     e.downcast_ref::<ApiError>()
         .is_some_and(|e| e.status == 404)
@@ -211,6 +227,16 @@ impl Gmail<'_> {
         &self,
         req: impl Fn() -> reqwest::RequestBuilder,
     ) -> Result<T> {
+        self.call_opts(req, true).await
+    }
+
+    /// `retry_5xx: false` for requests that mustn't repeat: a 5xx can come after Gmail already acted on it.
+    /// Rate-limit refusals are still retried, since Gmail rejected those before doing anything.
+    async fn call_opts<T: DeserializeOwned>(
+        &self,
+        req: impl Fn() -> reqwest::RequestBuilder,
+        retry_5xx: bool,
+    ) -> Result<T> {
         let mut attempt = 0;
         loop {
             let resp = req().bearer_auth(self.token).send().await?;
@@ -225,7 +251,7 @@ impl Gmail<'_> {
                 })?);
             }
             let body = resp.text().await.unwrap_or_default();
-            if retryable(status, &body) && attempt < 6 {
+            if retryable(status, &body) && (retry_5xx || status < 500) && attempt < 6 {
                 attempt += 1;
                 eprintln!(
                     "gmail retry {attempt} after {status}: {}",
@@ -235,7 +261,11 @@ impl Gmail<'_> {
                         .take(200)
                         .collect::<String>()
                 );
-                tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
+                // Jitter, as Google's backoff guidance asks: 4 parallel workers otherwise retry in lockstep.
+                let mut r = [0u8; 2];
+                let _ = getrandom::fill(&mut r);
+                let jitter = u64::from(u16::from_le_bytes(r)) % 1000;
+                tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt) + jitter)).await;
                 continue;
             }
             return Err(ApiError { status, body }.into());
@@ -353,6 +383,83 @@ impl Gmail<'_> {
         Ok(())
     }
 
+    /// Ids of messages matching `q` that carry every label in `labels`.
+    pub async fn message_ids(&self, q: &str, labels: &[&str]) -> Result<Vec<String>> {
+        let mut ids = Vec::new();
+        let mut page = String::new();
+        loop {
+            let mut query = vec![
+                ("q", q),
+                ("maxResults", "500"),
+                ("includeSpamTrash", "true"),
+            ];
+            query.extend(labels.iter().map(|l| ("labelIds", *l)));
+            if !page.is_empty() {
+                query.push(("pageToken", &page));
+            }
+            let v: Value = self.get("/messages", &query).await?;
+            ids.extend(
+                v["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| m["id"].as_str().map(String::from)),
+            );
+            match v["nextPageToken"].as_str() {
+                Some(t) => page = t.into(),
+                None => return Ok(ids),
+            }
+        }
+    }
+
+    /// One call per 1000 messages, against one call per thread for `modify`.
+    pub async fn batch_modify(&self, ids: &[String], add: &[&str], remove: &[&str]) -> Result<()> {
+        for chunk in ids.chunks(1000) {
+            let _: Value = self
+                .post(
+                    "/messages/batchModify",
+                    &serde_json::json!({ "ids": chunk, "addLabelIds": add, "removeLabelIds": remove }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Permanent: skips Trash. Needs the full https://mail.google.com/ scope.
+    pub async fn batch_delete(&self, ids: &[String]) -> Result<()> {
+        for chunk in ids.chunks(1000) {
+            let _: Value = self
+                .post(
+                    "/messages/batchDelete",
+                    &serde_json::json!({ "ids": chunk }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn patch_label(&self, id: &str, body: &Value) -> Result<()> {
+        let url = format!("{BASE}/labels/{id}");
+        let _: Value = self.call(|| self.http.patch(&url).json(body)).await?;
+        Ok(())
+    }
+
+    pub async fn delete_label(&self, id: &str) -> Result<()> {
+        let url = format!("{BASE}/labels/{id}");
+        let _: Value = self.call(|| self.http.delete(&url)).await?;
+        Ok(())
+    }
+
+    pub async fn untrash(&self, thread: &str) -> Result<()> {
+        let _: Value = self
+            .post(
+                &format!("/threads/{thread}/untrash"),
+                &serde_json::json!({}),
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn trash(&self, thread: &str) -> Result<()> {
         let _: Value = self
             .post(&format!("/threads/{thread}/trash"), &serde_json::json!({}))
@@ -370,10 +477,15 @@ impl Gmail<'_> {
         thread_id: Option<&str>,
         wrap: impl Fn(Value) -> Value,
     ) -> Result<Value> {
+        // A plain send has no draft to dedupe a repeat against, so a 5xx is never retried there.
+        let retry_5xx = path != "/messages/send";
         if raw.len() <= MAX_JSON_RAW {
             let (url, body) = (format!("{BASE}{path}"), wrap(message_json(raw, thread_id)));
             return self
-                .call(|| self.http.request(method.clone(), &url).json(&body))
+                .call_opts(
+                    || self.http.request(method.clone(), &url).json(&body),
+                    retry_5xx,
+                )
                 .await;
         }
         let mut meta = serde_json::json!({});
@@ -381,17 +493,20 @@ impl Gmail<'_> {
             meta["threadId"] = t.into();
         }
         let (url, body) = (format!("{UPLOAD}{path}"), upload_body(&wrap(meta), raw));
-        self.call(|| {
-            self.http
-                .request(method.clone(), &url)
-                .query(&[("uploadType", "multipart")])
-                .header(
-                    reqwest::header::CONTENT_TYPE,
-                    format!("multipart/related; boundary={BOUNDARY}"),
-                )
-                .timeout(Duration::from_secs(600))
-                .body(body.clone())
-        })
+        self.call_opts(
+            || {
+                self.http
+                    .request(method.clone(), &url)
+                    .query(&[("uploadType", "multipart")])
+                    .header(
+                        reqwest::header::CONTENT_TYPE,
+                        format!("multipart/related; boundary={BOUNDARY}"),
+                    )
+                    .timeout(Duration::from_secs(600))
+                    .body(body.clone())
+            },
+            retry_5xx,
+        )
         .await
     }
 
@@ -465,6 +580,22 @@ impl Gmail<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insufficient_scope_is_recognised() {
+        let err = |status, body: &str| {
+            anyhow::Error::from(ApiError {
+                status,
+                body: body.into(),
+            })
+        };
+        assert!(is_scope_error(&err(
+            403,
+            r#"{"error":{"errors":[{"reason":"insufficientPermissions"}]}}"#
+        )));
+        assert!(!is_scope_error(&err(403, "rateLimitExceeded")));
+        assert!(!is_scope_error(&err(404, "insufficientPermissions")));
+    }
 
     #[test]
     fn rate_limit_403_is_retryable_but_permission_403_is_not() {

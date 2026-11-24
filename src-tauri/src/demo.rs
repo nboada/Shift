@@ -117,6 +117,7 @@ fn label(id: &str, name: &str, kind: &str) -> gmail::Label {
         id: id.into(),
         name: name.into(),
         kind: kind.into(),
+        color: None,
     }
 }
 

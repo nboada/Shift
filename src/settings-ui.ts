@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ask } from "./dialog";
 import { ACTIONS, comboOf, formatCombo, keysFor } from "./keys";
 import {
-  ACCOUNT_COLORS, AI_PROVIDERS, DEFAULTS, ZOOM_STEPS, accountSettings, getSetting, setAccountSetting, setSetting, settings,
+  ACCOUNT_COLORS, AI_PROVIDERS, DEFAULTS, ZOOM_STEPS, accountSettings, getSetting, setAccountSetting, setSetting, settings, signatureFor,
 } from "./settings";
 
 const SECTIONS: [string, string, string][] = [
@@ -108,14 +108,13 @@ document.addEventListener("pointerdown", (e) => {
 });
 
 /** Segmented control for short option lists: every choice visible, one click to pick. */
-function segmented(path: string, options: [string | number, string, string?][], disabled = false) {
-  const value = String(getSetting(path));
+function segmented(path: string, options: [string | number, string, string?][], disabled = false, pick = `data-pick="${path}"`, value = String(getSetting(path))) {
   const numeric = typeof getSetting(path) === "number";
   // Buttons with role="radio" rather than hidden radio inputs: every click (mouse, keyboard, assistive tech) reaches us.
   return `<div class="segmented" role="radiogroup"><span class="seg-thumb" aria-hidden="true"></span>${options
     .map(([v, label, icon]) => {
       const on = String(v) === value;
-      return `<button type="button" role="radio" aria-checked="${on}" class="${on ? "on" : ""}" data-pick="${path}" data-value="${esc(String(v))}" ${numeric ? 'data-number="1"' : ""} ${disabled ? "disabled" : ""}>${icon ? `<i class="ph ph-${icon}"></i>` : ""}<span>${esc(label)}</span></button>`;
+      return `<button type="button" role="radio" aria-checked="${on}" class="${on ? "on" : ""}" ${pick} data-value="${esc(String(v))}" ${numeric ? 'data-number="1"' : ""} ${disabled ? "disabled" : ""}>${icon ? `<i class="ph ph-${icon}"></i>` : ""}<span>${esc(label)}</span></button>`;
     })
     .join("")}</div>`;
 }
@@ -145,6 +144,13 @@ const soon = (what: string) => `<p class="soon"><i class="ph ph-hourglass-medium
 
 // ---- sections ----
 
+/** The signature editor shared by Composer (the default) and each account; `bind` names the setting a field writes to. */
+const signatureFields = (sig: { mode: string; text: string; html: string }, bind: (field: "text" | "html") => string) =>
+  sig.mode === "html"
+    ? `<textarea class="code" ${bind("html")} rows="7" spellcheck="false" placeholder="<p><strong>Your Name</strong><br>Company · +61 …</p>">${esc(sig.html)}</textarea>
+       <div class="sig-preview"><span>Preview</span><iframe id="sig-preview" sandbox="allow-same-origin" title="Signature preview"></iframe></div>`
+    : sig.mode === "text" ? `<textarea ${bind("text")} rows="4" placeholder="Your name, role, phone…">${esc(sig.text)}</textarea>` : "";
+
 function accountDetail(email: string) {
   const a = accountSettings(email);
   const link = (icon: string, label: string, where: string, target?: string) =>
@@ -157,8 +163,11 @@ function accountDetail(email: string) {
       row("Colour", `<div class="swatches" role="radiogroup">${ACCOUNT_COLORS.map((c) =>
         `<button type="button" role="radio" class="swatch acct-${c}" aria-label="${c}" aria-checked="${c === a.color}" data-pick-account="color" data-value="${c}"></button>`).join("")}</div>`, "Marks this account in the sidebar.") +
       row("Show in unified inbox", `<input type="checkbox" class="switch" role="switch" data-account-key="unified" ${a.unified ? "checked" : ""} />`, "Include this account in “All accounts”.")) +
+    group("Signature", row("Signature", segmented("", [["default", "Same as default"], ["text", "Plain text"], ["html", "HTML"]], false,
+      'data-pick-account="signature"', a.signature?.mode ?? "default"), "Added to emails sent from this account.") +
+      (a.signature ? signatureFields(a.signature, (f) => `data-account-sig="${f}"`) : "")) +
     `<h3 class="group-title">More</h3>` +
-    group("", link("signature", "Signatures", "Composer", "composer") + link("bell", "Notifications", "Notifications", "notifications") +
+    group("", link("signature", "Default signature", "Composer", "composer") + link("bell", "Notifications", "Notifications", "notifications") +
       link("at", "Aliases", "Coming soon") + link("folder", "Folders", "Coming soon") + link("app-store-logo", "App icon badge", "Coming soon")) +
     `<div class="account-actions"><button class="secondary danger" data-cmd="signout">Log out</button></div>`;
 }
@@ -201,15 +210,17 @@ const render: Record<string, () => string> = {
 
   appearance: () =>
     group("Theme", row("Appearance", segmented("appearance.theme", [["system", "System", "desktop"], ["light", "Light", "sun"], ["dark", "Dark", "moon"]]))) +
-    group("Message list", row("Density", segmented("appearance.density", [["comfortable", "Comfortable"], ["compact", "Compact"]])) +
+    group("Message list", row("Layout", segmented("appearance.layout", [["split", "Split"], ["wide", "Wide list"]]), "Wide list shows one email per line and opens emails full width.") +
+      row("Density", segmented("appearance.density", [["comfortable", "Comfortable"], ["compact", "Compact"]])) +
       row("Show avatars", toggle("appearance.showAvatars")) +
-      row("Preview lines", segmented("appearance.snippetLines", [[0, "None"], [1, "1"], [2, "2"]]))),
+      row("Preview lines", segmented("appearance.snippetLines", [[0, "None"], [1, "1"], [2, "2"]]))) +
+    group("Emails", row("Use the same font and text size for all emails", toggle("appearance.uniformEmailFont"), "Replaces the sender's fonts and body text size. Headings, layout, colours and images stay as sent.") +
+      row("Load remote images", toggle("appearance.loadRemoteImages"), "Off: images from the web stay hidden until you load them, so senders can't see when you open an email.")),
 
   notifications: () =>
-    soon("desktop notifications for new mail.") +
-    group("", row("New mail notifications", toggle("notifications.enabled", true)) +
-      row("Play a sound", toggle("notifications.sound", true)) +
-      row("Only from people", toggle("notifications.onlyPeople", true), "Skip newsletters and automated mail.")),
+    group("", row("New mail notifications", toggle("notifications.enabled"), "For Inbox mail that arrives while Shift is open.") +
+      row("Play a sound", toggle("notifications.sound")) +
+      row("Only from people", toggle("notifications.onlyPeople"), "Skip newsletters and automated mail (Gmail's Promotions, Social, Updates and Forums).")),
 
   scheduling: () =>
     group("Send later", row("Later today", select("scheduling.laterTodayHours", [[1, "In 1 hour"], [2, "In 2 hours"], [3, "In 3 hours"], [4, "In 4 hours"]])) +
@@ -226,10 +237,7 @@ const render: Record<string, () => string> = {
 
   composer: () =>
     group("Signature", row("Format", segmented("composer.signatureMode", [["text", "Plain text"], ["html", "HTML"]]), "Added to new emails, replies and forwards.") +
-      (settings.composer.signatureMode === "html"
-        ? `<textarea class="code" data-path="composer.signatureHtml" rows="7" spellcheck="false" placeholder="<p><strong>Your Name</strong><br>Company · +61 …</p>">${esc(settings.composer.signatureHtml)}</textarea>
-           <div class="sig-preview"><span>Preview</span><iframe id="sig-preview" sandbox="allow-same-origin" title="Signature preview"></iframe></div>`
-        : `<textarea data-path="composer.signature" rows="4" placeholder="Your name, role, phone…">${esc(settings.composer.signature)}</textarea>`)) +
+      signatureFields(signatureFor(undefined), (f) => `data-path="composer.${f === "html" ? "signatureHtml" : "signature"}"`)) +
     group("Replying", row("Default reply", segmented("composer.defaultReply", [["reply", "Reply"], ["all", "Reply all"]]), "What R and ⌘R do. The other is always ⇧R.") +
       row("Quote the original message", toggle("composer.quoteOriginal"))) +
     group("Sending", row("Undo send", segmented("composer.undoSendSeconds", [[0, "Off"], [5, "5s"], [10, "10s"], [20, "20s"]]), "Wait before sending so you can take it back.")),
@@ -265,15 +273,19 @@ function show(section: string) {
   panel().innerHTML = render[section]();
   placeThumbs();
   if (section === "ai") refreshKeyStatus();
-  if (section === "composer") renderSignaturePreview();
+  previewSignature();
 }
 
-/** Live preview of the HTML signature. Sandboxed without scripts, so pasted markup can't run code. */
-export function renderSignaturePreview(frame = document.getElementById("sig-preview") as HTMLIFrameElement | null) {
+/** The settings page's preview: the open account's signature, or the default one in Composer. */
+const previewSignature = () =>
+  renderSignaturePreview(document.getElementById("sig-preview") as HTMLIFrameElement | null, signatureFor(current === "accounts" ? accountOpen ?? undefined : undefined).html);
+
+/** Live preview of an HTML signature. Sandboxed without scripts, so pasted markup can't run code. */
+export function renderSignaturePreview(frame: HTMLIFrameElement | null, html: string) {
   if (!frame) return;
   frame.onload = () => (frame.style.height = `${frame.contentDocument?.documentElement.scrollHeight ?? 60}px`);
   frame.srcdoc = `<style>body{margin:0;padding:10px 12px;font:14px/1.5 -apple-system,system-ui,sans-serif;color:#1d1d1f}</style>${
-    settings.composer.signatureHtml || '<span style="color:#999">Nothing yet</span>'}`;
+    html || '<span style="color:#999">Nothing yet</span>'}`;
 }
 
 async function refreshKeyStatus() {
@@ -344,6 +356,12 @@ export function initSettings(c: Ctx) {
 
   const onEdit = (e: Event) => {
     const el = e.target as HTMLInputElement;
+    const sigField = el.dataset.accountSig as "text" | "html" | undefined;
+    if (sigField && accountOpen) {
+      setAccountSetting(accountOpen, "signature", { ...signatureFor(accountOpen), [sigField]: el.value });
+      if (sigField === "html") previewSignature();
+      return;
+    }
     const accountKey = el.dataset.accountKey as "name" | "title" | "color" | "unified" | undefined;
     if (accountKey && accountOpen) {
       setAccountSetting(accountOpen, accountKey, el.type === "checkbox" ? el.checked : el.value);
@@ -362,7 +380,7 @@ export function initSettings(c: Ctx) {
     }
     // Re-render where one choice changes which other options make sense.
     if (path === "ai.provider" || path === "ai.model" || path === "composer.signatureMode") show(current);
-    if (path === "composer.signatureHtml") renderSignaturePreview();
+    if (path === "composer.signatureHtml") previewSignature();
   };
   panel().addEventListener("change", onEdit);
   panel().addEventListener("input", (e) => {
@@ -383,6 +401,12 @@ export function initSettings(c: Ctx) {
   panel().addEventListener("click", (e) => {
     const b = (e.target as Element).closest<HTMLButtonElement>("[data-pick], [data-pick-account]");
     if (!b || b.disabled) return;
+    if (b.dataset.pickAccount === "signature" && accountOpen) {
+      const mode = b.dataset.value as "default" | "text" | "html";
+      // A new account signature starts as a copy of the default, to edit from.
+      setAccountSetting(accountOpen, "signature", mode === "default" ? undefined : { ...signatureFor(accountOpen), mode });
+      return show("accounts");
+    }
     if (b.dataset.pickAccount && accountOpen) {
       setAccountSetting(accountOpen, b.dataset.pickAccount as "color", b.dataset.value!);
       return show("accounts");

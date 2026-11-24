@@ -4,7 +4,7 @@ export type SwipeAction = "none" | "archive" | "trash" | "unread" | "star" | "sp
 
 export const DEFAULTS = {
   general: { syncSeconds: 30, markReadOnOpen: true, confirmDelete: false },
-  appearance: { theme: "system" as "system" | "light" | "dark", density: "comfortable" as "comfortable" | "compact", showAvatars: true, snippetLines: 2 },
+  appearance: { theme: "system" as "system" | "light" | "dark", density: "comfortable" as "comfortable" | "compact", showAvatars: true, snippetLines: 2, layout: "split" as "split" | "wide", uniformEmailFont: true, loadRemoteImages: false },
   notifications: { enabled: true, sound: true, onlyPeople: false },
   scheduling: { laterTodayHours: 3, morning: "09:00", weekendDay: "saturday", nextWeekDay: "monday" },
   inbox: { view: "smart" as "smart" | "list", pinnedOnTop: true, splitUnread: true, unreadBadge: true },
@@ -17,6 +17,8 @@ export const DEFAULTS = {
     undoSendSeconds: 5,
   },
   accessibility: { zoom: 100, reduceMotion: false },
+  /** Mailbox keys (label id, or "ALL" for All Mail) in the order and visibility the sidebar uses. */
+  sidebar: { order: [] as string[], hidden: [] as string[] },
   swipes: { left: "archive" as SwipeAction, right: "unread" as SwipeAction },
   shortcuts: {} as Record<string, string[]>,
   /** Keyed by email address, so each account keeps its own options. */
@@ -26,7 +28,15 @@ export const DEFAULTS = {
 
 export type Settings = typeof DEFAULTS;
 
-export type AccountSettings = { name: string; title: string; color: string; unified: boolean };
+/** Absent `signature` means the account uses the default one from Settings → Composer. */
+export type AccountSettings = { name: string; title: string; color: string; unified: boolean; signature?: SignatureSettings };
+export type SignatureSettings = { mode: "text" | "html"; text: string; html: string };
+
+/** The signature for mail from `account`: its own if it has one, else the default. */
+export function signatureFor(account: string | undefined, s: Settings = settings): SignatureSettings {
+  const { signatureMode: mode, signature: text, signatureHtml: html } = s.composer;
+  return (account && s.accounts[account]?.signature) || { mode, text, html };
+}
 
 // Shift's account colours (talkk-mail App/UI/Theme.swift); CSS classes .acct-<name> carry the hex values.
 export const ACCOUNT_COLORS = ["blue", "red", "orange", "purple", "green", "pink", "teal", "yellow", "graphite"];
@@ -38,7 +48,7 @@ export function accountSettings(email: string): AccountSettings {
 }
 
 /** Account options live under the email address, which contains dots, so they can't use dotted paths. */
-export function setAccountSetting(email: string, key: keyof AccountSettings, value: string | boolean) {
+export function setAccountSetting<K extends keyof AccountSettings>(email: string, key: K, value: AccountSettings[K]) {
   settings.accounts = { ...settings.accounts, [email]: { ...settings.accounts[email], [key]: value } };
   notify("accounts");
 }
@@ -96,6 +106,7 @@ export function applyVisualSettings() {
   if (appearance.theme === "system") delete root.dataset.theme;
   else root.dataset.theme = appearance.theme;
   root.dataset.density = appearance.density;
+  root.dataset.layout = appearance.layout;
   root.dataset.avatars = String(appearance.showAvatars);
   root.dataset.snippet = String(appearance.snippetLines);
   root.dataset.reduceMotion = String(accessibility.reduceMotion);
