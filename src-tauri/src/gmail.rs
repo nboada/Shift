@@ -95,6 +95,20 @@ pub struct Label {
     pub color: Option<LabelColor>,
 }
 
+/// A Gmail draft and the message holding its current content.
+#[derive(Deserialize)]
+pub struct DraftRef {
+    pub id: String,
+    pub message: DraftMessage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftMessage {
+    pub id: String,
+    pub thread_id: String,
+}
+
 #[derive(Deserialize)]
 pub struct LabelColor {
     #[serde(rename = "backgroundColor")]
@@ -305,6 +319,29 @@ impl Gmail<'_> {
         ))
     }
 
+    /// A draft's Bcc line, which the local cache doesn't keep.
+    pub async fn draft_bcc(&self, id: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        struct R {
+            message: Message,
+        }
+        let r: R = self
+            .get(&format!("/drafts/{id}"), &[("format", "metadata"), ("metadataHeaders", "Bcc")])
+            .await?;
+        Ok(r.message.header("Bcc"))
+    }
+
+    /// The account's drafts, newest first.
+    // shortcut: first 500 only, enough for a person's Drafts; page with nextPageToken if someone has more.
+    pub async fn drafts(&self) -> Result<Vec<DraftRef>> {
+        #[derive(Deserialize)]
+        struct R {
+            #[serde(default)]
+            drafts: Vec<DraftRef>,
+        }
+        Ok(self.get::<R>("/drafts", &[("maxResults", "500")]).await?.drafts)
+    }
+
     pub async fn labels(&self) -> Result<Vec<Label>> {
         #[derive(Deserialize)]
         struct R {
@@ -356,7 +393,7 @@ impl Gmail<'_> {
         }
         let mut q = vec![("format", "metadata")];
         q.extend(
-            ["Subject", "From", "To", "Cc", "Message-ID", "References"]
+            ["Subject", "From", "To", "Cc", "Reply-To", "Message-ID", "References"]
                 .map(|h| ("metadataHeaders", h)),
         );
         self.get(&path, &q).await
