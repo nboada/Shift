@@ -21,6 +21,7 @@ import DOMPurify from "dompurify";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
 import { formatWhen, quickTimes } from "./schedule";
+import { actionToastOpen, toast } from "./toast";
 import { Menu } from "@tauri-apps/api/menu";
 import AirDatepicker from "air-datepicker";
 import localeEnModule from "air-datepicker/locale/en";
@@ -114,32 +115,6 @@ function dateGroup(ms: number) {
   if (d.getTime() >= day.getTime() - 86_400_000) return "Yesterday";
   if (d.getTime() >= day.getTime() - 6 * 86_400_000) return "This week";
   return d.toLocaleDateString([], { month: "long", ...(d.getFullYear() === day.getFullYear() ? {} : { year: "numeric" }) });
-}
-
-let toastTimer = 0;
-/** Shows the toast for `ms`. It's a popover, so it opens in the top layer above any open modal (composer, sheets). */
-function showToast(t: HTMLElement, ms: number) {
-  if (t.matches(":popover-open")) t.hidePopover();
-  t.showPopover();
-  clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => t.hidePopover(), ms);
-}
-
-function toast(msg: string) {
-  const t = $("#toast");
-  t.textContent = msg;
-  showToast(t, 4000);
-}
-
-/** Toast with one button (e.g. Undo); the button works until the toast hides. */
-function toastAction(msg: string, label: string, onClick: () => void, ms: number) {
-  const t = $("#toast");
-  t.innerHTML = `<span>${esc(msg)}</span><button type="button">${esc(label)}</button>`;
-  t.querySelector("button")!.onclick = () => {
-    t.hidePopover();
-    onClick();
-  };
-  showToast(t, ms);
 }
 
 const setView = (v: "mailboxes" | "list" | "reader") => (app.dataset.view = v);
@@ -1599,14 +1574,13 @@ composeForm.addEventListener("submit", async (e) => {
     }
     compose = null;
     detachComposer();
-    toastAction(`Sending in ${delay}s…`, "Undo", () => {
+    const sending = toast(`Sending in ${delay}s…`, { ms: delay * 1000, action: { label: "Undo", run: () => {
       clearInterval(tick);
       invoke("reschedule", { account: state.account, id, sendAt: null }).then(() => reopen(), (err) => toast(String(err)));
-    }, delay * 1000);
-    const label = $("#toast span");
+    } } });
     let left = delay;
-    // isConnected: another toast may have replaced this one mid-countdown.
-    const tick = window.setInterval(() => label.isConnected && left > 1 && (label.textContent = `Sending in ${--left}s…`), 1000);
+    // open: another toast may have replaced this one mid-countdown.
+    const tick = window.setInterval(() => sending.open && left > 1 && sending.setMessage(`Sending in ${--left}s…`), 1000);
     return;
   }
   const button = composeForm.querySelector<HTMLButtonElement>("button[type=submit]")!;
@@ -1718,10 +1692,10 @@ async function scheduleSend(at: Date) {
     compose = null;
     detachComposer();
     closeLater();
-    toastAction(`Scheduled for ${formatWhen(at)}`, "Undo", () => {
+    toast(`Scheduled for ${formatWhen(at)}`, { ms: 6000, action: { label: "Undo", run: () => {
       invoke("reschedule", { account: state.account, id, sendAt: null })
         .then(() => openComposer(fields, { ...state, touched: true, resumeAt: null }));
-    }, 6000);
+    } } });
   } catch (err) {
     submitting.delete(state);
     error(String(err));
@@ -2716,14 +2690,13 @@ onSaveError((err) => toast(`Couldn't save your settings: ${err}`));
 // ⌘Q: the backend waits (up to 5 s) for this before quitting.
 listen("before-quit", () => void saveBeforeQuit().finally(() => invoke("quit_now")));
 listen<string>("update-ready", (e) =>
-  toastAction(`Shift ${e.payload} is ready`, "Restart", () => void saveBeforeQuit().finally(() => invoke("restart_app")), 10 * 60_000));
+  toast(`Shift ${e.payload} is ready`, { ms: 10 * 60_000, action: { label: "Restart", run: () => void saveBeforeQuit().finally(() => invoke("restart_app")) } }));
 // Shown once per distinct error every 10 minutes (sync retries every tick), and never over an Undo or Restart toast.
 const syncErrorShown = new Map<string, number>();
 listen<string>("sync-error", (e) => {
   const now = Date.now();
   if (now - (syncErrorShown.get(e.payload) ?? 0) < 10 * 60_000) return;
-  const t = $("#toast");
-  if (t.matches(":popover-open") && t.querySelector("button")) return;
+  if (actionToastOpen()) return;
   syncErrorShown.set(e.payload, now);
   toast(`Sync failed: ${e.payload}`);
 });
