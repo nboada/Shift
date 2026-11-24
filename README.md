@@ -26,7 +26,7 @@ Before public release, see `docs/google-verification.md`.
 
 ## Composer
 
-Replies and forwards open inline under the thread; new emails open in a resizable window. Recipients are chips with autocomplete from people you've emailed (`suggest_contacts`). Drafts save to Gmail Drafts about 1.5s after you stop typing, and closing keeps the draft; sending a saved draft uses `drafts.send`, which removes it from Drafts.
+Replies and forwards open inline under the thread; new emails open in a resizable window. The body is a rich-text editor (Tiptap): ⌘B, ⌘I, ⌘U and ⌘K (link) format text, and a small toolbar appears over a selection with lists and quote too. Replies and forwards quote the original as a blockquote, with your signature above it in the editor. Mail goes out as HTML with a plain-text version. Recipients are chips with autocomplete from people you've emailed (`suggest_contacts`). Drafts save to Gmail Drafts about 1.5s after you stop typing, and closing keeps the draft; sending a saved draft uses `drafts.send`, which removes it from Drafts.
 
 ## Settings
 
