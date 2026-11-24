@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS attachments (
   PRIMARY KEY (message_id, idx)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS scheduled (
   id INTEGER PRIMARY KEY, draft_id TEXT, send_at INTEGER NOT NULL, draft TEXT NOT NULL, ui TEXT NOT NULL,
-  sending INTEGER NOT NULL DEFAULT 0);
+  sending INTEGER NOT NULL DEFAULT 0, error TEXT);
 CREATE TABLE IF NOT EXISTS pending_ops (
   seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, add_labels TEXT NOT NULL, remove_labels TEXT NOT NULL,
   trash INTEGER NOT NULL);
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS ai_labels (
 ";
 
 /// Schema version, kept in `PRAGMA user_version`. Bump it and add an `if version < N` step to `open` for each change.
-const VERSION: i64 = 1;
+const VERSION: i64 = 2;
 
 pub fn open(path: &std::path::Path) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
@@ -56,6 +56,9 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
     let tx = conn.transaction()?;
     if version < 1 {
         upgrade_unversioned(&tx, had_attachments)?;
+    }
+    if version < 2 {
+        add_column(&tx, "scheduled", "error TEXT")?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {VERSION}"))?;
     tx.commit()?;
@@ -116,6 +119,10 @@ pub struct ScheduledRow {
     pub send_at: i64,
     pub draft: serde_json::Value,
     pub ui: serde_json::Value,
+    /// Being sent right now (claimed).
+    pub sending: bool,
+    /// Why the last attempt failed; it's retried each sync.
+    pub error: Option<String>,
 }
 
 pub fn add_scheduled(
@@ -141,16 +148,16 @@ pub fn claim(conn: &Connection, id: i64, now: i64) -> Result<bool> {
     )? == 1)
 }
 
-/// Gives a claimed row back after a failed send, so the next tick retries it.
-pub fn release(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute("UPDATE scheduled SET sending = 0 WHERE id = ?1", [id])?;
+/// Gives a claimed row back after a failed send, with why, so the next tick retries it and the list says so.
+pub fn release(conn: &Connection, id: i64, error: &str) -> Result<()> {
+    conn.execute("UPDATE scheduled SET sending = 0, error = ?2 WHERE id = ?1", params![id, error])?;
     Ok(())
 }
 
 /// Every scheduled email, soonest first; with `due_by`, only those due by then.
 pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<ScheduledRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, draft_id, send_at, draft, ui FROM scheduled WHERE ?1 IS NULL OR send_at <= ?1 ORDER BY send_at",
+        "SELECT id, draft_id, send_at, draft, ui, sending, error FROM scheduled WHERE ?1 IS NULL OR send_at <= ?1 ORDER BY send_at",
     )?;
     let rows = stmt.query_map([due_by], |r| {
         let json = |i| {
@@ -164,6 +171,8 @@ pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<Scheduled
             send_at: r.get(2)?,
             draft: json(3)?,
             ui: json(4)?,
+            sending: r.get(5)?,
+            error: r.get(6)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -181,7 +190,7 @@ pub fn scheduled_files(conn: &Connection, id: i64) -> Result<serde_json::Value> 
 pub fn reschedule(conn: &Connection, id: i64, send_at: Option<i64>) -> Result<()> {
     let changed = match send_at {
         Some(t) => conn.execute(
-            "UPDATE scheduled SET send_at = ?2 WHERE id = ?1 AND sending = 0",
+            "UPDATE scheduled SET send_at = ?2, error = NULL WHERE id = ?1 AND sending = 0",
             params![id, t],
         )?,
         None => conn.execute("DELETE FROM scheduled WHERE id = ?1 AND sending = 0", [id])?,
@@ -937,7 +946,12 @@ mod tests {
         assert!(claim(&c, id, 100).unwrap());
         assert!(!claim(&c, id, 100).unwrap(), "only one sender gets it");
         assert!(reschedule(&c, id, None).is_err(), "cancel refused while sending");
-        release(&c, id).unwrap();
+        assert!(scheduled(&c, None).unwrap()[0].sending);
+        release(&c, id, "Gmail API 400: invalid To").unwrap();
+        let row = &scheduled(&c, None).unwrap()[0];
+        assert!(!row.sending && row.error.as_deref() == Some("Gmail API 400: invalid To"), "the Outbox shows why");
+        reschedule(&c, id, Some(200)).unwrap();
+        assert_eq!(scheduled(&c, None).unwrap()[0].error, None, "a new time clears the old failure");
         reschedule(&c, id, None).unwrap();
         assert!(scheduled(&c, None).unwrap().is_empty(), "cancelled once released");
         reschedule(&c, id, None).unwrap(); // gone already: nothing to refuse

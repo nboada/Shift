@@ -74,7 +74,13 @@ struct State {
     dir: PathBuf,
     /// Account databases that couldn't be opened at launch (see `load_accounts`).
     broken: Vec<String>,
+    /// Attachments saved to Downloads this session, by (account, message, index), with their quarantine flag, so
+    /// opening one again reuses the file instead of saving another copy.
+    opened: Mutex<std::collections::HashMap<AttachmentKey, (PathBuf, bool)>>,
 }
+
+/// (account, message id, attachment index).
+type AttachmentKey = (String, String, i64);
 
 impl State {
     fn all(&self) -> Vec<Arc<Account>> {
@@ -1984,6 +1990,7 @@ async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
         if !db::claim(&a.db(), r.id, now)? {
             continue;
         }
+        let _ = app.emit(CHANGED, ());
         let result = match serde_json::from_value::<Draft>(r.draft) {
             Ok(d) => deliver(&s, a, &d, r.draft_id.as_deref()).await,
             Err(e) => Err(e.into()),
@@ -1996,7 +2003,8 @@ async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
             // The draft was sent or deleted elsewhere, or by an earlier attempt whose answer was lost.
             Err(e) if gmail::is_not_found(&e) => db::finish_scheduled(&a.db(), r.id)?,
             Err(e) => {
-                db::release(&a.db(), r.id)?;
+                db::release(&a.db(), r.id, &format!("{e:#}"))?;
+                let _ = app.emit(CHANGED, ());
                 first_error.get_or_insert(e);
                 continue;
             }
@@ -2179,8 +2187,18 @@ async fn open_attachment(
     message: String,
     idx: i64,
 ) -> R<String> {
-    let (name, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
-    let (path, quarantined) = write_download(&app.path().download_dir()?, &safe_filename(&name), &bytes)?;
+    let key = (account.clone(), message.clone(), idx);
+    let saved = s.opened.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+    let (path, quarantined) = match saved.filter(|(p, _)| p.exists()) {
+        Some(found) => found,
+        None => {
+            let (name, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
+            let saved = write_download(&app.path().download_dir()?, &safe_filename(&name), &bytes)?;
+            s.opened.lock().unwrap_or_else(|e| e.into_inner()).insert(key, saved.clone());
+            saved
+        }
+    };
+    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     // Without the flag macOS wouldn't check the file before it runs, so show it in Finder instead of opening it.
     if quarantined && opens_directly(&name) {
         tauri_plugin_opener::open_path(&path, None::<&str>)?;
@@ -2357,6 +2375,7 @@ pub fn run() {
             app.manage(State {
                 demo,
                 broken,
+                opened: Mutex::default(),
                 dir: dir.clone(),
                 accounts: Mutex::new(accounts),
                 // No overall deadline: a big attachment or send on a slow link would be cut off mid-body. These only

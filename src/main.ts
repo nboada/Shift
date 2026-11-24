@@ -346,7 +346,7 @@ function decodeEntities(s: string) {
 }
 
 type Scheduled = {
-  id: number; account: string; draft_id: string | null; send_at: number;
+  id: number; account: string; draft_id: string | null; send_at: number; sending: boolean; error: string | null;
   draft: { to: string }; ui: { fields: Fields; opts: ComposeOptions };
 };
 /** Rows of the Scheduled view by list id; they are emails waiting in this Mac, not Gmail threads. */
@@ -367,7 +367,8 @@ async function loadThreads() {
       scheduledRows.set(id, r);
       return {
         id, account: r.account, subject: r.ui.fields.subject ?? "", sender: `To: ${r.draft.to}`,
-        snippet: `Sends ${formatWhen(new Date(r.send_at))}`, date: r.send_at, count: 1,
+        snippet: r.sending ? "Sending…" : r.error ? `Couldn't send yet, trying again: ${r.error}` : `Sends ${formatWhen(new Date(r.send_at))}`,
+        date: r.send_at, count: 1,
         unread: false, starred: false, primary: true, labels: "",
       };
     });
@@ -475,6 +476,10 @@ window.addEventListener("message", (e) => {
   if (d.type === "height" && typeof d.height === "number") {
     frame.style.height = `${d.height}px`;
     frame.classList.remove("loading");
+  } else if (d.type === "hover" && typeof d.url === "string") {
+    const status = $("#link-status");
+    status.textContent = d.url.replace(/^mailto:/i, "");
+    status.hidden = !d.url;
   } else if (d.type === "link" && typeof d.url === "string" && /^(https?|mailto):/i.test(d.url)) {
     openUrl(d.url);
   } else if (d.type === "key" && typeof d.key === "string") {
@@ -581,6 +586,7 @@ function scrollToLatest() {
 }
 
 async function openThread(id: string) {
+  $("#link-status").hidden = true;
   if (mailbox === "SCHEDULED") return editScheduled(id);
   if (mailbox === "DRAFT" && (await openDraft(id))) return;
   picked.clear();
@@ -1241,7 +1247,7 @@ let draftTimer = 0;
 let draftQueue: Promise<unknown> = Promise.resolve();
 
 const subjectInput = composeForm.elements.namedItem("subject") as HTMLInputElement;
-const editor = createEditor($("#compose-body"), $("#format-bar"), () => markTouched(), () => signatureFor(compose?.account).html);
+const editor = createEditor($("#compose-body"), $("#format-bar"), () => markTouched(), () => signatureFor(compose?.account).html, renderQuote);
 const suggestContacts = (q: string) => invoke<string[]>("suggest_contacts", { query: q }).catch(() => [] as string[]);
 const rcpt = {
   to: new Recipients($("#rcpt-to"), suggestContacts, () => markTouched()),
@@ -1447,8 +1453,24 @@ function swapSignature(from: string, to: string) {
 }
 
 /** The original message for a reply or forward: its HTML where there is some, quoted under a header line. */
-const quoted = (m: Message, header: string) =>
-  `<p></p>${header}<blockquote>${m.html ?? textToHtml(m.text ?? "")}</blockquote>`;
+/** The quoted email for a reply or forward, whole: cleaned of anything active, its inline (cid:) images dropped since
+ *  they don't travel with the reply, and a text version for the plain-text part. */
+function quoted(m: Message, header: string) {
+  const body = m.html ? new DOMParser().parseFromString(cleanEmail(m.html).html, "text/html").body : null;
+  body?.querySelectorAll('img[src^="cid:" i]').forEach((img) => img.remove());
+  const html = body ? body.innerHTML : textToHtml(m.text ?? "");
+  const text = m.text ?? body?.innerText ?? "";
+  return `<p></p>${header}<div data-quote="${esc(html)}" data-text="${esc(text)}"></div>`;
+}
+
+/** The composer's preview of a quoted email: sandboxed with no scripts, remote images only when they're allowed. */
+function renderQuote(frame: HTMLIFrameElement, html: string) {
+  const images = settings.appearance.loadRemoteImages ? "https: http: data:" : "data:";
+  frame.setAttribute("sandbox", "allow-same-origin");
+  frame.onload = () => (frame.style.height = `${frame.contentDocument?.documentElement.scrollHeight ?? 80}px`);
+  frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${images}">` +
+    EMAIL_CSS + cleanEmail(html).html;
+}
 
 /** Replies to or forwards `last`: the newest message, or the one whose own buttons were clicked. */
 function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
@@ -1458,7 +1480,6 @@ function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
   const notMe = (a: string) => !accounts.includes(bareEmail(a));
   const when = new Date(last.date).toLocaleString();
   if (kind === "forward") {
-    // shortcut: the editor keeps just its own formatting (no images, tables or styles) from the forwarded body.
     const header = textToHtml(
       `---------- Forwarded message ----------\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}`,
     );
@@ -1683,6 +1704,8 @@ $("#send-later").addEventListener("click", async () => {
         text: "Pick Date & Time…",
         action: () => openLater(times.find((t) => t.id === "tomorrow")!.at),
       },
+      { item: "Separator" as const },
+      { text: "Sent from this Mac while Shift is running", enabled: false },
     ],
   });
   menu.popup();
