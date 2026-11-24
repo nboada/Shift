@@ -1596,6 +1596,14 @@ fn schedule_send(
     if !has_recipients(&serde_json::from_value::<Draft>(draft.clone())?) {
         return Err(anyhow::anyhow!("Add at least one recipient").into());
     }
+    // Sending a saved draft is safe to retry (Gmail answers 404 once it's gone out); a raw send isn't, so a lost reply
+    // could send it twice. The composer saves first; without a draft id that save failed.
+    if draft_id.is_none() {
+        return Err(anyhow::anyhow!(
+            "Couldn't save it to Drafts first, so it isn't scheduled. Check your connection and try again"
+        )
+        .into());
+    }
     let id = db::add_scheduled(
         &s.account(&account)?.db(),
         draft_id.as_deref(),
@@ -1604,7 +1612,46 @@ fn schedule_send(
         &ui,
     )?;
     let _ = app.emit(CHANGED, ());
+    send_when_due(&app, account, send_at);
     Ok(id)
+}
+
+/// The Gmail draft in `thread`, as (draft id, message id, Bcc), so the composer can reopen and keep editing it.
+#[tauri::command]
+async fn find_draft(
+    s: tauri::State<'_, State>,
+    account: String,
+    thread: String,
+) -> R<Option<(String, String, String)>> {
+    if s.demo {
+        return Ok(None);
+    }
+    let a = s.account(&account)?;
+    let token = a.access_token(&s.http).await?;
+    let g = Gmail { http: &s.http, token: &token };
+    let Some(d) = g.drafts().await?.into_iter().find(|d| d.message.thread_id == thread) else {
+        return Ok(None);
+    };
+    let bcc = g.draft_bcc(&d.id).await?;
+    Ok(Some((d.id, d.message.id, bcc)))
+}
+
+/// Runs `account`'s due sends at `at` (ms), so a short wait (undo send) doesn't depend on the sync interval.
+/// The sync loop still sends anything this misses, for example after a restart.
+fn send_when_due(app: &AppHandle, account: String, at: i64) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let wait = at - now_ms();
+        if wait > 0 {
+            tokio::time::sleep(Duration::from_millis(wait as u64)).await;
+        }
+        let Ok(a) = app.state::<State>().account(&account) else {
+            return;
+        };
+        if let Err(e) = send_due(&app, &a).await {
+            let _ = app.emit("sync-error", format!("{}: {e:#}", a.email));
+        }
+    });
 }
 
 #[tauri::command(async)]
@@ -1635,8 +1682,8 @@ fn reschedule(
 ) -> R<()> {
     db::reschedule(&s.account(&account)?.db(), id, send_at)?;
     let _ = app.emit(CHANGED, ());
-    if send_at.is_some() {
-        spawn_sync(&app);
+    if let Some(at) = send_at {
+        send_when_due(&app, account, at);
     }
     Ok(())
 }
@@ -1657,9 +1704,9 @@ async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
     // error is reported once the rest have gone.
     let mut first_error = None;
     for r in due {
-        // Re-read just before sending: the user may have cancelled or rescheduled it while earlier ones went out.
-        // shortcut: this narrows the window rather than closing it; a claimed "sending" state per row closes it.
-        if !db::is_due(&a.db(), r.id, now)? {
+        // Claimed first: from here a cancel is refused instead of racing the send. Skipped if it was cancelled or
+        // moved later while earlier ones went out.
+        if !db::claim(&a.db(), r.id, now)? {
             continue;
         }
         let result = match serde_json::from_value::<Draft>(r.draft) {
@@ -1668,11 +1715,13 @@ async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
         };
         match result {
             Ok(()) => {
-                db::reschedule(&a.db(), r.id, None)?;
+                db::finish_scheduled(&a.db(), r.id)?;
                 let _ = app.emit("scheduled-sent", ());
             }
-            Err(e) if gmail::is_not_found(&e) => db::reschedule(&a.db(), r.id, None)?,
+            // The draft was sent or deleted elsewhere, or by an earlier attempt whose answer was lost.
+            Err(e) if gmail::is_not_found(&e) => db::finish_scheduled(&a.db(), r.id)?,
             Err(e) => {
+                db::release(&a.db(), r.id)?;
                 first_error.get_or_insert(e);
                 continue;
             }
@@ -2092,6 +2141,8 @@ pub fn run() {
             open_at_login,
             set_open_at_login,
             ai_label_inbox,
+            find_draft,
+            quit_now,
             test_notification,
             empty_mailbox,
             create_label,
@@ -2131,6 +2182,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            // ⌘Q (or Quit from the Dock): give the window a moment to save an open draft first. It answers with
+            // `quit_now`; the timer quits anyway if it doesn't. `code` is None only for a user quit, not app.exit().
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event
+                && !QUIT_READY.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                api.prevent_exit();
+                let _ = app.emit("before-quit", ());
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    QUIT_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+                    app.exit(0);
+                });
+            }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event
                 && let Some(window) = app.get_webview_window("main")
@@ -2139,9 +2204,17 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-            #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
         });
+}
+
+/// Set once the window has saved its draft (or given up), so the next quit request goes through.
+static QUIT_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The window's answer to `before-quit`: its draft is saved, quit now.
+#[tauri::command]
+fn quit_now(app: AppHandle) {
+    QUIT_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+    app.exit(0);
 }
 
 #[cfg(test)]
