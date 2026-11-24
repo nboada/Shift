@@ -2671,6 +2671,8 @@ listen<{ account?: string; thread?: string }>("open-from-notification", async ({
 });
 // Messages from the backend, such as the outcome of Shift → Check for Updates….
 listen<string>("app-toast", (e) => toast(e.payload));
+// Shift → Settings… (⌘,) in the menu bar.
+listen("open-settings", () => openSettings());
 /** Saves an open draft before Shift quits or restarts, so the last few seconds of typing aren't lost. */
 const saveBeforeQuit = async () => {
   await flushSettings();
