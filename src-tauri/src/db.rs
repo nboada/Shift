@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE TABLE IF NOT EXISTS scheduled (
   id INTEGER PRIMARY KEY, draft_id TEXT, send_at INTEGER NOT NULL, draft TEXT NOT NULL, ui TEXT NOT NULL,
   sending INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS pending_ops (
+  seq INTEGER PRIMARY KEY, thread_id TEXT NOT NULL, add_labels TEXT NOT NULL, remove_labels TEXT NOT NULL,
+  trash INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS ai_labels (
   thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, label_id TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (thread_id, label_id)) WITHOUT ROWID;
@@ -163,6 +166,45 @@ pub fn reschedule(conn: &Connection, id: i64, send_at: Option<i64>) -> Result<()
         anyhow::bail!("It's already being sent");
     }
     Ok(())
+}
+
+/// A label change made locally while Gmail couldn't be reached, waiting to be sent by the next sync.
+#[derive(Debug, PartialEq)]
+pub struct PendingOp {
+    pub seq: i64,
+    pub thread: String,
+    pub add: Vec<String>,
+    pub remove: Vec<String>,
+    pub trash: bool,
+}
+
+pub fn add_pending(conn: &Connection, thread: &str, add: &[String], remove: &[String], trash: bool) -> Result<()> {
+    conn.execute(
+        "INSERT INTO pending_ops (thread_id, add_labels, remove_labels, trash) VALUES (?1, ?2, ?3, ?4)",
+        params![thread, serde_json::to_string(add)?, serde_json::to_string(remove)?, trash],
+    )?;
+    Ok(())
+}
+
+/// Pending changes, oldest first, so they reach Gmail in the order the user made them.
+pub fn pending_ops(conn: &Connection) -> Result<Vec<PendingOp>> {
+    let mut st = conn.prepare("SELECT seq, thread_id, add_labels, remove_labels, trash FROM pending_ops ORDER BY seq")?;
+    let rows = st.query_map([], |r| {
+        let list = |i| r.get::<_, String>(i).map(|s| serde_json::from_str(&s).unwrap_or_default());
+        Ok(PendingOp { seq: r.get(0)?, thread: r.get(1)?, add: list(2)?, remove: list(3)?, trash: r.get(4)? })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn done_pending(conn: &Connection, seq: i64) -> Result<()> {
+    conn.execute("DELETE FROM pending_ops WHERE seq = ?1", [seq])?;
+    Ok(())
+}
+
+/// Whether `thread` has changes not yet in Gmail: a fetch of it would undo them on screen, so it waits.
+pub fn has_pending(conn: &Connection, thread: &str) -> bool {
+    conn.query_row("SELECT EXISTS(SELECT 1 FROM pending_ops WHERE thread_id = ?1)", [thread], |r| r.get(0))
+        .unwrap_or(false)
 }
 
 /// Drops a scheduled row after its send finished (sent, or its draft gone), whether or not it was claimed.
@@ -414,7 +456,14 @@ pub fn labels(conn: &Connection) -> Result<Vec<LabelRow>> {
             color: r.get(4)?,
         })
     })?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    let mut out: Vec<LabelRow> = rows.collect::<Result<_, _>>()?;
+    // The cache holds recent mail only: add the unread Inbox threads Gmail has beyond it (worked out by the sync),
+    // so reading one here still lowers the count at once.
+    let extra: i64 = get_meta(conn, "inbox_unread_extra")?.and_then(|v| v.parse().ok()).unwrap_or(0);
+    if let Some(inbox) = out.iter_mut().find(|l| l.id == "INBOX") {
+        inbox.unread += extra;
+    }
+    Ok(out)
 }
 
 #[derive(Serialize)]
@@ -819,6 +868,22 @@ mod tests {
         assert_eq!(get_meta(&c, "backfill").unwrap().as_deref(), Some(r#"["t"]"#), "the trashed one is re-fetched");
         drop(c);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn pending_changes_keep_their_order() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        assert!(!has_pending(&c, "t"));
+        add_pending(&c, "t", &[], &["INBOX".into()], false).unwrap();
+        add_pending(&c, "t", &["TRASH".into()], &[], true).unwrap();
+        let ops = pending_ops(&c).unwrap();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].remove, ["INBOX"]);
+        assert!(ops[1].trash && has_pending(&c, "t"));
+        done_pending(&c, ops[0].seq).unwrap();
+        done_pending(&c, ops[1].seq).unwrap();
+        assert!(!has_pending(&c, "t"));
     }
 
     #[test]
