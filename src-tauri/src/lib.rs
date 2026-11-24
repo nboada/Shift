@@ -2355,6 +2355,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Size, position and full screen come back on launch; visibility doesn't, so a launch at login stays hidden.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE)
+                .build(),
+        )
         .on_menu_event(|app, event| {
             if event.id() == CHECK_UPDATES {
                 check_for_updates_now(app);
