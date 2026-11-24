@@ -14,7 +14,7 @@ import { arrange } from "./sidebar";
 import { docToText, emailHtml, textToHtml } from "./compose";
 import { createEditor } from "./editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
-import { ask, askChoice, askOpen, askText } from "./dialog";
+import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
 import { FOLD_CSS, foldQuote } from "./quote";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
@@ -197,7 +197,7 @@ async function renderMailboxes() {
 
 function listTitle() {
   if (search) return `Search: ${search}`;
-  return SYSTEM.find(([id]) => id === mailbox)?.[1] ?? document.querySelector(`[data-mailbox="${mailbox}"] span`)?.textContent ?? "";
+  return SYSTEM.find(([id]) => id === mailbox)?.[1] ?? document.querySelector(`[data-mailbox="${mailbox}"] span:not(.label-dot)`)?.textContent ?? "";
 }
 
 const PERSONAL_DOMAINS = new Set([
@@ -1709,9 +1709,17 @@ $("#mailboxes").addEventListener("click", (e) => {
 async function newLabel() {
   const list = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
   const where = list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} accounts`;
-  const name = await askText({ title: "New label", message: accounts.length > 1 ? `Created in Gmail for ${where}.` : "Created in Gmail.", confirm: "Create", value: "" });
-  if (!name) return;
-  const failed = (await Promise.allSettled(list.map((account) => invoke<string>("create_label", { account, name }))))
+  const picked = await askTextAndColor({
+    title: "New label", message: accounts.length > 1 ? `Created in Gmail for ${where}.` : "Created in Gmail.", confirm: "Create", value: "",
+    colors: LABEL_COLORS.map(([colorName, bg]) => [colorName, `class="label-dot ask-swatch" data-color="${bg.slice(1)}"`]),
+  });
+  if (!picked) return;
+  const [, background, text] = LABEL_COLORS.find(([n]) => n === picked.color)!;
+  const name = picked.text;
+  const failed = (await Promise.allSettled(list.map(async (account) => {
+    await invoke<string>("create_label", { account, name });
+    await invoke("set_label_color", { label: `name:${name}`, background, text, accounts: [account] });
+  })))
     .flatMap((r, i) => (r.status === "rejected" ? [`${accountName(list[i])}: ${r.reason}`] : []));
   if (failed.length) toast(`Couldn't create the label in ${failed.join("; ")}`);
   await renderMailboxes();

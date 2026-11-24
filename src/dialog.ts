@@ -14,6 +14,27 @@ input.addEventListener("keydown", (e) => {
   dialog.querySelector<HTMLButtonElement>("[data-ok]")!.click();
 });
 
+const swatches = dialog.querySelector<HTMLElement>(".ask-swatches")!;
+swatches.addEventListener("click", (e) => {
+  const b = (e.target as Element).closest<HTMLElement>("[role=radio]");
+  if (!b) return;
+  swatches.querySelectorAll("[role=radio]").forEach((x) => x.setAttribute("aria-checked", String(x === b)));
+});
+
+/**
+ * `askText` plus a row of colour swatches. `colors` are [name, swatch HTML attributes] pairs; resolves the text and
+ * the picked colour's name, or null when cancelled or left empty.
+ */
+export async function askTextAndColor(opts: Ask & { value: string; colors: [name: string, attrs: string][] }): Promise<{ text: string; color: string } | null> {
+  swatches.innerHTML = opts.colors.map(([name, attrs], i) =>
+    `<button type="button" role="radio" aria-label="${name}" aria-checked="${i === 0}" data-name="${name}" ${attrs}></button>`).join("");
+  swatches.hidden = false;
+  const text = await askText(opts);
+  swatches.hidden = true;
+  const color = swatches.querySelector<HTMLElement>("[aria-checked=true]")?.dataset.name ?? opts.colors[0][0];
+  return text ? { text, color } : null;
+}
+
 /** `ask` with a text field; resolves the trimmed text, or null when cancelled or left empty. */
 export async function askText(opts: Ask & { value: string }): Promise<string | null> {
   input.hidden = false;

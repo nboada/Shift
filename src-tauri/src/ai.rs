@@ -124,7 +124,11 @@ async fn anthropic(
         "messages": [{ "role": "user", "content": user }],
     });
     let mut output = serde_json::Map::new();
-    if let Some(e) = effort {
+    // Older models (Claude Haiku 4.5, the Claude 3 family) have no effort setting and reject the field.
+    let has_effort = !["claude-haiku-4", "claude-3"]
+        .iter()
+        .any(|old| cfg.model.starts_with(old));
+    if let Some(e) = effort.filter(|_| has_effort) {
         output.insert("effort".into(), e.into());
     }
     if let Some(schema) = schema {
@@ -219,6 +223,10 @@ pub fn json_in(text: &str) -> Result<Value> {
     let end = text.rfind('}').context("The AI didn't return JSON")?;
     Ok(serde_json::from_str(&text[start..=end])?)
 }
+
+/// Effort for Write with AI and Draft a reply: medium is plenty for a short email and quicker than high (Claude Sonnet
+/// 5.5's default). Sorting asks for `low`. Only Anthropic's API takes it.
+pub const WRITING_EFFORT: &str = "medium";
 
 // ---- Prompts. Stable text first, so providers that cache prompt prefixes can reuse them.
 
