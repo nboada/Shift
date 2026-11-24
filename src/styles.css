@@ -834,6 +834,21 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .ai-label-now { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .ai-label-now .group-note { flex: 1; margin: 0; }
 .ai-label-now button { flex: none; }
+#ai-label-status { display: flex; align-items: center; gap: 8px; }
+#ai-label-status i { flex: none; font-size: 18px; color: var(--muted); }
+#ai-label-status i.ai-working { color: var(--brand); animation: ai-pulse 1.2s ease-in-out infinite; }
+/* A light sweeping across the text while the AI works. */
+.ai-shimmer {
+  background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%) 0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ai-shimmer 1.8s linear infinite;
+}
+@keyframes ai-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  #ai-label-status i.ai-working, .ai-shimmer { animation: none; }
+}
 .ai-rule { display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr); align-items: center; gap: 12px; font-size: 13px; font-weight: 500; }
 .ai-rule span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings .ai-rule input[type="text"] { width: 100%; }
