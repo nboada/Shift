@@ -21,6 +21,9 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "error: commit or stash your changes first; a release builds only what's committed" >&2
   exit 1
 fi
+bun install --frozen-lockfile
+# The site's own packages (Astro, wrangler): the final deploy builds the site, and a fresh checkout has none.
+(cd site && bun install --frozen-lockfile)
 bun test
 bun run build
 (cd src-tauri && cargo test && cargo clippy --all-targets -- -D warnings)
