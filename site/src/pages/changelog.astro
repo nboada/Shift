@@ -2,7 +2,11 @@
 import Base from "../layouts/Base.astro";
 import { getCollection, render } from "astro:content";
 
-const releases = (await getCollection("changelog")).sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+const releases = (await getCollection("changelog")).sort(
+  (a, b) =>
+    b.data.date.valueOf() - a.data.date.valueOf() ||
+    b.data.version.localeCompare(a.data.version, undefined, { numeric: true }),
+);
 const entries = await Promise.all(releases.map(async (r) => ({ ...r, Content: (await render(r)).Content })));
 const day = new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "long", year: "numeric" });
 ---
