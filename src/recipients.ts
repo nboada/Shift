@@ -162,7 +162,7 @@ export class Recipients {
         .map((c, i) => {
           const [name, email] = parseAddress(c);
           const bad = !EMAIL.test(email);
-          return `<span class="rchip${bad ? " invalid" : ""}" data-tip="${esc(bad ? `Not a valid address: ${email}` : email)}">${esc(name || email)}<button type="button" data-remove="${i}" aria-label="Remove ${esc(name || email)}"><i class="ph ph-x"></i></button></span>`;
+          return `<span class="rchip${bad ? " invalid" : ""}" data-tip="${esc(bad ? `Not a valid address: ${email}` : email)}">${esc(name || email)}<button type="button" data-remove="${i}" aria-label="Remove ${esc(name || email)}"><i class="ti ti-x"></i></button></span>`;
         })
         .join(""),
     );

@@ -2,6 +2,17 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type SwipeAction = "none" | "archive" | "trash" | "unread" | "star" | "spam";
 
+/** Starting rules for Write with AI and Draft a reply; the user edits them in Settings → AI. */
+export const DEFAULT_WRITING_RULES = `- Write in a natural, direct and specific voice. Clear meaning beats polished-sounding language.
+- When rewriting my text, keep my wording, reasoning and tone. Improve clarity and flow without changing my personality.
+- Match the formality of the conversation, and reply in the language it's in.
+- Get to the point early, and keep it as short as the email allows.
+- Vary sentence length. No strings of punchy fragments or one-sentence paragraphs.
+- Use standard grammar and punctuation. No em dashes, no emojis, and no exclamation marks unless the other person uses them.
+- No jargon, filler, stock phrases like "I hope this email finds you well", exaggerated claims or artificial warmth.
+- In replies, don't repeat back what the sender said or asked. Acknowledge it briefly and move on.
+- Never invent facts, opinions, dates, prices or commitments I haven't mentioned.`;
+
 export const DEFAULTS = {
   general: { syncSeconds: 30, markReadOnOpen: true, confirmDelete: false },
   appearance: { theme: "system" as "system" | "light" | "dark", density: "comfortable" as "comfortable" | "compact", showAvatars: true, snippetLines: 2, layout: "split" as "split" | "wide", uniformEmailFont: true, loadRemoteImages: false },
@@ -13,6 +24,7 @@ export const DEFAULTS = {
     signatureMode: "text" as "text" | "html",
     signatureHtml: "",
     defaultReply: "reply" as "reply" | "all",
+    replyIn: "window" as "inline" | "window",
     quoteOriginal: true,
     undoSendSeconds: 5,
   },
@@ -21,9 +33,12 @@ export const DEFAULTS = {
   sidebar: { order: [] as string[], hidden: [] as string[] },
   swipes: { left: "archive" as SwipeAction, right: "unread" as SwipeAction },
   shortcuts: {} as Record<string, string[]>,
+  onboarding: { done: false },
   /** Keyed by email address, so each account keeps its own options. */
   accounts: {} as Record<string, Partial<AccountSettings>>,
-  ai: { provider: "anthropic", model: "claude-sonnet-5-5", customModel: "", baseUrl: "" },
+  ai: { provider: "anthropic", model: "claude-sonnet-5-5", customModel: "", baseUrl: "", autoLabel: false, labelRules: {} as Record<string, string>, writingRules: DEFAULT_WRITING_RULES,
+    // Per kind of job; an empty provider means "same as the default above".
+    tasks: { writing: { provider: "", model: "" }, sorting: { provider: "", model: "" } } },
 };
 
 export type Settings = typeof DEFAULTS;

@@ -1,6 +1,7 @@
 // In-app confirm dialog. window.confirm() is a no-op in the Tauri webview, so every "are you sure" goes through here.
 
 type Ask = { title: string; message: string; confirm: string; cancel?: string; danger?: boolean };
+type Choice = Ask & { alt: string; escapeIsAlt?: boolean };
 
 const dialog = document.getElementById("ask") as HTMLDialogElement;
 
@@ -26,26 +27,36 @@ export async function askText(opts: Ask & { value: string }): Promise<string | n
 }
 
 /** Resolves true when confirmed; Escape, Cancel or clicking outside resolve false. */
-export function ask({ title, message, confirm, cancel = "Cancel", danger = false }: Ask): Promise<boolean> {
+export const ask = (opts: Ask) => choose(opts).then((c) => c === "ok");
+
+/** `ask` with a third button left of Cancel: resolves "ok", "alt", or null when cancelled. */
+export const askChoice = (opts: Choice) => choose(opts);
+
+function choose({ title, message, confirm, cancel = "Cancel", danger = false, alt, escapeIsAlt = false }: Ask & { alt?: string; escapeIsAlt?: boolean }): Promise<"ok" | "alt" | null> {
   dialog.querySelector("h3")!.textContent = title;
   dialog.querySelector("p")!.textContent = message;
   const ok = dialog.querySelector<HTMLButtonElement>("[data-ok]")!;
   const no = dialog.querySelector<HTMLButtonElement>("[data-cancel]")!;
+  const other = dialog.querySelector<HTMLButtonElement>("[data-alt]")!;
   ok.textContent = confirm;
   no.textContent = cancel;
+  other.querySelector("span")!.textContent = alt ?? "";
+  other.hidden = !alt;
   ok.classList.toggle("danger", danger);
   return new Promise((resolve) => {
-    const finish = (value: boolean) => {
-      ok.onclick = no.onclick = dialog.onclick = null;
+    const finish = (value: "ok" | "alt" | null) => {
+      ok.onclick = no.onclick = other.onclick = dialog.onclick = null;
       dialog.removeEventListener("close", onClose);
       if (dialog.open) dialog.close();
       resolve(value);
     };
-    const onClose = () => finish(false);
-    ok.onclick = () => finish(true);
-    no.onclick = () => finish(false);
+    // Escape closes the dialog; it means Cancel unless the caller makes it the third button.
+    const onClose = () => finish(escapeIsAlt ? "alt" : null);
+    ok.onclick = () => finish("ok");
+    no.onclick = () => finish(null);
+    other.onclick = () => finish("alt");
     // A click on the backdrop lands on the <dialog> itself.
-    dialog.onclick = (e) => e.target === dialog && finish(false);
+    dialog.onclick = (e) => e.target === dialog && finish(null);
     dialog.addEventListener("close", onClose);
     dialog.showModal();
     ok.focus();

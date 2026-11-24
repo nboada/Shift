@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Shift",
-  "version": "0.1.0",
-  "identifier": "com.nicboada.mail",
+  "version": "0.2.0",
+  "identifier": "au.com.talkk.shift",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -20,7 +20,8 @@
         "minHeight": 480,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "visible": false
       }
     ],
     "security": {
@@ -29,7 +30,15 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Nicolas Boada Morales (65AK786Q34)",
+      "minimumSystemVersion": "13.0"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -37,5 +46,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY5REY1RTdBQzMzNzJGMzQKUldRMEx6ZkRlbDdmYWF4THEzUDJaOGtjcDlCb2JjbmJpSjl1ZlFIK0tGbzJrUkpKMWIxejdUOFAK",
+      "endpoints": [
+        "https://shift.talkk.com.au/updates/latest.json"
+      ]
+    }
   }
 }
