@@ -1,4 +1,5 @@
 import { Editor, Extension } from "@tiptap/core";
+import { Menu } from "@tauri-apps/api/menu";
 import { Signature, extensions } from "./compose";
 import { renderSignaturePreview } from "./settings-ui";
 
@@ -115,6 +116,29 @@ export function createEditor(element: HTMLElement, bar: HTMLElement, onChange: (
     }
   });
   linkInput.addEventListener("blur", () => linking && closeLink(false));
+
+  // Native menu, so Cut/Copy/Paste behave like the system's (WebKit blocks scripted paste).
+  element.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const check = (cmd: Command, text: string, accelerator?: string) =>
+      ({ text, accelerator, checked: editor.isActive(cmd), action: run[cmd] });
+    const sep = { item: "Separator" } as const;
+    Menu.new({
+      items: [
+        { item: "Cut" }, { item: "Copy" }, { item: "Paste" }, { item: "SelectAll" }, sep,
+        check("bold", "Bold", "CmdOrCtrl+B"),
+        check("italic", "Italic", "CmdOrCtrl+I"),
+        check("underline", "Underline", "CmdOrCtrl+U"),
+        { text: editor.isActive("link") ? "Edit Link…" : "Add Link…", accelerator: "CmdOrCtrl+K", action: openLink },
+        sep,
+        check("bulletList", "Bulleted List"),
+        check("orderedList", "Numbered List"),
+        check("blockquote", "Quote"),
+        sep,
+        { text: "Clear Formatting", action: () => editor.chain().focus().unsetAllMarks().clearNodes().run() },
+      ],
+    }).then((m) => m.popup());
+  });
 
   return editor;
 }
