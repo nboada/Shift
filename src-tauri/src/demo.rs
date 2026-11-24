@@ -15,7 +15,7 @@ type Msg = (&'static str, &'static str, f64, &'static str);
 fn thread(id: &str, subject: &str, labels: &[&str], msgs: &[Msg]) -> gmail::Thread {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_millis() as f64;
     let mut refs = String::new();
     let messages: Vec<_> = msgs

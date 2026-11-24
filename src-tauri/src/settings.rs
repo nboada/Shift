@@ -23,7 +23,7 @@ pub fn save(dir: &Path, value: &Value) -> Result<()> {
     }
     // One write at a time: two saves sharing the temp file could otherwise leave the older one in place.
     static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = WRITING.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = WRITING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // Write-then-rename so a crash mid-write never leaves a truncated file.
     let tmp = dir.join("settings.json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;

@@ -1,8 +1,8 @@
 [package]
 name = "app"
 version = "0.2.7"
-description = "A Tauri App"
-authors = ["you"]
+description = "Shift, a Gmail client for macOS"
+authors = ["Nicolas Boada"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -50,3 +50,9 @@ panic = "abort"
 # Not stripped: rustc's strip step can leave the string table 4-byte aligned, and dyld on macOS 27 refuses such a binary
 # or proc macro ("mis-aligned LINKEDIT string pool"). The linker's own output is aligned; stripping saved about 2 MB.
 strip = false
+
+[lints.clippy]
+perf = { level = "warn", priority = -1 }
+redundant_clone = "warn"
+redundant_closure_for_method_calls = "warn"
+unwrap_used = "warn"

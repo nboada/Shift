@@ -47,17 +47,15 @@ impl Account {
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.db.lock().unwrap_or_else(|e| e.into_inner())
+        self.db.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     async fn access_token(&self, http: &reqwest::Client) -> anyhow::Result<String> {
         let mut t = self.token.lock().await;
-        if t.as_ref()
-            .is_none_or(|t| t.expires <= std::time::SystemTime::now())
-        {
-            *t = Some(auth::refresh(http, &self.email).await?);
+        if let Some(fresh) = t.as_ref().filter(|t| t.expires > std::time::SystemTime::now()) {
+            return Ok(fresh.access.clone());
         }
-        Ok(t.as_ref().unwrap().access.clone())
+        Ok(t.insert(auth::refresh(http, &self.email).await?).access.clone())
     }
 
     /// Drops the cached access token, so the next call refreshes it (after Gmail answered 401).
@@ -90,7 +88,7 @@ impl State {
     fn all(&self) -> Vec<Arc<Account>> {
         self.accounts
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 
@@ -427,9 +425,12 @@ async fn load_more(
         let mut fresh = Vec::new();
         for _ in 0..5 {
             let (ids, next) = g.thread_page(q, label.as_deref(), &page).await?;
-            fresh.extend(ids.into_iter().filter(|id| !db::has_thread(&a.db(), id).unwrap_or(true)));
+            {
+                let c = a.db();
+                fresh.extend(ids.into_iter().filter(|id| !db::has_thread(&c, id).unwrap_or(true)));
+                db::set_meta(&c, &key, next.as_deref().unwrap_or("done"))?;
+            }
             page = next.clone().unwrap_or_default();
-            db::set_meta(&a.db(), &key, next.as_deref().unwrap_or("done"))?;
             if next.is_none() || !fresh.is_empty() {
                 break;
             }
@@ -479,6 +480,8 @@ async fn backfill(app: &AppHandle, a: &Account, g: &Gmail<'_>, budget: i64) -> a
         jobs.push((id.clone(), full));
     }
     let take = jobs.len();
+    // shortcut: the whole remaining queue is re-serialised to `meta` every tick, fine for a few hundred thousand ids;
+    // move it to its own table if huge mailboxes make the first sync slow.
     let rest = &queue[take..];
     let failed = fetch(app, a, g, jobs).await;
     let mut next: Vec<String> = rest.to_vec();
@@ -1132,7 +1135,7 @@ async fn add_account(app: AppHandle, s: tauri::State<'_, State>) -> R<String> {
             let a = Account::new(email.clone(), conn);
             s.accounts
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(a.clone());
             a
         }
@@ -1148,7 +1151,7 @@ async fn sign_out(s: tauri::State<'_, State>, account: String) -> R<()> {
     let a = s.account(&account)?;
     s.accounts
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .retain(|x| !Arc::ptr_eq(x, &a));
     if !s.demo {
         auth::revoke(&s.http, &a.email).await;
@@ -1673,11 +1676,10 @@ async fn search(
             token: &token,
         };
         let ids = g.thread_ids(&query, None, 50).await?;
-        let missing: Vec<String> = ids
-            .iter()
-            .filter(|id| !db::has_thread(&a.db(), id).unwrap_or(false))
-            .cloned()
-            .collect();
+        let missing: Vec<String> = {
+            let c = a.db();
+            ids.iter().filter(|id| !db::has_thread(&c, id).unwrap_or(false)).cloned().collect()
+        };
         // Show whatever loaded; a few failed fetches shouldn't hide the rest of the results.
         let _ = fetch_threads(&app, &a, &g, missing).await;
         let mut found = db::threads_by_ids(&a.db(), &ids)?;
@@ -2182,6 +2184,7 @@ fn write_download(dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<(PathB
     Ok((path, quarantined))
 }
 
+#[expect(clippy::unwrap_used, reason = "the range is endless, so find always returns a path")]
 fn free_path(dir: &Path, name: &str) -> PathBuf {
     let p = Path::new(name);
     let (stem, ext) = (
@@ -2222,14 +2225,14 @@ async fn open_attachment(
     idx: i64,
 ) -> R<String> {
     let key = (account.clone(), message.clone(), idx);
-    let saved = s.opened.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+    let saved = s.opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key).cloned();
     let still_ours = |(p, q): &(PathBuf, bool)| p.exists() && (!q || quarantine_flag(p));
     let (path, quarantined) = match saved.filter(still_ours) {
         Some(found) => found,
         None => {
             let (name, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
             let saved = write_download(&app.path().download_dir()?, &safe_filename(&name), &bytes)?;
-            s.opened.lock().unwrap_or_else(|e| e.into_inner()).insert(key, saved.clone());
+            s.opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, saved.clone());
             saved
         }
     };
@@ -2413,7 +2416,7 @@ pub fn run() {
                 demo,
                 broken,
                 opened: Mutex::default(),
-                dir: dir.clone(),
+                dir,
                 accounts: Mutex::new(accounts),
                 // No overall deadline: a big attachment or send on a slow link would be cut off mid-body. These only
                 // catch a dead connection; the upload path sets its own total timeout.
@@ -2445,7 +2448,7 @@ pub fn run() {
                     if action.action_id() != "tap" {
                         return;
                     }
-                    let Some(extra) = action.notification().map(|n| n.extra()) else {
+                    let Some(extra) = action.notification().map(tauri_plugin_notification::ActiveNotification::extra) else {
                         return;
                     };
                     if let Some(window) = handle.get_webview_window("main") {
