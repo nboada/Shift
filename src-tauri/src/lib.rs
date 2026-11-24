@@ -694,6 +694,7 @@ async fn ai_rewrite(
     instruction: String,
     rules: String,
 ) -> R<String> {
+    demo_has_no_ai(&s)?;
     let cfg = ai::config(&s.dir, ai::Task::Writing)?;
     let user = format!("Instruction: {instruction}\n\nText:\n<<<\n{text}\n>>>");
     Ok(ai::complete(
@@ -717,6 +718,7 @@ async fn ai_draft_reply(
     me: String,
     rules: String,
 ) -> R<String> {
+    demo_has_no_ai(&s)?;
     let cfg = ai::config(&s.dir, ai::Task::Writing)?;
     let user = format!(
         "I am {me}.\n\nConversation:\n<<<\n{conversation}\n>>>\n\nMy notes for the reply: {}",
@@ -867,6 +869,14 @@ async fn apply_label_rules(
     Ok(labelled)
 }
 
+/// The demo mailbox is fake, so AI features (which call a real provider with the user's key) are off there.
+fn demo_has_no_ai(s: &State) -> anyhow::Result<()> {
+    if s.demo {
+        anyhow::bail!("AI features need a real account, not the demo");
+    }
+    Ok(())
+}
+
 /// Settings → AI → Auto-label → Label my Inbox now: applies the rules to the newest Inbox emails that came in before
 /// they existed (auto-label only looks at new mail). Returns how many emails got a label.
 #[tauri::command]
@@ -875,9 +885,7 @@ async fn ai_label_inbox(
     s: tauri::State<'_, State>,
     accounts: Option<Vec<String>>,
 ) -> R<usize> {
-    if s.demo {
-        return Err(anyhow::anyhow!("AI features need a real account, not the demo").into());
-    }
+    demo_has_no_ai(&s)?;
     let mut labelled = 0;
     for a in s.scope(accounts.as_deref())? {
         let mut mail = db::inbox_mail(&a.db(), 0, false)?;
@@ -939,6 +947,7 @@ async fn ai_cleanup(
     s: tauri::State<'_, State>,
     accounts: Option<Vec<String>>,
 ) -> R<Vec<CleanupItem>> {
+    demo_has_no_ai(&s)?;
     let cfg = ai::config(&s.dir, ai::Task::Sorting)?;
     let schema = ai::results_schema(
         "group",
@@ -2389,6 +2398,16 @@ fn quit_now(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn background_fetching_stays_under_gmails_quota() {
+        // 6,000 units a minute per user; background work may use 60% of it at any interval.
+        for secs in [15, 30, 60, 300] {
+            let per_minute = tick_budget(secs) * 60 / secs as i64;
+            assert_eq!(per_minute, 3600, "{secs}s interval");
+        }
+        assert!(tick_budget(15) >= FULL_COST, "even the shortest tick can fetch one full thread");
+    }
     use super::*;
 
     #[test]
