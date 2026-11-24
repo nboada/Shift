@@ -236,6 +236,12 @@ pub fn is_not_found(e: &anyhow::Error) -> bool {
         .is_some_and(|e| e.status == 404)
 }
 
+/// Whether a failed call may work later as is: the network, a timeout, quota or a Gmail outage. Anything Gmail itself
+/// refused (a bad request, a missing thread) won't, and isn't worth retrying.
+pub fn is_transient(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<ApiError>().is_none_or(|e| retryable(e.status, &e.body))
+}
+
 /// Gmail signals quota exhaustion as 429 or as 403 with a rateLimitExceeded reason.
 fn retryable(status: u16, body: &str) -> bool {
     status == 429 || status >= 500 || (status == 403 && body.contains("ateLimitExceeded"))
@@ -383,6 +389,40 @@ impl Gmail<'_> {
         }
         ids.truncate(max);
         Ok(ids)
+    }
+
+    /// One page of thread ids for `label` (or a search `q`), from `page` (empty: the newest), with the next page's
+    /// token if there is one. Trash and Spam are only listed when asked for by label.
+    pub async fn thread_page(
+        &self,
+        q: &str,
+        label: Option<&str>,
+        page: &str,
+    ) -> Result<(Vec<String>, Option<String>)> {
+        let mut query = vec![("q", q), ("maxResults", "50")];
+        if let Some(l) = label {
+            query.push(("labelIds", l));
+            if l == "TRASH" || l == "SPAM" {
+                query.push(("includeSpamTrash", "true"));
+            }
+        }
+        if !page.is_empty() {
+            query.push(("pageToken", page));
+        }
+        let v: Value = self.get("/threads", &query).await?;
+        let ids = v["threads"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t["id"].as_str().map(String::from))
+            .collect();
+        Ok((ids, v["nextPageToken"].as_str().map(String::from)))
+    }
+
+    /// How many unread threads a label has in Gmail, including ones not cached here.
+    pub async fn unread_threads(&self, label: &str) -> Result<i64> {
+        let v: Value = self.get(&format!("/labels/{label}"), &[]).await?;
+        Ok(v["threadsUnread"].as_i64().unwrap_or(0))
     }
 
     /// `full: false` fetches headers, labels and snippet only. That is enough for the list and costs far less quota.
@@ -641,6 +681,16 @@ impl Gmail<'_> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn transient_errors_are_network_quota_and_outages() {
+        let api = |status, body: &str| anyhow::Error::new(ApiError { status, body: body.into() });
+        assert!(is_transient(&anyhow::anyhow!("connection refused")));
+        assert!(is_transient(&api(503, "")));
+        assert!(is_transient(&api(429, "")));
+        assert!(!is_transient(&api(400, "invalid label")));
+        assert!(!is_transient(&api(404, "")));
+    }
     use super::*;
 
     #[test]

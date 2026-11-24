@@ -378,19 +378,42 @@ async function loadThreads() {
   if (seq !== loadSeq) return;
   threads = sortForInbox(list);
   renderThreads();
+  // A list too short to scroll (Trash, a quiet label) asks for older mail straight away.
+  if (threadList.scrollHeight <= threadList.clientHeight) loadMore();
+}
+
+/**
+ * Older mail beyond what the first sync listed: fetched from Gmail when the list is scrolled near its end, a page at a
+ * time per account. Stops asking once Gmail says there's nothing older for this mailbox and view.
+ */
+let loadingMore = false;
+let loadMoreAfter = 0; // after a failure (offline), wait a minute rather than retry on every scroll
+const noMore = new Set<string>();
+function loadMore() {
+  const key = `${mailbox}|${scope?.join(",") ?? "all"}`;
+  if (loadingMore || search || mailbox === "SCHEDULED" || noMore.has(key) || Date.now() < loadMoreAfter) return;
+  loadingMore = true;
+  invoke<[number, boolean]>("load_more", { accounts: scope, label: mailbox })
+    .then(([added, more]) => {
+      if (!more) noMore.add(key);
+      if (added) refresh();
+    })
+    .catch(() => (loadMoreAfter = Date.now() + 60_000))
+    .finally(() => (loadingMore = false));
 }
 
 let refreshQueued = false;
 function refresh() {
   if (refreshQueued) return;
   refreshQueued = true;
-  // A microtask, not requestAnimationFrame: rAF is paused while the window is hidden, which left the list empty
-  // when Shift started or reloaded in the background.
-  queueMicrotask(async () => {
+  // A short timer, not requestAnimationFrame: rAF is paused while the window is hidden, which left the list empty
+  // when Shift started or reloaded in the background. The 60 ms gathers bursts (a bulk archive sends one
+  // mail-changed per thread) into one repaint.
+  setTimeout(async () => {
     refreshQueued = false;
     await renderMailboxes();
     if (!search) await loadThreads();
-  });
+  }, 60);
 }
 
 const EMAIL_CSS = `<style>
@@ -508,8 +531,17 @@ const ACCORDION = { duration: 320, easing: "cubic-bezier(0.32, 0.72, 0, 1)" };
 
 /** Opens or closes one email, animating its height. Closing keeps the content visible (and clipped) until the
  *  animation ends, so it slides shut instead of vanishing; a click mid-animation reverses from where it is. */
+/** Collapsed messages whose email hasn't been rendered yet; opening one renders it first (`toggleMessage`). */
+const lazyMounts = new WeakMap<HTMLElement, () => Promise<void>>();
+
 function toggleMessage(header: HTMLElement) {
   const el = header.parentElement!;
+  const pending = lazyMounts.get(el);
+  if (pending) {
+    lazyMounts.delete(el);
+    void pending().then(() => toggleMessage(header));
+    return;
+  }
   const opening = el.classList.contains("collapsed") || el.classList.contains("closing");
   header.setAttribute("aria-expanded", String(opening));
   const from = el.getBoundingClientRect().height;
@@ -614,15 +646,26 @@ async function openThread(id: string) {
       const frame = document.createElement("iframe");
       el.append(frame);
       reader.append(el);
-      if (mountEmail(frame, m.html)) {
-        frame.insertAdjacentHTML("beforebegin", `<div class="images-bar"><i class="ti ti-photo-off"></i><span>Remote images are hidden to protect your privacy.</span><button type="button">Load images</button></div>`);
-        frame.previousElementSibling!.querySelector("button")!.addEventListener("click", (e) => {
-          (e.currentTarget as Element).closest(".images-bar")!.remove();
-          mountEmail(frame, m.html!, true);
-          showInlineImages(frame, m, account);
+      const html = m.html;
+      const mount = () => {
+        if (mountEmail(frame, html)) {
+          frame.insertAdjacentHTML("beforebegin", `<div class="images-bar"><i class="ti ti-photo-off"></i><span>Remote images are hidden to protect your privacy.</span><button type="button">Load images</button></div>`);
+          frame.previousElementSibling!.querySelector("button")!.addEventListener("click", (e) => {
+            (e.currentTarget as Element).closest(".images-bar")!.remove();
+            mountEmail(frame, html, true);
+            showInlineImages(frame, m, account);
+          });
+        }
+        showInlineImages(frame, m, account);
+        // Resolves once the frame has loaded (and sized itself), or after a moment if it never says so.
+        return new Promise<void>((done) => {
+          frame.addEventListener("load", () => done(), { once: true });
+          setTimeout(done, 600);
         });
-      }
-      showInlineImages(frame, m, account);
+      };
+      // A long conversation used to build a document for every message up front; collapsed ones wait until opened.
+      if (el.classList.contains("collapsed")) lazyMounts.set(el, mount);
+      else void mount();
     } else {
       const text = document.createElement("div");
       text.className = "text";
@@ -1875,6 +1918,10 @@ function openMailbox(id: string | null) {
 }
 
 let suppressClick = false;
+threadList.addEventListener("scroll", () => {
+  if (threadList.scrollTop + threadList.clientHeight >= threadList.scrollHeight - 400) loadMore();
+}, { passive: true });
+
 threadList.addEventListener("click", (e) => {
   if (suppressClick) return void (suppressClick = false);
   const li = (e.target as Element).closest<HTMLElement>("li[data-id]");
