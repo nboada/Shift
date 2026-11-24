@@ -29,6 +29,16 @@ export const extensions = [
   Signature,
 ];
 
+/** Whether anything is written above the signature (an HTML one, or a text one's "-- " line) or the quote. */
+export function hasMessage(doc: PMNode) {
+  for (let i = 0; i < doc.childCount; i++) {
+    const node = doc.child(i);
+    if (node.type.name === "signature" || node.type.name === "blockquote" || node.textContent === "-- ") return false;
+    if (node.textContent.trim() || node.type.name !== "paragraph") return true;
+  }
+  return false;
+}
+
 const QUOTE_STYLE = "margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex";
 
 /** Editor HTML as sent: email-safe paragraph spacing, Gmail's quote style, and the real HTML signature. */

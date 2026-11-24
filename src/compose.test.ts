@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { getSchema } from "@tiptap/core";
 import { Node } from "@tiptap/pm/model";
-import { docToText, emailHtml, extensions, textToHtml } from "./compose";
+import { docToText, emailHtml, extensions, hasMessage, textToHtml } from "./compose";
 
 const schema = getSchema(extensions);
 const t = (text: string, marks?: unknown[]) => ({ type: "text", text, marks });
@@ -39,4 +39,12 @@ test("sent HTML: spaced paragraphs, styled quote, signature swapped in", () => {
     '<p style="margin:0">Hi</p><p style="margin:0"><br></p><div class="signature"><b>Nic $&</b></div>' +
       '<blockquote style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex"><p style="margin:0">q</p></blockquote>',
   );
+});
+
+test("the placeholder goes once anything is written above the signature", () => {
+  const sig = { type: "signature" };
+  expect(hasMessage(doc(p(), p(), sig))).toBe(false);
+  expect(hasMessage(doc(p(), p(t("hi")), sig))).toBe(true);
+  expect(hasMessage(doc(p(), p(t("-- ")), p(t("Nic"))))).toBe(false);
+  expect(hasMessage(doc(p(), { type: "blockquote", content: [p(t("old"))] }))).toBe(false);
 });

@@ -12,12 +12,22 @@
     <style id="label-colors"></style>
   </head>
   <body>
+    <section id="onboarding" class="onboarding" hidden></section>
     <section id="signin" class="signin" data-tauri-drag-region hidden>
       <div class="signin-card">
         <img class="signin-mark" src="/shift-icon.png" alt="" />
-        <h1>Shift</h1>
-        <p>Fast Gmail, stored on your Mac.</p>
-        <button id="signin-btn" class="primary">Sign in with Google</button>
+        <h1>Welcome to Shift</h1>
+        <p>A fast Gmail app that keeps your mail on your Mac.</p>
+        <ul class="signin-points">
+          <li><i class="ti ti-lock"></i>Your mail goes between your Mac and Google, nowhere else</li>
+          <li><i class="ti ti-users"></i>Every Gmail account in one inbox</li>
+          <li><i class="ti ti-keyboard"></i>Built for the keyboard</li>
+        </ul>
+        <!-- Google's official button artwork, unchanged, as its sign-in branding guidelines require. -->
+        <button id="signin-btn" class="gsi-btn" aria-label="Sign in with Google">
+          <img class="gsi-light" src="/google-signin-light.svg" alt="" width="180" height="40" />
+          <img class="gsi-dark" src="/google-signin-dark.svg" alt="" width="180" height="40" />
+        </button>
         <p id="signin-error" class="error"></p>
       </div>
     </section>
@@ -25,36 +35,39 @@
     <div id="app" class="app" data-view="list" hidden>
       <header class="topbar" data-tauri-drag-region>
         <form class="search search-top">
-          <i class="ph ph-magnifying-glass"></i>
+          <i class="ti ti-search"></i>
           <input type="search" placeholder="Search mail" autocomplete="off" spellcheck="false" />
+          <button type="button" id="palette-hint" class="palette-hint" aria-label="Open the command palette"><kbd></kbd></button>
         </form>
       </header>
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-top" data-tauri-drag-region></div>
         <div class="compose-row">
-          <button id="compose-btn" class="compose" data-tip="New email (⌘N)"><i class="ph ph-pencil-simple-line"></i> Compose</button>
-          <button id="sync-btn" class="icon" data-tip="Check for mail" aria-label="Check for mail"><i class="ph ph-arrows-clockwise"></i></button>
+          <button id="compose-btn" class="compose" data-tip="New email (⌘N)"><i class="ti ti-pencil"></i> New Email</button>
+          <button id="sync-btn" class="icon" data-tip="Check for mail" aria-label="Check for mail"><i class="ti ti-refresh"></i></button>
         </div>
         <nav id="mailboxes" class="mailboxes"></nav>
         <div class="account">
           <button id="account-btn" class="account-btn" aria-haspopup="menu">
             <span id="account-dot" class="account-dot"></span>
+            <i id="account-all" class="ti ti-users account-all" hidden></i>
             <span id="account-email"></span>
-            <i class="ph ph-caret-up-down"></i>
+            <i class="ti ti-selector"></i>
           </button>
-          <button id="settings-btn" class="icon" data-tip="Settings (⌘,)"><i class="ph ph-gear-six"></i></button>
+          <button id="settings-btn" class="icon" data-tip="Settings (⌘,)"><i class="ti ti-settings"></i></button>
         </div>
       </aside>
 
       <section class="list-pane">
         <header class="toolbar" data-tauri-drag-region>
-          <button class="icon back" data-back="mailboxes" data-tip="Mailboxes"><i class="ph ph-sidebar-simple"></i></button>
+          <button class="icon back" data-back="mailboxes" data-tip="Mailboxes"><i class="ti ti-layout-sidebar"></i></button>
           <h2 id="list-title" data-tauri-drag-region></h2>
-          <button id="empty-btn" class="empty-btn" hidden><i class="ph ph-trash"></i><span></span></button>
-          <button id="view-btn" class="icon"><i class="ph"></i></button>
+          <button id="empty-btn" class="empty-btn" hidden><i class="ti ti-trash"></i><span></span></button>
+          <button id="cleanup-btn" class="icon" data-tip="Clean up Inbox with AI" aria-label="Clean up Inbox with AI"><i class="ti ti-wand"></i></button>
+          <button id="view-btn" class="icon"><i class="ti"></i></button>
         </header>
         <form class="search search-list">
-          <i class="ph ph-magnifying-glass"></i>
+          <i class="ti ti-search"></i>
           <input type="search" placeholder="Search all mail" autocomplete="off" spellcheck="false" />
         </form>
         <ul id="threads" class="threads" tabindex="0" role="listbox" aria-label="Messages"></ul>
@@ -63,20 +76,20 @@
 
       <section class="reader-pane">
         <header class="toolbar" data-tauri-drag-region>
-          <button class="icon back" data-back="list" data-tip="Back"><i class="ph ph-caret-left"></i></button>
+          <button class="icon back" data-back="list" data-tip="Back"><i class="ti ti-chevron-left"></i></button>
           <div class="actions">
             <div class="action-group">
-              <button data-action="archive" data-tip="Archive (e)" aria-label="Archive"><i class="ph ph-archive"></i></button>
-              <button data-action="trash" data-tip="Delete (⌫)" aria-label="Trash"><i class="ph ph-trash"></i></button>
-              <button data-action="unread" data-tip="Mark unread (u)" aria-label="Mark unread"><i class="ph ph-envelope-simple"></i></button>
-              <button data-action="move" data-tip="Move to (v)" aria-label="Move to"><i class="ph ph-folder"></i></button>
-              <button data-action="label" data-tip="Label (l)" aria-label="Label"><i class="ph ph-tag"></i></button>
-              <button data-action="star" data-tip="Pin (d)" aria-label="Pin"><i class="ph ph-push-pin"></i></button>
+              <button data-action="archive" data-tip="Archive (e)" aria-label="Archive"><i class="ti ti-archive"></i></button>
+              <button data-action="trash" data-tip="Delete (⌫)" aria-label="Trash"><i class="ti ti-trash"></i></button>
+              <button data-action="unread" data-tip="Mark unread (u)" aria-label="Mark unread"><i class="ti ti-mail"></i></button>
+              <button data-action="move" data-tip="Move to (v)" aria-label="Move to"><i class="ti ti-folder"></i></button>
+              <button data-action="label" data-tip="Label (l)" aria-label="Label"><i class="ti ti-tag"></i></button>
+              <button data-action="star" data-tip="Pin (d)" aria-label="Pin"><i class="ti ti-pinned"></i></button>
             </div>
             <div class="action-group divided">
-              <button data-action="reply" data-tip="Reply (r)" aria-label="Reply"><i class="ph ph-arrow-bend-up-left"></i></button>
-              <button data-action="replyAll" data-tip="Reply all (⇧R)" aria-label="Reply all"><i class="ph ph-arrow-bend-double-up-left"></i></button>
-              <button data-action="forward" data-tip="Forward (f)" aria-label="Forward"><i class="ph ph-arrow-bend-up-right"></i></button>
+              <button data-action="reply" data-tip="Reply (r)" aria-label="Reply"><i class="ti ti-arrow-back-up"></i></button>
+              <button data-action="replyAll" data-tip="Reply all (⇧R)" aria-label="Reply all"><i class="ti ti-arrow-back-up-double"></i></button>
+              <button data-action="forward" data-tip="Forward (f)" aria-label="Forward"><i class="ti ti-arrow-forward-up"></i></button>
             </div>
           </div>
         </header>
@@ -84,15 +97,23 @@
       </section>
     </div>
 
+    <dialog id="cleanup" class="cleanup" aria-labelledby="cleanup-title">
+      <header class="cu-head">
+        <span class="ob-badge"><i class="ti ti-wand"></i></span>
+        <div><h2 id="cleanup-title">Clean up your Inbox</h2><p>Archive what you don't need in your Inbox. Nothing moves until you click Archive.</p></div>
+        <button type="button" class="icon" data-cu-close aria-label="Close"><i class="ti ti-x"></i></button>
+      </header>
+      <div class="cu-body"></div>
+    </dialog>
     <dialog id="composer" class="composer" aria-labelledby="compose-title">
       <form id="compose-form" class="compose-form">
         <header>
-          <button type="button" class="icon" id="compose-close" data-tip="Close and keep draft (Esc)"><i class="ph ph-x"></i></button>
+          <button type="button" class="icon" id="compose-close" data-tip="Close and keep draft (Esc)"><i class="ti ti-x"></i></button>
           <strong id="compose-title">New Email</strong>
           <span id="draft-status" class="draft-status" aria-live="polite"></span>
-          <button type="button" class="icon" id="compose-attach" data-tip="Attach files"><i class="ph ph-paperclip"></i></button>
+          <button type="button" class="icon" id="compose-attach" data-tip="Attach files"><i class="ti ti-paperclip"></i></button>
           <input type="file" id="compose-file" multiple hidden />
-          <button type="button" class="icon" id="compose-discard" data-tip="Discard draft"><i class="ph ph-trash"></i></button>
+          <button type="button" class="icon" id="compose-discard" data-tip="Discard draft"><i class="ti ti-trash"></i></button>
         </header>
         <div class="field-row" id="from-row" hidden>
           <span class="field-label">From</span>
@@ -115,24 +136,37 @@
         <div id="compose-body" class="compose-body"></div>
         <div id="compose-files" class="attachments compose-files" hidden></div>
         <div id="format-bar" class="format-bar" role="toolbar" aria-label="Formatting" hidden>
-          <button type="button" data-cmd="bold" data-tip="Bold (⌘B)"><i class="ph ph-text-b"></i></button>
-          <button type="button" data-cmd="italic" data-tip="Italic (⌘I)"><i class="ph ph-text-italic"></i></button>
-          <button type="button" data-cmd="underline" data-tip="Underline (⌘U)"><i class="ph ph-text-underline"></i></button>
-          <button type="button" data-cmd="link" data-tip="Link (⌘K)"><i class="ph ph-link"></i></button>
+          <button type="button" data-cmd="bold" data-tip="Bold (⌘B)"><i class="ti ti-bold"></i></button>
+          <button type="button" data-cmd="italic" data-tip="Italic (⌘I)"><i class="ti ti-italic"></i></button>
+          <button type="button" data-cmd="underline" data-tip="Underline (⌘U)"><i class="ti ti-underline"></i></button>
+          <button type="button" data-cmd="link" data-tip="Link (⌘K)"><i class="ti ti-link"></i></button>
           <span class="format-sep"></span>
-          <button type="button" data-cmd="bulletList" data-tip="Bulleted list"><i class="ph ph-list-bullets"></i></button>
-          <button type="button" data-cmd="orderedList" data-tip="Numbered list"><i class="ph ph-list-numbers"></i></button>
-          <button type="button" data-cmd="blockquote" data-tip="Quote"><i class="ph ph-quotes"></i></button>
+          <button type="button" data-cmd="bulletList" data-tip="Bulleted list"><i class="ti ti-list"></i></button>
+          <button type="button" data-cmd="orderedList" data-tip="Numbered list"><i class="ti ti-list-numbers"></i></button>
+          <button type="button" data-cmd="blockquote" data-tip="Quote"><i class="ti ti-quote"></i></button>
           <input type="text" autocomplete="off" spellcheck="false" placeholder="Paste or type a link, then Return" aria-label="Link" />
         </div>
         <footer>
           <span id="compose-error" class="error"></span>
-          <span id="send-later-custom" class="send-later-custom" hidden>
-            <input type="datetime-local" aria-label="Send at" />
-            <button type="button" class="secondary">Schedule</button>
-          </span>
-          <button type="button" class="icon" id="send-later" data-tip="Send later"><i class="ph ph-clock"></i></button>
-          <button type="submit" class="primary"><i class="ph ph-paper-plane-right"></i> Send</button>
+          <div id="later-panel" class="later-panel" role="dialog" aria-label="Pick a send time" hidden>
+            <div class="later-cal"></div>
+            <div class="later-time">
+              <label for="later-time">Time</label>
+              <input id="later-time" type="time" step="300" />
+              <div class="later-chips">
+                <button type="button" data-time="09:00">9:00</button>
+                <button type="button" data-time="13:00">13:00</button>
+                <button type="button" data-time="17:00">17:00</button>
+              </div>
+            </div>
+            <div class="later-foot">
+              <span class="later-summary"></span>
+              <button type="button" class="primary later-go">Schedule</button>
+            </div>
+          </div>
+          <button type="button" class="icon" id="ai-write" data-tip="Write with AI" aria-label="Write with AI"><i class="ti ti-wand"></i></button>
+          <button type="button" class="icon" id="send-later" data-tip="Send later"><i class="ti ti-clock"></i></button>
+          <button type="submit" class="primary"><i class="ti ti-send"></i> Send</button>
         </footer>
       </form>
     </dialog>
@@ -152,7 +186,7 @@
     <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
     <dialog id="palette" class="palette" aria-label="Command palette">
       <div class="palette-input">
-        <i class="ph ph-magnifying-glass"></i>
+        <i class="ti ti-search"></i>
         <input type="text" placeholder="Type a command or search…" autocomplete="off" spellcheck="false" role="combobox" aria-controls="palette-list" aria-expanded="true" />
         <kbd>esc</kbd>
       </div>
@@ -163,10 +197,11 @@
       <p></p>
       <input type="text" hidden autocomplete="off" spellcheck="false" aria-labelledby="ask-title" />
       <footer>
+        <button type="button" class="quiet-danger ask-alt" data-alt hidden><i class="ti ti-trash"></i><span></span></button>
         <button type="button" class="secondary" data-cancel></button>
         <button type="button" class="primary" data-ok></button>
       </footer>
     </dialog>
-    <div id="toast" class="toast" hidden></div>
+    <div id="toast" class="toast" popover="manual"></div>
   </body>
 </html>

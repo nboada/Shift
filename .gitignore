@@ -23,3 +23,13 @@ dist-ssr
 *.sln
 *.sw?
 .env.local
+
+# Wrangler local state (local KV and R2 data)
+.wrangler
+
+# Release artifacts staged by scripts/release.sh; they are deployed, not committed
+site/.release/
+site/public/updates/
+
+# Astro build cache
+.astro

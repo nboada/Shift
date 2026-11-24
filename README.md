@@ -49,6 +49,8 @@ Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every acti
 | Search | `/`, `⌘F` |
 | Check for mail | `⌘R` |
 | Next / previous email | `J` `K`, `↓` `↑`, `→` `←` |
+| Select all (up to 100) | `⌘A` |
+| Select several | `⌘`-click, `⇧`-click |
 | Archive | `E`, `⌃⌘A` |
 | Delete | `⌫`, `Delete`, `#` |
 | Mark read / unread | `U`, `⇧⌘U` |
@@ -63,7 +65,7 @@ Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every acti
 | Settings | `⌘,` |
 | Zoom in / out / actual size | `⌘+` `⌘−` `⌘0` |
 | Undo archive, delete, spam or move | `⌘Z` |
-| Close menu / back | `Esc` |
+| Close menu / clear selection / back | `Esc` |
 
 ## Layout
 
@@ -73,7 +75,7 @@ Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every acti
 - `src-tauri/src/lib.rs`: sync loop and Tauri commands
 - `src-tauri/src/demo.rs`: demo mailbox fixtures
 - `src-tauri/src/settings.rs`: settings file and AI keys in the Keychain
-- `src/`: UI (vanilla TypeScript, Phosphor icons); `settings.ts` + `settings-ui.ts` for preferences, `keys.ts` for shortcuts
+- `src/`: UI (vanilla TypeScript, Tabler icons); `settings.ts` + `settings-ui.ts` for preferences, `keys.ts` for shortcuts
 
 ## Checks
 

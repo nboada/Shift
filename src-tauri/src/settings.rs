@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-const KEYCHAIN_SERVICE: &str = "com.nicboada.mail";
+const KEYCHAIN_SERVICE: &str = "au.com.talkk.shift";
 
 pub fn path(dir: &Path) -> PathBuf {
     dir.join("settings.json")
@@ -75,6 +75,25 @@ pub fn set_ai_key(provider: &str, key: &str) -> Result<()> {
     }
     ai_entry(provider)?.set_password(key)?;
     Ok(())
+}
+
+pub fn get_ai_key(provider: &str) -> Option<String> {
+    ai_entry(provider).ok()?.get_password().ok()
+}
+
+/// AI auto-label rules: the labels the user described in Settings → AI, by name. None while auto-label is off.
+pub fn ai_label_rules(dir: &Path) -> Option<Vec<(String, String)>> {
+    let ai = &load(dir)["ai"];
+    if !ai["autoLabel"].as_bool().unwrap_or(false) {
+        return None;
+    }
+    let rules: Vec<(String, String)> = ai["labelRules"]
+        .as_object()?
+        .iter()
+        .filter_map(|(name, d)| Some((name.clone(), d.as_str()?.trim().to_string())))
+        .filter(|(_, d)| !d.is_empty())
+        .collect();
+    (!rules.is_empty()).then_some(rules)
 }
 
 pub fn has_ai_key(provider: &str) -> bool {

@@ -18,6 +18,7 @@ test("default combos match the binding table", () => {
   expect(b[key("n", { metaKey: true })]).toBe("compose");
   expect(b[key(",", { metaKey: true })]).toBe("settings");
   expect(b[key("k", { metaKey: true })]).toBe("palette");
+  expect(b[key("a", { metaKey: true })]).toBe("selectAll");
   expect(b[key("+", { metaKey: true, shiftKey: true })]).toBe("zoomIn");
   expect(SEND.has(key("Enter", { metaKey: true }))).toBe(true);
   expect(SEND.has(key("d", { metaKey: true, shiftKey: true }))).toBe(true);
