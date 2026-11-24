@@ -976,7 +976,8 @@ const menu = $("#menu");
 let menuAnchor: Element | null = null;
 let menuPos = { x: 0, y: 0 };
 
-type MenuItem = { id: string; label: string; icon: string; key?: string; disabled?: boolean; danger?: boolean; acct?: string; dot?: string } | "-";
+/** `checked`: a toggle (the Label menu), shown with a check mark when on. */
+type MenuItem = { id: string; label: string; icon: string; key?: string; disabled?: boolean; danger?: boolean; acct?: string; dot?: string; checked?: boolean } | "-";
 
 function closeMenu() {
   if (!menu.hidden && menu.contains(document.activeElement)) menuReturn?.focus();
@@ -994,8 +995,9 @@ function showMenu(title: string | null, items: MenuItem[], pos: { x: number; y: 
   const keep = menu.hidden ? null : (document.activeElement as HTMLElement | null)?.dataset?.target;
   if (menu.hidden) menuReturn = document.activeElement as HTMLElement | null;
   menu.innerHTML = (title ? `<h4>${esc(title)}</h4>` : "") + (items.length
-    ? items.map((x) => x === "-" ? "<hr>" : `<button role="menuitem" data-target="${x.id}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
-        ${x.dot ? labelDot(x.label, x.dot) : iconHtml(x.icon)}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}</button>`).join("")
+    ? items.map((x) => x === "-" ? "<hr>" : `<button role="${x.checked === undefined ? "menuitem" : `menuitemcheckbox" aria-checked="${x.checked}`}" data-target="${x.id}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
+        ${x.dot ? labelDot(x.label, x.dot) : x.icon ? iconHtml(x.icon) : ""}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}${
+        x.checked === undefined ? "" : `<i class="ti ti-check menu-check" aria-hidden="true"></i>`}</button>`).join("")
     : `<p>No labels yet</p>`);
   menu.onclick = (e) => {
     const item = (e.target as Element).closest<HTMLButtonElement>("[data-target]");
@@ -1051,10 +1053,10 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
   const has = new Set(t.labels.split(" "));
   const own = accountLabels.get(t.account) ?? [];
   const items: MenuItem[] = kind === "move"
-    ? [{ id: "INBOX", label: "Inbox", icon: "tray" }, ...own.map((l) => ({ id: l.id, label: l.name, icon: "tag" })), { id: "SPAM", label: "Spam", icon: "warning-octagon" }]
-        .map((x) => ({ ...x, disabled: has.has(x.id) }))
-    : [...own.map((l): MenuItem => ({ id: l.id, label: l.name, icon: has.has(l.id) ? "check-square" : "square" })), ...(own.length ? ["-" as const] : []),
-        { id: NEW_LABEL, label: "New label…", icon: "plus" }];
+    ? [{ id: "INBOX", label: "Inbox", icon: "tray" }, ...own.map((l) => ({ id: l.id, label: l.name, icon: "", dot: l.color ?? "none" })),
+        { id: "SPAM", label: "Spam", icon: "warning-octagon" }].map((x) => ({ ...x, disabled: has.has(x.id) }))
+    : [...own.map((l): MenuItem => ({ id: l.id, label: l.name, icon: "", dot: l.color ?? "none", checked: has.has(l.id) })),
+        ...(own.length ? ["-" as const] : []), { id: NEW_LABEL, label: "New label…", icon: "plus" }];
   showMenu(kind === "move" ? "Move to" : "Labels", items, pos, (id) => {
     if (id === NEW_LABEL) {
       void askText({ title: "New label", message: "Created in Gmail and added to this email.", confirm: "Create", value: "" }).then(async (name) => {
@@ -2621,9 +2623,9 @@ function openAccountMenu() {
   const btn = $("#account-btn");
   const shown = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
   const items: MenuItem[] = [
-    { id: "", label: "All accounts", icon: scope ? "square" : "check-square" },
+    { id: "", label: "All accounts", icon: "users", checked: !scope },
     "-",
-    ...accounts.map((a) => ({ id: a, label: accountName(a), icon: shown.includes(a) ? "check-square" : "square", acct: accountSettings(a).color })),
+    ...accounts.map((a) => ({ id: a, label: accountName(a), icon: "", acct: accountSettings(a).color, checked: shown.includes(a) })),
   ];
   const r = btn.getBoundingClientRect();
   showMenu(null, items, { x: r.left, y: r.top }, (id) => {
@@ -2732,4 +2734,3 @@ loadSettings()
       });
     }
   });
-
