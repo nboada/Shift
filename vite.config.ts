@@ -5,6 +5,14 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
+  plugins: [
+    {
+      // The CSP in index.html allows Vite's dev websocket; a release build has no dev server, so it goes.
+      name: "release-csp",
+      apply: "build",
+      transformIndexHtml: (html: string) => html.replace(" ws://localhost:1420", ""),
+    },
+  ],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

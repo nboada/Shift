@@ -1,6 +1,6 @@
 import { Editor, Extension } from "@tiptap/core";
 import { Menu } from "@tauri-apps/api/menu";
-import { Signature, extensions } from "./compose";
+import { Signature, extensions, hasMessage } from "./compose";
 import { renderSignaturePreview } from "./settings-ui";
 
 type Command = "bold" | "italic" | "underline" | "link" | "bulletList" | "orderedList" | "blockquote";
@@ -41,7 +41,16 @@ export function createEditor(element: HTMLElement, bar: HTMLElement, onChange: (
       onChange();
       place();
     },
-    onSelectionUpdate: () => place(),
+    onSelectionUpdate: ({ editor }) => {
+      // Until something is written, a click on a blank line below the first starts typing on the first one.
+      const { doc, selection } = editor.state;
+      if (selection.empty && !hasMessage(doc) && selection.$from.depth === 1 && selection.$from.index(0) > 0 && !selection.$from.parent.textContent) {
+        editor.commands.setTextSelection(1);
+      }
+      place();
+    },
+    // The placeholder plugin only redraws the lines that changed, so typing on line two left it showing on line one.
+    onTransaction: ({ editor }) => editor.view.dom.classList.toggle("has-message", hasMessage(editor.state.doc)),
     onBlur: ({ event }) => {
       if (!bar.contains(event.relatedTarget as Node | null)) place();
     },

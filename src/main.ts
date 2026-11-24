@@ -1,3 +1,7 @@
+import { iconHtml } from "./icons";
+import { initOnboarding, onboardingDue, startOnboarding } from "./onboarding";
+import { initCleanup, openCleanup } from "./cleanup";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -10,11 +14,14 @@ import { arrange } from "./sidebar";
 import { docToText, emailHtml, textToHtml } from "./compose";
 import { createEditor } from "./editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
-import { ask, askOpen, askText } from "./dialog";
+import { ask, askChoice, askOpen, askText } from "./dialog";
+import { FOLD_CSS, foldQuote } from "./quote";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
 import { formatWhen, quickTimes } from "./schedule";
 import { Menu } from "@tauri-apps/api/menu";
+import AirDatepicker from "air-datepicker";
+import localeEnModule from "air-datepicker/locale/en";
 import { type Attachment, type OutFile, attachmentButton, checkSize, fileIcon, listedAttachments, readFile } from "./attachments";
 
 type Label = { id: string; name: string; kind: string; unread: number; color: string | null };
@@ -43,17 +50,18 @@ const composer = $<HTMLDialogElement>("#composer");
 const composeForm = $<HTMLFormElement>("#compose-form");
 
 const SYSTEM: [string | null, string, string][] = [
-  ["INBOX", "Inbox", "tray"],
+  ["INBOX", "Inbox", "inbox"],
   ["STARRED", "Starred", "star"],
-  ["IMPORTANT", "Important", "bookmark-simple"],
-  ["SENT", "Sent", "paper-plane-tilt"],
+  ["IMPORTANT", "Important", "bookmark"],
+  ["SENT", "Sent", "send"],
   ["DRAFT", "Drafts", "file"],
   ["SCHEDULED", "Scheduled", "clock"],
   ["ARCHIVE", "Archive", "archive"],
-  [null, "All Mail", "tray-arrow-down"],
-  ["SPAM", "Spam", "warning-octagon"],
+  [null, "All Mail", "mail"],
+  ["SPAM", "Spam", "alert-octagon"],
   ["TRASH", "Trash", "trash"],
 ];
+
 
 /** Signed-in Google accounts, oldest first. */
 let accounts: string[] = [];
@@ -100,12 +108,18 @@ function dateGroup(ms: number) {
 }
 
 let toastTimer = 0;
+/** Shows the toast for `ms`. It's a popover, so it opens in the top layer above any open modal (composer, sheets). */
+function showToast(t: HTMLElement, ms: number) {
+  if (t.matches(":popover-open")) t.hidePopover();
+  t.showPopover();
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => t.hidePopover(), ms);
+}
+
 function toast(msg: string) {
   const t = $("#toast");
   t.textContent = msg;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (t.hidden = true), 4000);
+  showToast(t, 4000);
 }
 
 /** Toast with one button (e.g. Undo); the button works until the toast hides. */
@@ -113,12 +127,10 @@ function toastAction(msg: string, label: string, onClick: () => void, ms: number
   const t = $("#toast");
   t.innerHTML = `<span>${esc(msg)}</span><button type="button">${esc(label)}</button>`;
   t.querySelector("button")!.onclick = () => {
-    t.hidden = true;
+    t.hidePopover();
     onClick();
   };
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (t.hidden = true), ms);
+  showToast(t, ms);
 }
 
 const setView = (v: "mailboxes" | "list" | "reader") => (app.dataset.view = v);
@@ -150,6 +162,14 @@ function labelColorCss(colors: string[]) {
 const labelDot = (name: string, color: string | null) =>
   isHex(color) ? `<span class="label-dot" data-color="${color.slice(1).toLowerCase()}"></span>` : `<span class="label-dot l${hash(name) % 8}"></span>`;
 
+/** Unread Inbox mail across every account in the unified view, on the Dock icon, whichever account is on screen. */
+async function updateDockBadge() {
+  const count = settings.inbox.unreadBadge
+    ? (await invoke<Label[]>("labels", { accounts: null })).find((l) => l.id === "INBOX")?.unread ?? 0
+    : 0;
+  await getCurrentWindow().setBadgeCount(count || undefined);
+}
+
 async function renderMailboxes() {
   const labels = await invoke<Label[]>("labels", { accounts: scope });
   userLabels = labels.filter((l) => l.kind === "user");
@@ -159,8 +179,9 @@ async function renderMailboxes() {
   labelColorCss(labels.map((l) => l.color ?? ""));
   const link = (group: string, id: string | null, name: string, icon: string, count = 0, color: string | null = null) =>
     `<a href="#" draggable="true" data-group="${group}" data-mailbox="${esc(id ?? "")}" class="${!search && id === mailbox ? "active" : ""}" ${!search && id === mailbox ? 'aria-current="page"' : ""}>
-      ${icon ? `<i class="ph ph-${icon}"></i>` : labelDot(name, color)}<span>${esc(name)}</span>${count ? `<small>${count}</small>` : ""}</a>`;
+      ${icon ? iconHtml(icon) : labelDot(name, color)}<span>${esc(name)}</span>${count ? `<small>${count}</small>` : ""}</a>`;
   const badge = settings.inbox.unreadBadge;
+  void updateDockBadge();
   const { order, hidden } = settings.sidebar;
   const system = arrange(SYSTEM, ([id]) => id ?? "ALL", order, hidden)
     .map(([id, name, icon]) => link("system", id, name, icon, badge && id === "INBOX" ? unread.get(id) : 0));
@@ -235,18 +256,19 @@ function renderViewButton() {
   const smart = settings.inbox.view === "smart";
   btn.dataset.tip = smart ? "Switch to plain list" : "Switch to Smart Inbox";
   btn.setAttribute("aria-label", btn.dataset.tip);
-  btn.querySelector("i")!.className = `ph ${smart ? "ph-stack" : "ph-list"}`;
+  btn.querySelector("i")!.className = smart ? "ti ti-stack-2" : "ti ti-list";
 }
 
 function threadRow(t: Thread) {
-  return `<li data-id="${t.id}" role="option" aria-selected="${t.id === selected}" aria-label="${esc(`${t.unread ? "Unread, " : ""}${displayName(t.sender)}, ${t.subject || "(no subject)"}`)}" class="${t.unread ? "unread" : ""} ${t.id === selected ? "selected" : ""}">
+  const on = multiPicked() ? picked.has(t.id) : t.id === selected;
+  return `<li data-id="${t.id}" role="option" aria-selected="${on}" aria-label="${esc(`${t.unread ? "Unread, " : ""}${displayName(t.sender)}, ${t.subject || "(no subject)"}`)}" class="${t.unread ? "unread" : ""} ${on ? "selected" : ""}">
         <span class="dot"></span>
         <span class="avatar-ring${multi() ? ` acct-${accountSettings(t.account).color}` : ""}" ${multi() ? `data-tip="${esc(accountName(t.account))}"` : ""}>${avatar(t.sender)}</span>
-        <span class="from">${esc(displayName(t.sender) || "(no sender)")}${t.count > 1 ? `<em>${t.count}</em>` : ""}${t.starred ? '<i class="ph-fill ph-push-pin pin"></i>' : ""}</span>
+        <span class="from">${esc(displayName(t.sender) || "(no sender)")}${t.count > 1 ? `<em>${t.count}</em>` : ""}${t.starred ? '<i class="ti ti-pinned pin"></i>' : ""}</span>
         <span class="date">${shortDate(t.date)}</span>
         <span class="subject">${esc(t.subject || "(no subject)")}</span>
         <span class="snippet">${esc(decodeEntities(t.snippet))}</span>
-        <button class="icon row-trash" data-tip="${keyLabel("trash") ? `Delete (${keyLabel("trash")})` : "Delete"}" aria-label="Delete"><i class="ph ph-trash"></i></button>
+        <button class="icon row-trash" data-tip="${keyLabel("trash") ? `Delete (${keyLabel("trash")})` : "Delete"}" aria-label="Delete"><i class="ti ti-trash"></i></button>
       </li>`;
 }
 
@@ -258,6 +280,7 @@ function renderThreads() {
   emptyBtn.toggleAttribute("disabled", !threads.length);
   // Smart Inbox / plain list only applies to the Inbox.
   $("#view-btn").hidden = !!search || mailbox !== "INBOX";
+  $("#cleanup-btn").hidden = !!search || mailbox !== "INBOX";
   if (!threads.length) {
     threadList.innerHTML = `<li class="empty">${search ? "No results" : "No messages"}</li>`;
     return;
@@ -274,7 +297,7 @@ function renderThreads() {
   }
   threadList.innerHTML = SECTIONS.map(([key, title, icon]) => {
     const rows = threads.filter((t) => sectionOf(t) === key);
-    return rows.length ? `<li class="section"><i class="ph ph-${icon}"></i>${title}</li>${rows.map(threadRow).join("")}` : "";
+    return rows.length ? `<li class="section">${iconHtml(icon)}${title}</li>${rows.map(threadRow).join("")}` : "";
   }).join("");
 }
 
@@ -337,6 +360,7 @@ const EMAIL_CSS = `<style>
   body { margin: 0; padding: 16px; font: 14px/1.5 -apple-system, system-ui, sans-serif; color: #1d1d1f; overflow-wrap: anywhere; }
   img { max-width: 100%; height: auto; }
   blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #ddd; color: #555; }
+  ${FOLD_CSS}
 </style>`;
 // !important so it beats the inline font-family most HTML emails set; code keeps its monospace.
 const UNIFORM_FONT_CSS = `<style>body :not(pre, code, kbd, samp, pre *, code *) { font-family: -apple-system, system-ui, sans-serif !important; }</style>`;
@@ -366,15 +390,28 @@ function mountEmail(frame: HTMLIFrameElement, html: string, images = settings.ap
   // The frame also inherits the app's CSP from index.html; this one only tightens it.
   const csp = `script-src 'none'; form-action 'none'${hidden ? "; img-src data: blob:" : ""}`;
   frame.setAttribute("sandbox", "allow-same-origin allow-scripts");
+  // Hidden until it's sized and its text evened out, so the default 150px frame and the sender's raw fonts never show.
+  frame.classList.add("loading");
   frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="${csp}">` + EMAIL_CSS + cleanEmail(html) + (settings.appearance.uniformEmailFont ? UNIFORM_FONT_CSS : "");
   // onload, not addEventListener: loading images re-mounts the frame and must replace the handler, not add one.
   frame.onload = () => {
     const doc = frame.contentDocument;
-    if (!doc) return;
-    if (settings.appearance.uniformEmailFont) evenTextSize(doc);
-    const fit = () => (frame.style.height = `${doc.documentElement.scrollHeight}px`);
+    if (!doc) return frame.classList.remove("loading");
+    try {
+      if (settings.appearance.uniformEmailFont) evenTextSize(doc);
+      foldQuote(doc);
+    } finally {
+      // Shown even if evening out the text or folding the quote fails on odd markup.
+      frame.classList.remove("loading");
+    }
+    // The <html> box is as tall as the content (scrollHeight never drops below the frame's own height), so the frame
+    // also shrinks when the quote folds away. Only a real change is written, so the observer doesn't loop.
+    const fit = () => {
+      const h = `${Math.ceil(Math.max(doc.documentElement.getBoundingClientRect().height, doc.body.scrollHeight))}px`;
+      if (frame.style.height !== h) frame.style.height = h;
+    };
     fit();
-    new ResizeObserver(fit).observe(doc.body);
+    new ResizeObserver(() => requestAnimationFrame(fit)).observe(doc.body);
     doc.addEventListener("click", (e) => {
       const a = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null;
       if (!a) return;
@@ -389,6 +426,24 @@ function mountEmail(frame: HTMLIFrameElement, html: string, images = settings.ap
     });
   };
   return hidden;
+}
+
+/** Under the subject: which labels AI auto-label added to this email, with Undo. */
+async function showAiLabels(account: string, id: string) {
+  const ids = await invoke<string[]>("ai_labels", { account, id }).catch(() => [] as string[]);
+  if (!ids.length || selected !== id) return;
+  const names = ids.map((l) => accountLabels.get(account)?.find((x) => x.id === l)?.name ?? l);
+  reader.querySelector("h1")?.insertAdjacentHTML("afterend", `<div class="ai-labelled">${iconHtml("wand")}<span>Labelled by AI: ${esc(names.join(", "))}</span><button type="button">Undo</button></div>`);
+  reader.querySelector(".ai-labelled button")!.addEventListener("click", async (e) => {
+    (e.currentTarget as HTMLButtonElement).disabled = true;
+    try {
+      await invoke("ai_undo_labels", { account, id });
+      reader.querySelector(".ai-labelled")?.remove();
+      toast("AI labels removed");
+    } catch (err) {
+      toast(String(err));
+    }
+  });
 }
 
 /** One line of the email's text for its collapsed header. */
@@ -468,6 +523,9 @@ function scrollToLatest() {
 
 async function openThread(id: string) {
   if (mailbox === "SCHEDULED") return editScheduled(id);
+  picked.clear();
+  pickAnchor = id;
+  delete app.dataset.picked;
   if (compose?.inline) closeComposer();
   selected = id;
   app.dataset.open = "";
@@ -492,7 +550,7 @@ async function openThread(id: string) {
     el.innerHTML = `<header ${toggles ? `role="button" tabindex="0" aria-expanded="${!el.classList.contains("collapsed")}"` : ""}>
         ${avatar(m.sender)}
         <div class="meta"><strong>${esc(name)}</strong><span class="to">To: ${esc(m.recipients)}${m.cc ? `, Cc: ${esc(m.cc)}` : ""}</span><span class="preview">${esc(preview(m))}</span></div>
-        <time>${new Date(m.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time>${toggles ? '<i class="ph ph-caret-down toggle-caret" aria-hidden="true"></i>' : ""}
+        <time>${new Date(m.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time>${toggles ? '<i class="ti ti-chevron-down toggle-caret" aria-hidden="true"></i>' : ""}
       </header>`;
     const account = thread?.account ?? defaultAccount();
     if (m.html) {
@@ -500,7 +558,7 @@ async function openThread(id: string) {
       el.append(frame);
       reader.append(el);
       if (mountEmail(frame, m.html)) {
-        frame.insertAdjacentHTML("beforebegin", `<div class="images-bar"><i class="ph ph-image-broken"></i><span>Remote images are hidden to protect your privacy.</span><button type="button">Load images</button></div>`);
+        frame.insertAdjacentHTML("beforebegin", `<div class="images-bar"><i class="ti ti-photo-off"></i><span>Remote images are hidden to protect your privacy.</span><button type="button">Load images</button></div>`);
         frame.previousElementSibling!.querySelector("button")!.addEventListener("click", (e) => {
           (e.currentTarget as Element).closest(".images-bar")!.remove();
           mountEmail(frame, m.html!, true);
@@ -516,13 +574,14 @@ async function openThread(id: string) {
       reader.append(el);
     }
     el.insertAdjacentHTML("beforeend", attachmentStrip(m, account) + `<footer class="message-actions">
-        <button class="icon" data-reply="reply" data-msg="${messages.indexOf(m)}" data-tip="Reply" aria-label="Reply"><i class="ph ph-arrow-bend-up-left"></i></button>
-        <button class="icon" data-reply="all" data-msg="${messages.indexOf(m)}" data-tip="Reply all" aria-label="Reply all"><i class="ph ph-arrow-bend-double-up-left"></i></button>
-        <button class="icon" data-reply="forward" data-msg="${messages.indexOf(m)}" data-tip="Forward" aria-label="Forward"><i class="ph ph-arrow-bend-up-right"></i></button>
+        <button class="icon" data-reply="reply" data-msg="${messages.indexOf(m)}" data-tip="Reply" aria-label="Reply"><i class="ti ti-arrow-back-up"></i></button>
+        <button class="icon" data-reply="all" data-msg="${messages.indexOf(m)}" data-tip="Reply all" aria-label="Reply all"><i class="ti ti-arrow-back-up-double"></i></button>
+        <button class="icon" data-reply="forward" data-msg="${messages.indexOf(m)}" data-tip="Forward" aria-label="Forward"><i class="ti ti-arrow-forward-up"></i></button>
       </footer>`);
   }
   reader.scrollTop = 0;
   scrollToLatest();
+  void showAiLabels(thread?.account ?? defaultAccount(), id);
   if (thread?.unread && settings.general.markReadOnOpen) {
     keptUnread.add(id);
     modify(thread, [], ["UNREAD"]);
@@ -575,8 +634,9 @@ function clearReader() {
   if (compose?.inline) closeComposer();
   selected = null;
   delete app.dataset.open;
+  delete app.dataset.picked;
   messages = [];
-  reader.innerHTML = `<div class="placeholder empty-reader"><i class="ph-bold ph-caret-up"></i><span>No email selected</span></div>`;
+  reader.innerHTML = `<div class="placeholder empty-reader"><i class="ti ti-chevron-up"></i><span>No email selected</span></div>`;
 }
 
 // Takes the thread itself, not its id: archive/trash drop it from `threads` first, and looking it up again
@@ -595,18 +655,22 @@ async function modify(t: Thread, add: string[], remove: string[], trash = false)
 }
 
 // Archive, delete, spam and move, newest last; ⌘Z applies the reverse label change.
-const undoStack: { t: Thread; add: string[]; remove: string[] }[] = [];
+// One entry per action, so ⌘Z undoes a whole multi-selection at once.
+const undoStack: { t: Thread; add: string[]; remove: string[] }[][] = [];
 function undoable(t: Thread, add: string[], remove: string[], trash = false) {
-  undoStack.push({ t, add, remove });
+  return undoableAll([t], add, remove, trash);
+}
+function undoableAll(list: Thread[], add: string[], remove: string[], trash = false) {
+  undoStack.push(list.map((t) => ({ t, add, remove })));
   if (undoStack.length > 50) undoStack.shift();
-  return modify(t, add, remove, trash);
+  return Promise.all(list.map((t) => modify(t, add, remove, trash)));
 }
 function undo() {
   const last = undoStack.pop();
   if (!last) return toast("Nothing to undo");
   toast("Undone");
-  // The backend's mail-changed refresh puts the thread back in the list.
-  return modify(last.t, last.remove, last.add);
+  // The backend's mail-changed refresh puts the threads back in the list.
+  return Promise.all(last.map((u) => modify(u.t, u.remove, u.add)));
 }
 
 /** Archive/trash: drop the thread from the list and move selection to its neighbour. */
@@ -625,6 +689,7 @@ function removeAndAdvance(id: string) {
 
 /** Runs an action on the open thread, or on `id` (e.g. a right-clicked row) without disturbing the reader. */
 function act(action: string, id = selected) {
+  if (multiPicked() && (!id || picked.has(id))) return actOnPicked(action);
   const t = threads.find((t) => t.id === id);
   if (!t) return;
   if (mailbox === "SCHEDULED") return scheduledAction(action, t.id);
@@ -668,6 +733,132 @@ function act(action: string, id = selected) {
   }
 }
 
+// ---- Multi-selection: ⌘-click adds or removes a row, ⇧-click adds the range from the last clicked row. With two or
+// more picked, the reader shows the count and the actions, and actions (buttons, keys, right-click) apply to all of them.
+
+const picked = new Set<string>();
+let pickAnchor: string | null = null;
+const multiPicked = () => picked.size > 1;
+
+function pick(id: string, range: boolean) {
+  if (!picked.size && selected) picked.add(selected);
+  const anchor = pickAnchor ?? selected;
+  const ids = threads.map((t) => t.id);
+  const [a, b] = [anchor ? ids.indexOf(anchor) : -1, ids.indexOf(id)];
+  if (range && a >= 0) ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((x) => picked.size < PICK_MAX && picked.add(x));
+  else if (!picked.has(id) && picked.size >= PICK_MAX) return toast(`You can select up to ${PICK_MAX} emails at once`);
+  else {
+    if (picked.has(id)) picked.delete(id);
+    else picked.add(id);
+    pickAnchor = id;
+  }
+  if (multiPicked()) return showPicked();
+  // Back to one (or none): just that email.
+  const only = [...picked][0];
+  picked.clear();
+  if (only) openThread(only);
+  else renderThreads();
+}
+
+// Each picked email is its own Gmail call (threads.modify 10 units, threads.trash 20). Gmail allows 6,000 units a
+// minute per user, and sync shares them: 100 deletes is 2,000.
+// shortcut: per-thread calls cap a bulk action at 100, move to messages.batchModify (1,000 messages for 50 units) to lift it.
+const PICK_MAX = 100;
+
+function selectAll() {
+  if (mailbox === "SCHEDULED" || !threads.length) return;
+  picked.clear();
+  threads.slice(0, PICK_MAX).forEach((t) => picked.add(t.id));
+  if (!multiPicked()) return openThread(threads[0].id);
+  showPicked();
+  if (threads.length > PICK_MAX) toast(`Selected the first ${PICK_MAX} emails, the most Shift changes at once`);
+}
+
+function clearPicked() {
+  if (!picked.size) return;
+  picked.clear();
+  clearReader();
+  renderThreads();
+}
+
+const PICK_ACTIONS: [action: string, label: string, icon: string][] = [
+  ["archive", "Archive", "archive"], ["unread", "", ""], ["star", "Pin", "push-pin"], ["spam", "Spam", "warning-octagon"],
+];
+
+function showPicked() {
+  if (compose?.inline) closeComposer();
+  selected = null;
+  messages = [];
+  app.dataset.open = "";
+  app.dataset.picked = "";
+  setView("reader");
+  const list = threads.filter((t) => picked.has(t.id));
+  const anyUnread = list.some((t) => t.unread);
+  const button = ([action, label, icon]: (typeof PICK_ACTIONS)[number]) => {
+    if (action === "unread") [label, icon] = anyUnread ? ["Mark as read", "envelope-simple-open"] : ["Mark as unread", "envelope-simple"];
+    const key = keyLabel(action);
+    return `<button type="button" data-pick-action="${action}">${iconHtml(icon)}<span>${label}</span>${key ? `<kbd>${esc(key)}</kbd>` : ""}</button>`;
+  };
+  reader.innerHTML = `<div class="picked-panel">
+      <span class="picked-count">${list.length}</span>
+      <h2>${list.length} emails selected</h2>
+      <div class="picked-actions">${PICK_ACTIONS.map(button).join("")}
+        <button type="button" class="quiet-danger" data-pick-action="trash">${iconHtml("trash")}<span>Delete</span>${keyLabel("trash") ? `<kbd>${esc(keyLabel("trash")!)}</kbd>` : ""}</button></div>
+      <button type="button" class="picked-clear" data-pick-action="clear">Clear selection <kbd>esc</kbd></button>
+    </div>`;
+  renderThreads();
+}
+
+reader.addEventListener("click", (e) => {
+  const b = (e.target as Element).closest<HTMLElement>("[data-pick-action]");
+  if (!b) return;
+  if (b.dataset.pickAction === "clear") return clearPicked();
+  actOnPicked(b.dataset.pickAction!);
+});
+
+function actOnPicked(action: string) {
+  const list = threads.filter((t) => picked.has(t.id));
+  if (!list.length || mailbox === "SCHEDULED") return;
+  const n = `${list.length} ${list.length === 1 ? "email" : "emails"}`;
+  const leave = (add: string[], remove: string[], trash = false) => {
+    threads = threads.filter((t) => !picked.has(t.id));
+    picked.clear();
+    delete app.dataset.picked;
+    clearReader();
+    setView("list");
+    renderThreads();
+    void undoableAll(list, add, remove, trash);
+  };
+  switch (action) {
+    case "archive":
+      return leave([], ["INBOX"]);
+    case "spam":
+      return leave(["SPAM"], ["INBOX"]);
+    case "trash":
+      if (settings.general.confirmDelete) {
+        void ask({ title: `Delete ${n}?`, message: "They will move to Trash.", confirm: "Delete", danger: true })
+          .then((yes) => yes && actOnPicked("trashNow"));
+        return;
+      }
+      return leave(["TRASH"], ["INBOX"], true);
+    case "trashNow":
+      return leave(["TRASH"], ["INBOX"], true);
+    case "unread": {
+      // Any unread: mark them all read; otherwise all unread.
+      const read = list.some((t) => t.unread);
+      list.forEach((t) => void modify(t, read ? [] : ["UNREAD"], read ? ["UNREAD"] : []));
+      return showPicked();
+    }
+    case "star": {
+      const pin = list.some((t) => !t.starred);
+      list.forEach((t) => void modify(t, pin ? ["STARRED"] : [], pin ? [] : ["STARRED"]));
+      return showPicked();
+    }
+    default:
+      toast(`Select one email to ${action === "move" ? "move" : action === "label" ? "label" : "do that"}`);
+  }
+}
+
 const menu = $("#menu");
 let menuAnchor: Element | null = null;
 let menuPos = { x: 0, y: 0 };
@@ -685,7 +876,7 @@ function showMenu(title: string | null, items: MenuItem[], pos: { x: number; y: 
   menuPos = pos;
   menu.innerHTML = (title ? `<h4>${esc(title)}</h4>` : "") + (items.length
     ? items.map((x) => x === "-" ? "<hr>" : `<button role="menuitem" data-target="${x.id}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
-        ${x.dot ? labelDot(x.label, x.dot) : `<i class="ph ph-${x.icon}"></i>`}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}</button>`).join("")
+        ${x.dot ? labelDot(x.label, x.dot) : iconHtml(x.icon)}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}</button>`).join("")
     : `<p>No labels yet</p>`);
   menu.onclick = (e) => {
     const item = (e.target as Element).closest<HTMLButtonElement>("[data-target]");
@@ -696,6 +887,8 @@ function showMenu(title: string | null, items: MenuItem[], pos: { x: number; y: 
   menu.style.left = `${Math.max(8, Math.min(pos.x, window.innerWidth - menu.offsetWidth - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(pos.y, window.innerHeight - menu.offsetHeight - 8))}px`;
 }
+
+const NEW_LABEL = "\u0000new-label";
 
 /** Move: file the thread under one mailbox (leaving the Inbox). Label: toggle labels, menu stays open. */
 function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: number }) {
@@ -710,8 +903,22 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
   const items: MenuItem[] = kind === "move"
     ? [{ id: "INBOX", label: "Inbox", icon: "tray" }, ...own.map((l) => ({ id: l.id, label: l.name, icon: "tag" })), { id: "SPAM", label: "Spam", icon: "warning-octagon" }]
         .map((x) => ({ ...x, disabled: has.has(x.id) }))
-    : own.map((l) => ({ id: l.id, label: l.name, icon: has.has(l.id) ? "check-square" : "square" }));
+    : [...own.map((l): MenuItem => ({ id: l.id, label: l.name, icon: has.has(l.id) ? "check-square" : "square" })), ...(own.length ? ["-" as const] : []),
+        { id: NEW_LABEL, label: "New label…", icon: "plus" }];
   showMenu(kind === "move" ? "Move to" : "Labels", items, pos, (id) => {
+    if (id === NEW_LABEL) {
+      void askText({ title: "New label", message: "Created in Gmail and added to this email.", confirm: "Create", value: "" }).then(async (name) => {
+        if (!name) return;
+        try {
+          const created = await invoke<string>("create_label", { account: t.account, name });
+          t.labels = `${t.labels} ${created}`.trim();
+          await modify(t, [created], []);
+        } catch (err) {
+          toast(String(err));
+        }
+      });
+      return;
+    }
     if (kind === "label") {
       const on = !t.labels.split(" ").includes(id);
       t.labels = on ? `${t.labels} ${id}`.trim() : t.labels.split(" ").filter((l) => l !== id).join(" ");
@@ -821,6 +1028,17 @@ threadList.addEventListener("contextmenu", (e) => {
   if (!t) return;
   closeMenu();
   li.classList.add("context");
+  if (multiPicked() && picked.has(t.id)) {
+    const list = threads.filter((x) => picked.has(x.id));
+    return showMenu(`${list.length} emails`, [
+      { id: "unread", label: list.some((x) => x.unread) ? "Mark as read" : "Mark as unread", icon: "envelope-simple-open", key: keyLabel("unread") },
+      { id: "star", label: list.some((x) => !x.starred) ? "Pin" : "Unpin", icon: "push-pin", key: keyLabel("star") },
+      "-",
+      { id: "archive", label: "Archive", icon: "archive", key: keyLabel("archive") },
+      { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
+      { id: "trash", label: "Delete", icon: "trash", key: keyLabel("trash"), danger: true },
+    ], { x: e.clientX, y: e.clientY }, (id) => actOnPicked(id));
+  }
   if (mailbox === "SCHEDULED") {
     return showMenu(null, [
       { id: "edit", label: "Edit", icon: "pencil-simple" },
@@ -1076,7 +1294,7 @@ function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
     );
     const opened = openComposer(
       { subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`, body: signature(account) + quoted(last, header) },
-      { title: "Forward", inline: true, account },
+      { title: "Forward", inline: settings.composer.replyIn === "inline", account },
     );
     return opened.then(() => forwardAttachments(last, account));
   }
@@ -1095,7 +1313,7 @@ function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
     {
       title: kind === "all" ? "Reply all" : "Reply",
       context: { thread_id: selected, in_reply_to: last.message_id, references: last.refs },
-      inline: true,
+      inline: settings.composer.replyIn === "inline",
       account,
     },
   );
@@ -1163,8 +1381,74 @@ composeForm.addEventListener("submit", async (e) => {
 
 // ---- Send later: the clock next to Send, and the Scheduled view.
 
-const laterCustom = $("#send-later-custom");
-const laterInput = laterCustom.querySelector("input")!;
+// The locale files are CommonJS, so the bundler can hand back the module wrapper instead of the locale itself.
+const localeEn = (localeEnModule as unknown as { default?: typeof localeEnModule }).default ?? localeEnModule;
+
+// The "Pick Date & Time…" popover: Air Datepicker's calendar, a time field with quick times, and a summary.
+const laterPanel = $("#later-panel");
+const laterTime = $<HTMLInputElement>("#later-time");
+let laterDay = new Date();
+const laterCal = new AirDatepicker(laterPanel.querySelector<HTMLElement>(".later-cal")!, {
+  inline: true,
+  locale: localeEn,
+  firstDay: 1,
+  minDate: new Date(),
+  onSelect: ({ date }) => {
+    if (date instanceof Date) laterDay = date;
+    updateLater();
+  },
+});
+/** The chosen day at the chosen time, or null while the time field is empty. */
+function laterAt(): Date | null {
+  const [h, m] = laterTime.value.split(":").map(Number);
+  if (!laterTime.value || Number.isNaN(h)) return null;
+  const at = new Date(laterDay);
+  at.setHours(h, m || 0, 0, 0);
+  return at;
+}
+function updateLater() {
+  const at = laterAt();
+  const past = !at || at.getTime() <= Date.now();
+  laterPanel.querySelector(".later-summary")!.textContent = at ? (past ? "That time has passed" : `Sends ${formatWhen(at)}`) : "Pick a time";
+  laterPanel.querySelector<HTMLButtonElement>(".later-go")!.disabled = past;
+  laterPanel.querySelectorAll<HTMLElement>("[data-time]").forEach((b) => b.classList.toggle("on", b.dataset.time === laterTime.value));
+}
+function openLater(at: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  laterDay = at;
+  laterCal.update({ minDate: new Date() });
+  laterCal.selectDate(at, { silent: true });
+  laterCal.setViewDate(at);
+  laterTime.value = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  laterPanel.hidden = false;
+  updateLater();
+  laterTime.focus();
+}
+const closeLater = () => (laterPanel.hidden = true);
+laterTime.addEventListener("input", updateLater);
+laterPanel.querySelectorAll<HTMLElement>("[data-time]").forEach((b) => b.addEventListener("click", () => {
+  laterTime.value = b.dataset.time!;
+  updateLater();
+}));
+laterPanel.querySelector(".later-go")!.addEventListener("click", () => {
+  const at = laterAt();
+  if (at) scheduleSend(at);
+});
+laterPanel.addEventListener("keydown", (e) => {
+  // Handled here so Escape closes the popover, not the whole composer.
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();
+    closeLater();
+  } else if (e.key === "Enter" && !e.metaKey && e.target === laterTime) {
+    e.preventDefault();
+    const at = laterAt();
+    if (at && at.getTime() > Date.now()) scheduleSend(at);
+  }
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!laterPanel.hidden && !laterPanel.contains(e.target as Node) && !(e.target as Element).closest("#send-later")) closeLater();
+});
 
 async function scheduleSend(at: Date) {
   const state = compose;
@@ -1184,7 +1468,7 @@ async function scheduleSend(at: Date) {
     });
     compose = null;
     detachComposer();
-    laterCustom.hidden = true;
+    closeLater();
     toastAction(`Scheduled for ${formatWhen(at)}`, "Undo", () => {
       invoke("reschedule", { account: state.account, id, sendAt: null })
         .then(() => openComposer(fields, { ...state, touched: true }));
@@ -1195,8 +1479,6 @@ async function scheduleSend(at: Date) {
 }
 
 $("#send-later").addEventListener("click", async () => {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const local = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const times = quickTimes(new Date(), settings.scheduling);
   const menu = await Menu.new({
     items: [
@@ -1204,23 +1486,89 @@ $("#send-later").addEventListener("click", async () => {
       { item: "Separator" as const },
       {
         text: "Pick Date & Time…",
-        action: () => {
-          laterInput.value = local(times.find((t) => t.id === "tomorrow")!.at);
-          laterInput.min = local(new Date());
-          laterCustom.hidden = false;
-          laterInput.focus();
-        },
+        action: () => openLater(times.find((t) => t.id === "tomorrow")!.at),
       },
     ],
   });
   menu.popup();
 });
-laterCustom.querySelector("button")!.addEventListener("click", () => laterInput.value && scheduleSend(new Date(laterInput.value)));
-laterInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.metaKey) {
-    e.preventDefault();
-    if (laterInput.value) scheduleSend(new Date(laterInput.value));
+
+// ---- Write with AI: the wand button next to Send later. Edits the selection, or the part of the email the user
+// wrote; in a reply it can also draft the reply, using what's typed so far as notes.
+
+const AI_EDITS: [label: string, instruction: string][] = [
+  ["Improve writing", "Improve the writing: clearer and more natural, same meaning, roughly the same length."],
+  ["Make shorter", "Make it shorter and more direct, keeping everything important."],
+  ["Make friendlier", "Make it warmer and friendlier."],
+  ["Make more formal", "Make it more formal and professional."],
+  ["Fix spelling & grammar", "Fix spelling, grammar and punctuation only. Change nothing else."],
+];
+
+/** The selection, or everything above the signature and the quoted original (and its "On …, X wrote:" line). */
+function ownText(): { from: number; to: number; text: string } {
+  const { doc, selection } = editor.state;
+  if (!selection.empty) return { from: selection.from, to: selection.to, text: doc.textBetween(selection.from, selection.to, "\n\n") };
+  let to = 0;
+  let stop = false;
+  doc.forEach((node, offset) => {
+    if (stop) return;
+    const text = node.textContent.trim();
+    stop = node.type.name === "signature" || node.type.name === "blockquote" || text.startsWith("-- ")
+      || /^On .+ wrote:$/s.test(text) || /^-{5,} Forwarded message/.test(text);
+    if (!stop) to = offset + node.nodeSize;
+  });
+  return { from: 0, to, text: doc.textBetween(0, to, "\n\n").trim() };
+}
+
+/** An email's text for the AI: its plain-text part, or its HTML read as text. */
+const messageText = (m: Message) => (m.text ?? new DOMParser().parseFromString(m.html ?? "", "text/html").body.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+
+async function aiWrite(run: () => Promise<string>, range: { from: number; to: number }) {
+  const btn = $<HTMLButtonElement>("#ai-write");
+  btn.disabled = true;
+  btn.classList.add("busy");
+  draftStatus("Writing with AI…");
+  try {
+    const text = await run();
+    if (!text) throw new Error("The AI returned nothing");
+    editor.chain().focus().insertContentAt(range, textToHtml(text)).run();
+    draftStatus("");
+    markTouched();
+  } catch (e) {
+    draftStatus("");
+    toast(String(e));
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove("busy");
   }
+}
+
+$("#ai-write").addEventListener("click", async () => {
+  const state = compose;
+  if (!state) return;
+  const own = ownText();
+  const rewrite = (instruction: string) => aiWrite(() => invoke<string>("ai_rewrite", { text: own.text, instruction, rules: settings.ai.writingRules }), own);
+  const items: ({ text: string; action: () => void; enabled?: boolean } | { item: "Separator" })[] = [];
+  if (state.context && messages.length) {
+    items.push({
+      text: own.text ? "Draft a reply from my notes" : "Draft a reply",
+      action: () => {
+        const name = accountSettings(state.account).name;
+        const conversation = messages.slice(-8)
+          .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
+          .join("\n\n---\n\n");
+        void aiWrite(() => invoke<string>("ai_draft_reply", { conversation, notes: own.text, me: name ? `${name} <${state.account}>` : state.account, rules: settings.ai.writingRules }), own);
+      },
+    }, { item: "Separator" });
+  }
+  for (const [label, instruction] of AI_EDITS) items.push({ text: label, enabled: !!own.text, action: () => void rewrite(instruction) });
+  items.push({ item: "Separator" }, {
+    text: "Custom instruction…",
+    enabled: !!own.text,
+    action: () => void askText({ title: "Rewrite with AI", message: "Say what to change, for example \"Make it sound more confident\".", confirm: "Rewrite", value: "" })
+      .then((instruction) => void (instruction && rewrite(instruction))),
+  });
+  (await Menu.new({ items })).popup();
 });
 
 /** Opening a scheduled email cancels its schedule; send or schedule it again, or close to keep it as a draft. */
@@ -1325,11 +1673,21 @@ $("#cc-toggle").addEventListener("click", () => {
   showCcRows(true, true);
   rcpt.cc.focus();
 });
-// Escape (or the window's own close) keeps the draft rather than throwing it away.
-composer.addEventListener("cancel", (e) => {
-  e.preventDefault();
-  closeComposer();
-});
+// Escape is handled by the app's keydown handler (escapeComposer); the window never closes itself.
+composer.addEventListener("cancel", (e) => e.preventDefault());
+
+/** Escape: closes an empty composer, otherwise asks whether to keep the draft. A second Escape discards it. */
+async function escapeComposer() {
+  if (!hasContent()) return closeComposer();
+  if (askOpen()) return;
+  const choice = await askChoice({
+    title: "Close this email?", message: "Save it to Drafts to finish later, or press Esc again to discard it.",
+    confirm: "Save draft", alt: "Discard", escapeIsAlt: true,
+  });
+  if (choice === "ok") return closeComposer();
+  if (choice === "alt") return closeComposer(true);
+  editor.commands.focus();
+}
 $("#compose-btn").addEventListener("click", () => openComposer({ body: signature(defaultAccount()) }));
 
 $("#mailboxes").addEventListener("click", (e) => {
@@ -1364,6 +1722,7 @@ threadList.addEventListener("click", (e) => {
   const li = (e.target as Element).closest<HTMLElement>("li[data-id]");
   if (!li) return;
   if ((e.target as Element).closest(".row-trash")) act("trash", li.dataset.id);
+  else if ((e.metaKey || e.shiftKey) && mailbox !== "SCHEDULED") pick(li.dataset.id!, e.shiftKey);
   else openThread(li.dataset.id!);
 });
 
@@ -1582,6 +1941,9 @@ async function addAccount() {
 }
 
 initSettings({ accounts: () => accounts, onAddAccount: addAccount, onSignOut: signOut });
+initOnboarding();
+initCleanup({ scope: () => scope, toast });
+$("#cleanup-btn").addEventListener("click", () => void openCleanup());
 
 $("#signin-btn").addEventListener("click", async () => {
   const btn = $<HTMLButtonElement>("#signin-btn");
@@ -1635,13 +1997,14 @@ function paletteCommands(): Command[] {
   ];
   const sections: [string, string, string][] = [
     ["general", "General", "gear-six"], ["appearance", "Appearance", "palette"], ["accounts", "Accounts", "user-circle"],
-    ["ai", "AI", "sparkle"], ["inbox", "Inbox", "tray"], ["composer", "Composer", "pencil-simple-line"],
+    ["ai", "AI", "wand"], ["inbox", "Inbox", "tray"], ["composer", "Composer", "pencil-simple-line"],
     ["accessibility", "Accessibility", "text-aa"], ["swipes", "Swipes", "hand-swipe-left"], ["shortcuts", "Keyboard shortcuts", "keyboard"],
   ];
   return [
     ...email,
     { label: "New email", icon: "pencil-simple-line", key: k("compose"), group: "Mail", run: () => $("#compose-btn").click() },
     { label: "Check for mail", icon: "arrows-clockwise", key: k("sync"), group: "Mail", run: () => invoke("sync_now") },
+        { label: "Clean up Inbox with AI", icon: "wand", group: "Mail", run: () => void openCleanup() },
     { label: settings.inbox.view === "smart" ? "Switch to plain list" : "Switch to Smart Inbox", icon: "stack", group: "Mail", run: () => $("#view-btn").click() },
     ...go,
     ...switchTo,
@@ -1669,7 +2032,7 @@ function renderPalette() {
         const head = !q && c.group !== lastGroup ? `<li class="palette-group" role="presentation">${esc(c.group)}</li>` : "";
         lastGroup = c.group;
         return `${head}<li role="option" id="pc-${i}" data-i="${i}" aria-selected="${i === paletteIndex}" class="${i === paletteIndex ? "on" : ""}">
-          <i class="ph ph-${c.icon}"></i><span>${esc(c.label)}</span>${c.key ? `<kbd>${esc(c.key)}</kbd>` : ""}</li>`;
+          ${iconHtml(c.icon)}<span>${esc(c.label)}</span>${c.key ? `<kbd>${esc(c.key)}</kbd>` : ""}</li>`;
       }).join("")
     : `<li class="palette-empty">No matching commands</li>`;
   paletteInput.setAttribute("aria-activedescendant", `pc-${paletteIndex}`);
@@ -1736,7 +2099,7 @@ paletteEl.addEventListener("click", (e) => e.target === paletteEl && paletteEl.c
 let bindings = bindingsFrom({});
 
 document.addEventListener("keydown", (e) => {
-  if (app.hidden || askOpen() || paletteEl.open) return;
+  if (app.hidden || askOpen() || paletteEl.open || ($("#cleanup") as HTMLDialogElement).open) return;
   const combo = comboOf(e);
   if (settingsOpen()) {
     const a = bindings[combo];
@@ -1754,9 +2117,11 @@ document.addEventListener("keydown", (e) => {
     if (SEND.has(combo)) {
       e.preventDefault();
       composeForm.requestSubmit();
-    } else if (e.key === "Escape" && !composer.open) {
+    } else if (e.key === "Escape") {
+      // Handled on keydown so the window's own Escape (cancel) never fires: WebKit closes a dialog outright on a second
+      // cancelled Escape in a row.
       e.preventDefault();
-      closeComposer();
+      void escapeComposer();
     }
     return;
   }
@@ -1768,8 +2133,8 @@ document.addEventListener("keydown", (e) => {
   // In the search field only ⌘ shortcuts act, so typing (and Backspace) stays text editing.
   if ((e.target as Element).closest("input, textarea, [contenteditable]")) {
     if (e.key === "Escape") (e.target as HTMLElement).blur();
-    // ⌘Z there undoes typing, not the last archive.
-    if (!combo.includes("cmd+") || action === "undo") return;
+    // ⌘Z and ⌘A there undo and select typing, not the last archive or the list.
+    if (!combo.includes("cmd+") || action === "undo" || action === "selectAll") return;
   }
   if (!action) return;
   e.preventDefault();
@@ -1790,7 +2155,9 @@ document.addEventListener("keydown", (e) => {
       go(Math.max(i - 1, 0));
       break;
     case "escape":
-      return menu.hidden ? setView("list") : closeMenu();
+      if (!menu.hidden) return closeMenu();
+      if (multiPicked()) return clearPicked();
+      return setView("list");
     case "settings":
       return openSettings();
     case "palette":
@@ -1803,6 +2170,8 @@ document.addEventListener("keydown", (e) => {
       return stepZoom(0);
     case "undo":
       return undo();
+    case "selectAll":
+      return selectAll();
     default:
       act(action);
   }
@@ -1888,7 +2257,13 @@ document.querySelectorAll<HTMLElement>("[data-tip]").forEach((el) => {
 
 // Tooltips show each button's current first key, so remapped shortcuts stay truthful.
 const TIP_ACTIONS: Record<string, string> = { "compose-btn": "compose", "sync-btn": "sync", "settings-btn": "settings" };
+$("#palette-hint").addEventListener("click", () => openPalette());
+
 function updateShortcutTips() {
+  // The command palette's key, shown inside the search bar.
+  const palette = keyLabel("palette");
+  $("#palette-hint").hidden = !palette;
+  $("#palette-hint kbd").textContent = palette ?? "";
   document.querySelectorAll<HTMLElement>("[data-tip]").forEach((el) => {
     const action = el.dataset.action ?? TIP_ACTIONS[el.id];
     if (!action) return;
@@ -1902,7 +2277,9 @@ function updateShortcutTips() {
 function renderAccountFooter() {
   const one = scope?.length === 1 ? scope[0] : !multi() ? accounts[0] : null;
   $("#account-email").textContent = one ? accountName(one) : scope ? `${scope.length} accounts` : `All accounts (${accounts.length})`;
-  $("#account-dot").className = `account-dot ${one ? `acct-${accountSettings(one).color}` : "all"}`;
+  $("#account-dot").className = `account-dot ${one ? `acct-${accountSettings(one).color}` : ""}`;
+  $("#account-dot").hidden = !one;
+  $("#account-all").hidden = !!one;
   $<HTMLButtonElement>("#account-btn").disabled = !multi();
 }
 
@@ -1959,6 +2336,8 @@ function start(list: string[]) {
   app.hidden = false;
   clearReader();
   refresh();
+  // Adding an account from inside the walkthrough calls start() again; the open walkthrough carries on.
+  if (onboardingDue() && $("#onboarding").hidden) startOnboarding({ accounts: () => accounts, addAccount, keyLabel });
 }
 
 listen("mail-changed", refresh);
@@ -1966,6 +2345,15 @@ listen("mail-changed", refresh);
 let syncs = 0;
 listen<boolean>("syncing", (e) => $("#sync-btn").classList.toggle("spinning", (syncs = Math.max(0, syncs + (e.payload ? 1 : -1))) > 0));
 listen("scheduled-sent", () => toast("Scheduled email sent"));
+// A clicked new-mail notification: its email (or, for several, the Inbox), in a view that includes its account.
+listen<{ account?: string; thread?: string }>("open-from-notification", async ({ payload }) => {
+  if (settingsOpen()) closeSettings();
+  if (payload.account && scope && !scope.includes(payload.account)) setScope(null);
+  if (mailbox !== "INBOX" || search) openMailbox("INBOX");
+  await loadThreads();
+  if (payload.thread && threads.some((t) => t.id === payload.thread)) await openThread(payload.thread);
+});
+listen<string>("update-ready", (e) => toastAction(`Shift ${e.payload} is ready`, "Restart", () => void invoke("restart_app"), 10 * 60_000));
 listen<string>("sync-error", (e) => toast(`Sync failed: ${e.payload}`));
 
 loadSettings()

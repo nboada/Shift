@@ -212,6 +212,11 @@ pub fn is_scope_error(e: &anyhow::Error) -> bool {
     })
 }
 
+pub fn is_unauthorized(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<ApiError>()
+        .is_some_and(|e| e.status == 401)
+}
+
 pub fn is_not_found(e: &anyhow::Error) -> bool {
     e.downcast_ref::<ApiError>()
         .is_some_and(|e| e.status == 404)
@@ -239,7 +244,17 @@ impl Gmail<'_> {
     ) -> Result<T> {
         let mut attempt = 0;
         loop {
-            let resp = req().bearer_auth(self.token).send().await?;
+            let resp = match req().bearer_auth(self.token).send().await {
+                Ok(r) => r,
+                // A dropped or stalled connection is as retryable as a 5xx, with the same caveat for writes.
+                Err(e) if retry_5xx && (e.is_timeout() || e.is_connect()) && attempt < 3 => {
+                    attempt += 1;
+                    eprintln!("gmail retry {attempt} after network error: {e}");
+                    tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt))).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             let status = resp.status().as_u16();
             if resp.status().is_success() {
                 // Some endpoints (drafts.delete) answer 204 with no body.
@@ -438,6 +453,15 @@ impl Gmail<'_> {
         Ok(())
     }
 
+    /// Creates a user label shown in Gmail's label list and message list; returns it with its new id.
+    pub async fn create_label(&self, name: &str) -> Result<Label> {
+        self.post(
+            "/labels",
+            &serde_json::json!({ "name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show" }),
+        )
+        .await
+    }
+
     pub async fn patch_label(&self, id: &str, body: &Value) -> Result<()> {
         let url = format!("{BASE}/labels/{id}");
         let _: Value = self.call(|| self.http.patch(&url).json(body)).await?;
@@ -477,8 +501,9 @@ impl Gmail<'_> {
         thread_id: Option<&str>,
         wrap: impl Fn(Value) -> Value,
     ) -> Result<Value> {
-        // A plain send has no draft to dedupe a repeat against, so a 5xx is never retried there.
-        let retry_5xx = path != "/messages/send";
+        // Sends and new drafts aren't retried after a 5xx or network error: Gmail may have acted already, and a repeat
+        // would send twice or leave a duplicate draft. (Updating a draft with PUT is safe to repeat.)
+        let retry_5xx = method != reqwest::Method::POST;
         if raw.len() <= MAX_JSON_RAW {
             let (url, body) = (format!("{BASE}{path}"), wrap(message_json(raw, thread_id)));
             return self

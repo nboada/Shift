@@ -1,3 +1,4 @@
+mod ai;
 mod auth;
 mod db;
 mod demo;
@@ -12,7 +13,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// One signed-in Google account: its own local mail database, access token and sync lock.
@@ -42,10 +43,17 @@ impl Account {
 
     async fn access_token(&self, http: &reqwest::Client) -> anyhow::Result<String> {
         let mut t = self.token.lock().await;
-        if t.as_ref().is_none_or(|t| t.expires <= Instant::now()) {
+        if t.as_ref()
+            .is_none_or(|t| t.expires <= std::time::SystemTime::now())
+        {
             *t = Some(auth::refresh(http, &self.email).await?);
         }
         Ok(t.as_ref().unwrap().access.clone())
+    }
+
+    /// Drops the cached access token, so the next call refreshes it (after Gmail answered 401).
+    async fn forget_token(&self) {
+        *self.token.lock().await = None;
     }
 }
 
@@ -53,6 +61,8 @@ struct State {
     /// In the order they were added; the first is the default for new emails.
     accounts: Mutex<Vec<Arc<Account>>>,
     http: reqwest::Client,
+    /// For AI providers: a model can think for a while before the first byte of its answer arrives.
+    ai_http: reqwest::Client,
     /// Offline demo mailbox: no network, actions only touch the local cache.
     demo: bool,
     /// App data directory (accounts/, settings.json).
@@ -247,6 +257,14 @@ async fn full_sync(a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
         .into_iter()
         .partition(|id| !db::has_thread(&c, id).unwrap_or(false));
     queue.extend(cached);
+    // Cached threads outside the listed window may have changed while history was unavailable (archived or
+    // deleted elsewhere); refresh them last. A deleted one comes back 404 and is dropped from the cache.
+    let listed: std::collections::HashSet<String> = queue.iter().cloned().collect();
+    queue.extend(
+        db::all_thread_ids(&c)?
+            .into_iter()
+            .filter(|id| !listed.contains(id)),
+    );
     db::set_meta(&c, "backfill", &serde_json::to_string(&queue)?)?;
     db::set_meta(&c, "history_id", &history_id)?;
     // Mail already there is not new: only what arrives from now on is announced.
@@ -307,7 +325,16 @@ fn notify_new_mail(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
             (format!("{} new emails", many.len()), senders.join(", "))
         }
     };
-    let mut n = app.notification().builder().title(title).body(body);
+    // Read back by the click handler set up in `run`: one email opens itself, several open the Inbox.
+    let mut n = app
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .extra("account", &a.email);
+    if let [one] = mail.as_slice() {
+        n = n.extra("thread", &one.id);
+    }
     if cfg.sound {
         n = n.sound("default");
     }
@@ -366,6 +393,9 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
                     if let Err(e) = notify_new_mail(app, a) {
                         eprintln!("{} notification: {e:#}", a.email);
                     }
+                    if let Err(e) = auto_label(app, a, &g).await {
+                        let _ = app.emit("sync-error", format!("{}: AI labelling: {e:#}", a.email));
+                    }
                 }
             }
             // Expired cursor (Gmail keeps about a week): start over, keeping the cache until threads are refetched.
@@ -409,11 +439,320 @@ async fn sync_all(app: &AppHandle) {
     // In parallel: Gmail's quota is per account, and one slow account mustn't hold the others back.
     let accounts = s.all();
     futures::future::join_all(accounts.iter().map(|a| async move {
-        if let Err(e) = sync_account(app, a).await {
+        let mut result = sync_account(app, a).await;
+        // Gmail no longer accepts the cached token (revoked, or expired early): refresh it and try once more.
+        if result.as_ref().is_err_and(gmail::is_unauthorized) {
+            a.forget_token().await;
+            result = sync_account(app, a).await;
+        }
+        if let Err(e) = result {
             let _ = app.emit("sync-error", format!("{}: {e:#}", a.email));
         }
     }))
     .await;
+}
+
+/// Release builds check shift.talkk.com.au for a newer version at launch and every six hours, install it in the
+/// background, then tell the UI so it can offer a restart. Dev and demo builds never update themselves.
+fn spawn_update_checks(app: &AppHandle) {
+    if cfg!(debug_assertions) || app.state::<State>().demo {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_updater::UpdaterExt;
+        loop {
+            let result = async {
+                let Some(update) = app.updater()?.check().await? else {
+                    return anyhow::Ok(None);
+                };
+                update.download_and_install(|_, _| {}, || {}).await?;
+                anyhow::Ok(Some(update.version))
+            }
+            .await;
+            match result {
+                Ok(Some(version)) => {
+                    let _ = app.emit("update-ready", version);
+                    return;
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("update check failed: {e:#}"),
+            }
+            tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+        }
+    });
+}
+
+/// Settings → Notifications → Send a test: shows a notification the way new mail would, sound setting included.
+#[tauri::command(async)]
+fn test_notification(app: AppHandle) -> R<()> {
+    use tauri_plugin_notification::NotificationExt;
+    let cfg = settings::notifications(&app.state::<State>().dir);
+    let mut n = app
+        .notification()
+        .builder()
+        .title("Shift")
+        .body("Notifications are working. New mail will look like this.");
+    if cfg.sound {
+        n = n.sound("default");
+    }
+    n.show().map_err(anyhow::Error::from)?;
+    Ok(())
+}
+
+// ---- AI (src/ai.rs): writing help in the composer, auto-labelling new mail, and inbox cleanup suggestions.
+
+/// Rewrites text from the composer by an instruction ("Make it shorter").
+#[tauri::command]
+async fn ai_rewrite(
+    s: tauri::State<'_, State>,
+    text: String,
+    instruction: String,
+    rules: String,
+) -> R<String> {
+    let cfg = ai::config(&s.dir, ai::Task::Writing)?;
+    let user = format!("Instruction: {instruction}\n\nText:\n<<<\n{text}\n>>>");
+    Ok(ai::complete(
+        &s.ai_http,
+        &cfg,
+        &ai::with_rules(ai::REWRITE, &rules),
+        &user,
+        None,
+        None,
+    )
+    .await?)
+}
+
+/// Drafts the body of a reply. The UI sends the conversation as text (it already turns HTML bodies into text) and
+/// whatever the user has typed so far as notes.
+#[tauri::command]
+async fn ai_draft_reply(
+    s: tauri::State<'_, State>,
+    conversation: String,
+    notes: String,
+    me: String,
+    rules: String,
+) -> R<String> {
+    let cfg = ai::config(&s.dir, ai::Task::Writing)?;
+    let user = format!(
+        "I am {me}.\n\nConversation:\n<<<\n{conversation}\n>>>\n\nMy notes for the reply: {}",
+        if notes.trim().is_empty() {
+            "(none: write the natural reply)"
+        } else {
+            notes.trim()
+        }
+    );
+    Ok(ai::complete(
+        &s.ai_http,
+        &cfg,
+        &ai::with_rules(ai::DRAFT, &rules),
+        &user,
+        None,
+        None,
+    )
+    .await?)
+}
+
+/// Files new Inbox mail into the labels the user described in Settings → AI. Runs after a sync that brought new
+/// mail; only mail newer than the `ai_labeled_at` watermark, so turning it on doesn't relabel the backlog.
+async fn auto_label(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
+    let s = app.state::<State>();
+    let Some(rules) = settings::ai_label_rules(&s.dir) else {
+        return Ok(());
+    };
+    let (mail, ids) = {
+        let c = a.db();
+        let Some(since) = db::get_meta(&c, "ai_labeled_at")?.and_then(|v| v.parse().ok()) else {
+            db::set_meta(&c, "ai_labeled_at", &now_ms().to_string())?;
+            return Ok(());
+        };
+        let mail = db::new_mail(&c, since)?;
+        let ids: std::collections::HashMap<String, String> = rules
+            .iter()
+            .filter_map(|(name, _)| Some((name.clone(), db::label_id(&c, name).ok()??)))
+            .collect();
+        (mail, ids)
+    };
+    let Some(latest) = mail.iter().map(|m| m.date).max() else {
+        return Ok(());
+    };
+    let rules: Vec<_> = rules
+        .into_iter()
+        .filter(|(n, _)| ids.contains_key(n))
+        .collect();
+    if !rules.is_empty() {
+        let cfg = ai::config(&s.dir, ai::Task::Sorting)?;
+        let names: Vec<&str> = rules.iter().map(|(n, _)| n.as_str()).collect();
+        let schema = ai::results_schema(
+            "labels",
+            serde_json::json!({ "type": "array", "items": { "type": "string", "enum": names } }),
+        );
+        let labels: Vec<_> = rules
+            .iter()
+            .map(|(n, d)| serde_json::json!({ "name": n, "description": d }))
+            .collect();
+        let emails: Vec<_> = mail.iter().take(40).map(|m| serde_json::json!({ "id": m.id, "from": m.sender, "subject": m.subject, "preview": m.snippet })).collect();
+        let user = format!(
+            "Labels:\n{}\n\nEmails:\n{}",
+            serde_json::to_string(&labels)?,
+            serde_json::to_string(&emails)?
+        );
+        let answer = ai::json_in(
+            &ai::complete(
+                &s.ai_http,
+                &cfg,
+                ai::LABEL,
+                &user,
+                Some(&schema),
+                Some("low"),
+            )
+            .await?,
+        )?;
+        let at = now_ms();
+        for r in answer["results"].as_array().into_iter().flatten() {
+            let Some(thread) = r["id"].as_str().filter(|t| mail.iter().any(|m| m.id == *t)) else {
+                continue;
+            };
+            let add: Vec<String> = r["labels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|n| ids.get(n.as_str()?).cloned())
+                .collect();
+            if add.is_empty() {
+                continue;
+            }
+            db::change_labels(&mut a.db(), thread, &add, &[])?;
+            for l in &add {
+                db::add_ai_label(&a.db(), thread, l, at)?;
+            }
+            g.modify(thread, &add, &[]).await?;
+        }
+        let _ = app.emit(CHANGED, ());
+    }
+    db::set_meta(&a.db(), "ai_labeled_at", &latest.to_string())?;
+    Ok(())
+}
+
+/// Labels the AI added to a thread, for the reader's "Labelled by AI" line.
+#[tauri::command(async)]
+fn ai_labels(s: tauri::State<State>, account: String, id: String) -> R<Vec<String>> {
+    Ok(db::ai_labels(&s.account(&account)?.db(), &id)?)
+}
+
+/// Takes the AI's labels off a thread, in Gmail too.
+#[tauri::command]
+async fn ai_undo_labels(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    account: String,
+    id: String,
+) -> R<()> {
+    let a = s.account(&account)?;
+    let labels = db::ai_labels(&a.db(), &id)?;
+    db::change_labels(&mut a.db(), &id, &[], &labels)?;
+    db::forget_ai_labels(&a.db(), &id)?;
+    let _ = app.emit(CHANGED, ());
+    if !s.demo && !labels.is_empty() {
+        let token = a.access_token(&s.http).await?;
+        Gmail {
+            http: &s.http,
+            token: &token,
+        }
+        .modify(&id, &[], &labels)
+        .await?;
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct CleanupItem {
+    account: String,
+    id: String,
+    group: String,
+    sender: String,
+    subject: String,
+}
+
+/// Sorts the newest Inbox threads into newsletter / notification / done / keep for the user to review. Changes nothing.
+#[tauri::command]
+async fn ai_cleanup(
+    s: tauri::State<'_, State>,
+    accounts: Option<Vec<String>>,
+) -> R<Vec<CleanupItem>> {
+    let cfg = ai::config(&s.dir, ai::Task::Sorting)?;
+    let schema = ai::results_schema(
+        "group",
+        serde_json::json!({ "type": "string", "enum": ["newsletter", "notification", "done", "keep"] }),
+    );
+    let mut out = Vec::new();
+    for a in s.scope(accounts.as_deref())? {
+        let brief = db::inbox_brief(&a.db(), 150)?;
+        // In chunks, so each answer stays short and one failure costs only its chunk.
+        for chunk in brief.chunks(50) {
+            let emails: Vec<_> = chunk.iter().map(|[id, from, subject, preview]| serde_json::json!({ "id": id, "from": from, "subject": subject, "preview": preview })).collect();
+            let answer = ai::json_in(
+                &ai::complete(
+                    &s.ai_http,
+                    &cfg,
+                    ai::CLEANUP,
+                    &serde_json::to_string(&emails).map_err(anyhow::Error::from)?,
+                    Some(&schema),
+                    Some("low"),
+                )
+                .await?,
+            )?;
+            for r in answer["results"].as_array().into_iter().flatten() {
+                let (Some(id), Some(group)) = (r["id"].as_str(), r["group"].as_str()) else {
+                    continue;
+                };
+                if let Some([_, sender, subject, _]) = chunk.iter().find(|[t, ..]| t == id) {
+                    out.push(CleanupItem {
+                        account: a.email.clone(),
+                        id: id.into(),
+                        group: group.into(),
+                        sender: sender.clone(),
+                        subject: subject.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Passed by the login item, so Shift starts hidden in the Dock and just syncs and notifies.
+const LAUNCHED_AT_LOGIN: &str = "--hidden";
+
+#[tauri::command(async)]
+fn open_at_login(app: AppHandle) -> R<bool> {
+    use tauri_plugin_autostart::ManagerExt;
+    Ok(app.autolaunch().is_enabled().map_err(anyhow::Error::from)?)
+}
+
+#[tauri::command(async)]
+fn set_open_at_login(app: AppHandle, enabled: bool) -> R<()> {
+    use tauri_plugin_autostart::ManagerExt;
+    // A dev build would register target/debug/app as the login item.
+    if cfg!(debug_assertions) {
+        return Err(anyhow::anyhow!(
+            "Open at login works in the installed app, not in a dev build"
+        )
+        .into());
+    }
+    let launcher = app.autolaunch();
+    let result = if enabled {
+        launcher.enable()
+    } else {
+        launcher.disable()
+    };
+    Ok(result.map_err(anyhow::Error::from)?)
+}
+
+/// Restarts into the update `spawn_update_checks` installed.
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.restart();
 }
 
 fn spawn_sync(app: &AppHandle) {
@@ -473,6 +812,9 @@ async fn sign_out(s: tauri::State<'_, State>, account: String) -> R<()> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|x| !Arc::ptr_eq(x, &a));
+    if !s.demo {
+        auth::revoke(&s.http, &a.email).await;
+    }
     auth::forget(&a.email);
     db::wipe(&a.db())?;
     if !s.demo {
@@ -492,7 +834,9 @@ fn sync_now(app: AppHandle) {
 
 /// Labels for one account. Several accounts add up counts per system mailbox, and merge user labels by
 /// name under the id `name:<name>` (label ids are per account), which `threads` resolves in each account.
-#[tauri::command]
+// (async) on the commands below that touch SQLite or the Keychain: a plain command runs on the main thread, so a
+// sync holding an account's database lock (or a Keychain prompt) would freeze the UI.
+#[tauri::command(async)]
 fn labels(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db::LabelRow>> {
     let accounts = s.scope(accounts.as_deref())?;
     if let [one] = accounts.as_slice() {
@@ -533,7 +877,7 @@ fn merged_threads(
     Ok(rows)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn threads(
     s: tauri::State<State>,
     label: Option<String>,
@@ -592,7 +936,8 @@ async fn mark_all_read(
         };
         // Archive isn't a Gmail label; it's what the local `threads("ARCHIVE")` lists.
         let (q, labels) = match id.as_deref() {
-            None => ("", vec!["UNREAD"]),
+            // All Mail as Shift lists it, which leaves out Spam and Trash.
+            None => ("-in:spam -in:trash", vec!["UNREAD"]),
             Some("ARCHIVE") => ("-in:inbox -in:drafts -in:trash -in:spam", vec!["UNREAD"]),
             Some(l) => ("", vec![l, "UNREAD"]),
         };
@@ -624,9 +969,7 @@ async fn empty_mailbox(
     let mut removed = Vec::new();
     for a in s.scope(accounts.as_deref())? {
         let ids: Vec<String> = db::thread_ids(&a.db(), &label)?;
-        for id in &ids {
-            db::delete_thread(&a.db(), id)?;
-        }
+        db::delete_threads(&mut a.db(), &ids)?;
         removed.push((a, ids));
     }
     let _ = app.emit(CHANGED, ());
@@ -705,6 +1048,40 @@ async fn edit_label(
     }
     let _ = app.emit(CHANGED, ());
     Ok(())
+}
+
+/// Creates a label in one account (Gmail first, since it assigns the id) and returns its id.
+#[tauri::command]
+async fn create_label(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    account: String,
+    name: String,
+) -> R<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(anyhow::anyhow!("A label needs a name").into());
+    }
+    let a = s.account(&account)?;
+    let label = if s.demo {
+        gmail::Label {
+            id: format!("Label_demo_{}", now_ms()),
+            name: name.into(),
+            kind: "user".into(),
+            color: None,
+        }
+    } else {
+        let token = a.access_token(&s.http).await?;
+        Gmail {
+            http: &s.http,
+            token: &token,
+        }
+        .create_label(name)
+        .await?
+    };
+    db::insert_label(&a.db(), &label)?;
+    let _ = app.emit(CHANGED, ());
+    Ok(label.id)
 }
 
 #[tauri::command]
@@ -1043,7 +1420,7 @@ fn has_recipients(d: &Draft) -> bool {
 
 /// Send later: Gmail's API has no scheduled send, so the email waits here (and in Gmail Drafts) and the sync loop
 /// sends it once due. `draft` is a `Draft`; `ui` is opaque data the composer uses to reopen it.
-#[tauri::command]
+#[tauri::command(async)]
 fn schedule_send(
     app: AppHandle,
     s: tauri::State<State>,
@@ -1067,7 +1444,7 @@ fn schedule_send(
     Ok(id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn scheduled(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db::ScheduledRow>> {
     let mut all = Vec::new();
     for a in s.scope(accounts.as_deref())? {
@@ -1085,7 +1462,7 @@ fn scheduled(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db:
 }
 
 /// New send time (milliseconds), or `None` to cancel the schedule and keep the draft.
-#[tauri::command]
+#[tauri::command(async)]
 fn reschedule(
     app: AppHandle,
     s: tauri::State<State>,
@@ -1231,6 +1608,39 @@ fn safe_filename(name: &str) -> String {
 }
 
 /// `dir/name`, or `dir/name (2).ext` and so on when that file already exists.
+/// Writes a downloaded attachment under a free name and marks it as from the internet, as browsers do. With the
+/// quarantine flag, Gatekeeper checks apps (also ones unzipped from it) and Office opens macro files in Protected View.
+fn write_download(dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<PathBuf> {
+    use std::io::Write;
+    let mut path = free_path(dir, name);
+    // create_new: never follows a symlink or overwrites a file that appeared since free_path looked.
+    let mut file = loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(f) => break f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => path = free_path(dir, name),
+            Err(e) => return Err(e.into()),
+        }
+    };
+    file.write_all(bytes)?;
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let flag = format!("0081;{secs:x};Shift;");
+    let quarantined = std::process::Command::new("/usr/bin/xattr")
+        .args(["-w", "com.apple.quarantine", &flag])
+        .arg(&path)
+        .status()
+        .is_ok_and(|s| s.success());
+    if !quarantined {
+        eprintln!("couldn't set the quarantine flag on {}", path.display());
+    }
+    Ok(path)
+}
+
 fn free_path(dir: &Path, name: &str) -> PathBuf {
     let p = Path::new(name);
     let (stem, ext) = (
@@ -1247,12 +1657,12 @@ fn free_path(dir: &Path, name: &str) -> PathBuf {
         .unwrap()
 }
 
-/// Files that open in a viewer rather than run. Anything else (apps, scripts, installers) is revealed in Finder instead,
-/// since files written by Shift carry no quarantine flag for Gatekeeper to check.
+/// Files that open in a viewer rather than run. Anything else (apps, scripts, installers) is revealed in Finder instead.
+/// SVG is left out: it can carry scripts, and its default app may be a browser.
 fn opens_directly(name: &str) -> bool {
     const SAFE: &[&str] = &[
-        "pdf", "png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "bmp", "svg", "txt",
-        "md", "csv", "rtf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
+        "pdf", "png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "bmp", "txt", "md",
+        "csv", "rtf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
         "ics", "vcf", "mp3", "m4a", "wav", "mp4", "mov", "zip",
     ];
     Path::new(name)
@@ -1271,8 +1681,7 @@ async fn open_attachment(
     idx: i64,
 ) -> R<String> {
     let (name, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
-    let path = free_path(&app.path().download_dir()?, &safe_filename(&name));
-    std::fs::write(&path, bytes)?;
+    let path = write_download(&app.path().download_dir()?, &safe_filename(&name), &bytes)?;
     if opens_directly(&name) {
         tauri_plugin_opener::open_path(&path, None::<&str>)?;
     } else {
@@ -1315,7 +1724,7 @@ fn rank_contacts(headers: &[String], query: &str, me: &[String]) -> Vec<String> 
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn suggest_contacts(s: tauri::State<State>, query: String) -> R<Vec<String>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
@@ -1330,7 +1739,7 @@ fn suggest_contacts(s: tauri::State<State>, query: String) -> R<Vec<String>> {
     Ok(rank_contacts(&headers, &query, &me))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn search_local(
     s: tauri::State<State>,
     query: String,
@@ -1341,7 +1750,7 @@ fn search_local(
     })?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn suggest_senders(
     s: tauri::State<State>,
     query: String,
@@ -1364,22 +1773,22 @@ fn get_settings(s: tauri::State<State>) -> serde_json::Value {
     settings::load(&s.dir)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_settings(s: tauri::State<State>, value: serde_json::Value) -> R<()> {
     Ok(settings::save(&s.dir, &value)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_ai_key(provider: String, key: String) -> R<()> {
     Ok(settings::set_ai_key(&provider, &key)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn has_ai_key(provider: String) -> bool {
     settings::has_ai_key(&provider)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_ai_key(provider: String) -> R<()> {
     Ok(settings::delete_ai_key(&provider)?)
 }
@@ -1389,8 +1798,25 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![LAUNCHED_AT_LOGIN]),
+        ))
         .setup(|app| {
+            // The window is created hidden (tauri.conf.json) so a launch at login can stay in the Dock without a flash.
+            if !std::env::args().any(|a| a == LAUNCHED_AT_LOGIN)
+                && let Some(window) = app.get_webview_window("main")
+            {
+                window.show()?;
+            }
             let dir = app.path().app_data_dir()?;
+            // The app's identifier was com.nicboada.mail before it became au.com.talkk.shift: carry the mail cache
+            // and settings over once. Keychain logins aren't moved; they belonged to the previous OAuth client.
+            let old = dir.with_file_name("com.nicboada.mail");
+            if !dir.exists() && old.is_dir() {
+                std::fs::rename(&old, &dir)?;
+            }
             std::fs::create_dir_all(&dir)?;
             let demo = std::env::var_os("SHIFT_DEMO").is_some();
             let accounts = if demo {
@@ -1412,8 +1838,15 @@ pub fn run() {
                 demo,
                 dir: dir.clone(),
                 accounts: Mutex::new(accounts),
+                // No overall deadline: a big attachment or send on a slow link would be cut off mid-body. These only
+                // catch a dead connection; the upload path sets its own total timeout.
                 http: reqwest::Client::builder()
-                    .timeout(Duration::from_secs(30))
+                    .connect_timeout(Duration::from_secs(10))
+                    .read_timeout(Duration::from_secs(60))
+                    .build()?,
+                ai_http: reqwest::Client::builder()
+                    .connect_timeout(Duration::from_secs(10))
+                    .read_timeout(Duration::from_secs(300))
                     .build()?,
             });
             let handle = app.handle().clone();
@@ -1425,6 +1858,30 @@ pub fn run() {
                     tokio::time::sleep(Duration::from_secs(wait)).await;
                 }
             });
+            spawn_update_checks(app.handle());
+            // A click on a new-mail notification brings Shift forward and opens what it announced. Set up before
+            // the first notification: ones shown earlier report no clicks.
+            {
+                use tauri_plugin_notification::NotificationExt;
+                let handle = app.handle().clone();
+                app.notification().on_action(move |action| {
+                    if action.action_id() != "tap" {
+                        return;
+                    }
+                    let Some(extra) = action.notification().map(|n| n.extra()) else {
+                        return;
+                    };
+                    if let Some(window) = handle.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    let _ = handle.emit(
+                        "open-from-notification",
+                        serde_json::json!({ "account": extra.get("account"), "thread": extra.get("thread") }),
+                    );
+                })?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1435,7 +1892,17 @@ pub fn run() {
             labels,
             threads,
             mark_all_read,
+            restart_app,
+            ai_rewrite,
+            ai_draft_reply,
+            ai_labels,
+            ai_undo_labels,
+            ai_cleanup,
+            open_at_login,
+            set_open_at_login,
+            test_notification,
             empty_mailbox,
+            create_label,
             rename_label,
             set_label_color,
             delete_label,
@@ -1459,8 +1926,30 @@ pub fn run() {
             has_ai_key,
             delete_ai_key
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // The Mac convention for a mail app: closing the window hides it, and Shift keeps syncing and notifying
+        // from the Dock. ⌘Q quits; a click on the Dock icon brings the window back.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && cfg!(target_os = "macos")
+            {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event
+                && let Some(window) = app.get_webview_window("main")
+            {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 #[cfg(test)]
@@ -1583,6 +2072,23 @@ mod tests {
         assert!(raw.contains("see attached"), "{raw}");
         d.attachments[0].data = STANDARD.encode(vec![0u8; MAX_ATTACHMENTS + 1]);
         assert!(build_message("me@x.com".into(), &d).is_err());
+    }
+
+    #[test]
+    fn downloads_get_a_free_name_and_the_quarantine_flag() {
+        let dir = std::env::temp_dir().join(format!("shift-q-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = write_download(&dir, "x.zip", b"one").unwrap();
+        let second = write_download(&dir, "x.zip", b"two").unwrap();
+        assert_eq!(second, dir.join("x (2).zip"));
+        assert_eq!(std::fs::read(&first).unwrap(), b"one");
+        let flag = std::process::Command::new("/usr/bin/xattr")
+            .args(["-p", "com.apple.quarantine"])
+            .arg(&second)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&flag.stdout).contains(";Shift;"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
