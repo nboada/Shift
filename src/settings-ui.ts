@@ -561,14 +561,20 @@ export function initSettings(c: Ctx) {
       }
       case "label-inbox": {
         const status = document.getElementById("ai-label-status")!;
+        const say = (icon: string, text: string, working = false) =>
+          (status.innerHTML = `<i class="${iconClass(icon)}${working ? " ai-working" : ""}" aria-hidden="true"></i><span${working ? ' class="ai-shimmer"' : ""}>${esc(text)}</span>`);
+        const label = b.textContent;
         (b as HTMLButtonElement).disabled = true;
-        status.textContent = "Labelling your newest Inbox emails…";
+        b.textContent = "Labelling…";
+        say("message-ai", "Reading your newest Inbox emails…", true);
         try {
           const n = await invoke<number>("ai_label_inbox", { accounts: null });
-          status.textContent = n ? `Labelled ${n} ${n === 1 ? "email" : "emails"}. Each shows "Labelled by AI" with Undo.` : "No email in your Inbox fits a label.";
+          if (n) say("circle-check", `Labelled ${n} ${n === 1 ? "email" : "emails"}. Each shows "Labelled by AI" with Undo.`);
+          else say("info-circle", "No email in your Inbox fits a label.");
         } catch (err) {
-          status.textContent = String(err);
+          say("alert-circle", String(err));
         }
+        b.textContent = label;
         (b as HTMLButtonElement).disabled = false;
         return;
       }
