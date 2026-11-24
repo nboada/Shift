@@ -624,7 +624,9 @@ function markTouched() {
   if (!compose) return;
   compose.touched = true;
   clearTimeout(draftTimer);
-  draftTimer = window.setTimeout(() => saveDraft(), 1500);
+  // drafts.update replaces the whole message, so every save re-uploads the files; with big ones, save less often.
+  const bytes = compose.attachments.reduce((n, f) => n + f.size, 0);
+  draftTimer = window.setTimeout(() => saveDraft(), bytes > 1_000_000 ? 15_000 : 1500);
 }
 subjectInput.addEventListener("input", markTouched);
 
