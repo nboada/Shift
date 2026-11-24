@@ -10,8 +10,16 @@ use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::time::Duration;
 
-const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
-const UPLOAD: &str = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
+const HOST: &str = "https://gmail.googleapis.com";
+
+/// Where Gmail is: tests point it at a local stand-in (`fake_gmail`).
+fn host() -> String {
+    #[cfg(test)]
+    if let Some(h) = crate::fake_gmail::host() {
+        return h;
+    }
+    HOST.into()
+}
 /// Raw messages up to this size are sent inline as base64 JSON; bigger ones use the upload endpoint.
 const MAX_JSON_RAW: usize = 3 * 1024 * 1024;
 const BOUNDARY: &str = "shift-upload-7d1f3a9c2b";
@@ -128,15 +136,15 @@ impl Message {
         self.internal_date.parse().unwrap_or(0)
     }
 
-    /// First inline (non-attachment) body of the given MIME type, decoded.
+    /// First inline (non-attachment) body of the given MIME type, decoded from its charset.
     pub fn body(&self, mime: &str) -> Option<String> {
         fn walk(p: &Part, mime: &str) -> Option<String> {
             if p.mime_type == mime && p.filename.is_empty() {
-                let data = p.body.as_ref()?.data.as_ref()?;
-                return B64
-                    .decode(data)
-                    .ok()
-                    .map(|b| String::from_utf8_lossy(&b).into_owned());
+                let bytes = B64.decode(p.body.as_ref()?.data.as_ref()?).ok()?;
+                let enc = charset(p)
+                    .and_then(|c| encoding_rs::Encoding::for_label(c.as_bytes()))
+                    .unwrap_or(encoding_rs::UTF_8);
+                return Some(enc.decode(&bytes).0.into_owned());
             }
             p.parts.iter().find_map(|c| walk(c, mime))
         }
@@ -174,6 +182,29 @@ impl Message {
             walk(p, &mut out);
         }
         out
+    }
+}
+
+fn charset(p: &Part) -> Option<String> {
+    let ct = p.headers.iter().find(|h| h.name.eq_ignore_ascii_case("Content-Type"))?;
+    ct.value.split(';').find_map(|param| {
+        let (k, v) = param.split_once('=')?;
+        k.trim()
+            .eq_ignore_ascii_case("charset")
+            .then(|| v.trim().trim_matches('"').to_string())
+    })
+}
+
+/// Text bodies Gmail stored apart from the message: an `attachmentId` and no `data`.
+fn stored_text<'a>(p: &'a mut Part, out: &mut Vec<&'a mut Body>) {
+    if p.filename.is_empty()
+        && p.mime_type.starts_with("text/")
+        && let Some(b) = p.body.as_mut().filter(|b| b.data.is_none() && b.attachment_id.is_some())
+    {
+        out.push(b);
+    }
+    for c in &mut p.parts {
+        stored_text(c, out);
     }
 }
 
@@ -308,12 +339,12 @@ impl Gmail<'_> {
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T> {
-        let url = format!("{BASE}{path}");
+        let url = format!("{}/gmail/v1/users/me{path}", host());
         self.call(|| self.http.get(&url).query(query)).await
     }
 
     async fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
-        let url = format!("{BASE}{path}");
+        let url = format!("{}/gmail/v1/users/me{path}", host());
         self.call(|| self.http.post(&url).json(body)).await
     }
 
@@ -429,7 +460,22 @@ impl Gmail<'_> {
     pub async fn thread(&self, id: &str, full: bool) -> Result<Thread> {
         let path = format!("/threads/{id}");
         if full {
-            return self.get(&path, &[("format", "full")]).await;
+            let mut t: Thread = self.get(&path, &[("format", "full")]).await?;
+            // Gmail moves big text bodies out of the message, like attachments.
+            for m in &mut t.messages {
+                let mut stored = Vec::new();
+                if let Some(p) = &mut m.payload {
+                    stored_text(p, &mut stored);
+                }
+                for b in stored {
+                    let id = b.attachment_id.clone().unwrap_or_default();
+                    let v: Value = self
+                        .get(&format!("/messages/{}/attachments/{id}", m.id), &[])
+                        .await?;
+                    b.data = v["data"].as_str().map(String::from);
+                }
+            }
+            return Ok(t);
         }
         let mut q = vec![("format", "metadata")];
         q.extend(
@@ -540,13 +586,13 @@ impl Gmail<'_> {
     }
 
     pub async fn patch_label(&self, id: &str, body: &Value) -> Result<()> {
-        let url = format!("{BASE}/labels/{id}");
+        let url = format!("{}/gmail/v1/users/me/labels/{id}", host());
         let _: Value = self.call(|| self.http.patch(&url).json(body)).await?;
         Ok(())
     }
 
     pub async fn delete_label(&self, id: &str) -> Result<()> {
-        let url = format!("{BASE}/labels/{id}");
+        let url = format!("{}/gmail/v1/users/me/labels/{id}", host());
         let _: Value = self.call(|| self.http.delete(&url)).await?;
         Ok(())
     }
@@ -582,7 +628,7 @@ impl Gmail<'_> {
         // would send twice or leave a duplicate draft. (Updating a draft with PUT is safe to repeat.)
         let retry_5xx = method != reqwest::Method::POST;
         if raw.len() <= MAX_JSON_RAW {
-            let (url, body) = (format!("{BASE}{path}"), wrap(message_json(raw, thread_id)));
+            let (url, body) = (format!("{}/gmail/v1/users/me{path}", host()), wrap(message_json(raw, thread_id)));
             return self
                 .call_opts(
                     || self.http.request(method.clone(), &url).json(&body),
@@ -594,7 +640,7 @@ impl Gmail<'_> {
         if let Some(t) = thread_id {
             meta["threadId"] = t.into();
         }
-        let (url, body) = (format!("{UPLOAD}{path}"), upload_body(&wrap(meta), raw));
+        let (url, body) = (format!("{}/upload/gmail/v1/users/me{path}", host()), upload_body(&wrap(meta), raw));
         self.call_opts(
             || {
                 self.http
@@ -673,7 +719,7 @@ impl Gmail<'_> {
     }
 
     pub async fn delete_draft(&self, id: &str) -> Result<()> {
-        let url = format!("{BASE}/drafts/{id}");
+        let url = format!("{}/gmail/v1/users/me/drafts/{id}", host());
         let _: Value = self.call(|| self.http.delete(&url)).await?;
         Ok(())
     }
@@ -740,6 +786,23 @@ mod tests {
             "{body}"
         );
         assert!(body.ends_with(&format!("--{BOUNDARY}--\r\n")), "{body}");
+    }
+
+    #[test]
+    fn decodes_bodies_from_their_charset_and_finds_stored_ones() {
+        let latin1 = B64.encode(b"caf\xE9");
+        let raw = format!(
+            r#"{{"id":"m","payload":{{"mimeType":"multipart/alternative","parts":[
+            {{"mimeType":"text/plain","headers":[{{"name":"Content-Type","value":"text/plain; charset=\"ISO-8859-1\""}}],"body":{{"data":"{latin1}"}}}},
+            {{"mimeType":"text/html","body":{{"attachmentId":"B1","size":90000}}}}]}}}}"#
+        );
+        let mut m: Message = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.body("text/plain").as_deref(), Some("café"));
+        let mut stored = Vec::new();
+        stored_text(m.payload.as_mut().unwrap(), &mut stored);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].attachment_id.as_deref(), Some("B1"));
+        assert!(m.attachments().is_empty());
     }
 
     #[test]

@@ -39,32 +39,50 @@ CREATE TABLE IF NOT EXISTS ai_labels (
   PRIMARY KEY (thread_id, label_id)) WITHOUT ROWID;
 ";
 
+/// Schema version, kept in `PRAGMA user_version`. Bump it and add an `if version < N` step to `open` for each change.
+const VERSION: i64 = 1;
+
 pub fn open(path: &std::path::Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     let had_attachments: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'attachments')",
         [],
         |r| r.get(0),
     )?;
     conn.execute_batch(SCHEMA)?;
-    // Databases created before bodies were loaded lazily lack the column; the error just means it exists.
-    let _ = conn.execute(
-        "ALTER TABLE threads ADD COLUMN full INTEGER NOT NULL DEFAULT 0",
-        [],
-    );
-    let _ = conn.execute("ALTER TABLE labels ADD COLUMN color TEXT", []);
-    let _ = conn.execute("ALTER TABLE scheduled ADD COLUMN sending INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''", []);
+    // All or nothing: a step that fails rolls back and leaves the version as it was, so it runs again next launch.
+    let tx = conn.transaction()?;
+    if version < 1 {
+        upgrade_unversioned(&tx, had_attachments)?;
+    }
+    tx.execute_batch(&format!("PRAGMA user_version = {VERSION}"))?;
+    tx.commit()?;
     // A send claimed when Shift quit or crashed never finished from this side: let it go out again. A draft-backed
     // send that did reach Gmail comes back 404 and is dropped, so this can't duplicate it.
     conn.execute("UPDATE scheduled SET sending = 0", [])?;
+    Ok(conn)
+}
+
+/// Adds a column, or returns false when the database already has it.
+fn add_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    match conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column}"), []) {
+        Ok(_) => Ok(true),
+        Err(e) if e.to_string().contains("duplicate column name") => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Caches from before the schema was versioned: each may lack any of the columns added since.
+fn upgrade_unversioned(conn: &Connection, had_attachments: bool) -> Result<()> {
+    add_column(conn, "threads", "full INTEGER NOT NULL DEFAULT 0")?;
+    add_column(conn, "labels", "color TEXT")?;
+    add_column(conn, "scheduled", "sending INTEGER NOT NULL DEFAULT 0")?;
+    add_column(conn, "messages", "reply_to TEXT NOT NULL DEFAULT ''")?;
     // `live`: the thread has a message outside Trash and Spam. Older caches only knew "has a trashed message", which hid
     // whole conversations; mark those not live and queue them for a re-fetch, which works out the real value.
-    if conn
-        .execute("ALTER TABLE threads ADD COLUMN live INTEGER NOT NULL DEFAULT 1", [])
-        .is_ok()
-    {
+    if add_column(conn, "threads", "live INTEGER NOT NULL DEFAULT 1")? {
         let mut st = conn.prepare(
             "SELECT DISTINCT thread_id FROM thread_labels WHERE label_id IN ('TRASH', 'SPAM')",
         )?;
@@ -75,18 +93,18 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
             [],
         )?;
         if !ids.is_empty() {
-            let mut queue: Vec<String> = get_meta(&conn, "backfill")?
+            let mut queue: Vec<String> = get_meta(conn, "backfill")?
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
             queue.extend(ids);
-            set_meta(&conn, "backfill", &serde_json::to_string(&queue)?)?;
+            set_meta(conn, "backfill", &serde_json::to_string(&queue)?)?;
         }
     }
     // Bodies cached before attachments were stored carry none; mark them for a re-fetch on open.
     if !had_attachments {
         conn.execute("UPDATE threads SET full = 0", [])?;
     }
-    Ok(conn)
+    Ok(())
 }
 
 /// An email waiting for its send time: `draft` is the `Draft` JSON to send, `ui` what the composer needs to reopen it.
@@ -149,6 +167,13 @@ pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<Scheduled
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The files attached to one scheduled email (the list leaves them out: they can be megabytes each).
+pub fn scheduled_files(conn: &Connection, id: i64) -> Result<serde_json::Value> {
+    let draft: String = conn.query_row("SELECT draft FROM scheduled WHERE id = ?1", [id], |r| r.get(0))?;
+    let mut draft: serde_json::Value = serde_json::from_str(&draft)?;
+    Ok(draft["attachments"].take())
 }
 
 /// Moves a scheduled email to a new time, or with `None` drops the schedule (the Gmail draft stays).
@@ -343,6 +368,16 @@ pub fn delete_threads(conn: &mut Connection, ids: &[String]) -> Result<()> {
 pub fn delete_thread(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM threads WHERE id = ?1", [id])?;
     Ok(())
+}
+
+/// Gmail ids of the threads' messages, for `messages.batchModify`.
+pub fn message_ids(conn: &Connection, threads: &[String]) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached("SELECT id FROM messages WHERE thread_id = ?1")?;
+    let mut out = Vec::new();
+    for t in threads {
+        out.extend(stmt.query_map([t], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?);
+    }
+    Ok(out)
 }
 
 pub fn change_labels(
@@ -866,6 +901,12 @@ mod tests {
         let c = open(&path).unwrap();
         assert_eq!(threads(&c, Some("INBOX")).unwrap().len(), 1, "unaffected thread still listed");
         assert_eq!(get_meta(&c, "backfill").unwrap().as_deref(), Some(r#"["t"]"#), "the trashed one is re-fetched");
+        let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, VERSION);
+        set_meta(&c, "backfill", "[]").unwrap();
+        drop(c);
+        let c = open(&path).unwrap();
+        assert_eq!(get_meta(&c, "backfill").unwrap().as_deref(), Some("[]"), "an upgraded cache isn't upgraded again");
         drop(c);
         let _ = std::fs::remove_file(&path);
     }
