@@ -661,11 +661,15 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         let check =
             MenuItem::with_id(app, CHECK_UPDATES, "Check for Updates…", true, None::<&str>)?;
         app_menu.insert(&check, 1)?;
+        let settings = MenuItem::with_id(app, OPEN_SETTINGS, "Settings…", true, Some("CmdOrCtrl+,"))?;
+        app_menu.insert(&settings, 2)?;
     }
     Ok(menu)
 }
 
 const CHECK_UPDATES: &str = "check-updates";
+/// Shift → Settings…: the UI opens its settings window (`open-settings`).
+const OPEN_SETTINGS: &str = "open-settings";
 
 /// Settings → Notifications → Send a test: shows a notification the way new mail would, sound setting included.
 #[tauri::command(async)]
@@ -2351,6 +2355,8 @@ pub fn run() {
         .on_menu_event(|app, event| {
             if event.id() == CHECK_UPDATES {
                 check_for_updates_now(app);
+            } else if event.id() == OPEN_SETTINGS {
+                let _ = app.emit(OPEN_SETTINGS, ());
             }
         })
         .setup(|app| {
