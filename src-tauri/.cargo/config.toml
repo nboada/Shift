@@ -2,4 +2,4 @@
 # every rebuild, so the Keychain asks again for each account's refresh token; a signed one keeps "Always Allow".
 # Uses SHIFT_SIGN_IDENTITY, else the Mac's Developer ID certificate; without either it just runs unsigned.
 [target.'cfg(target_os = "macos")']
-runner = ["sh", "-c", "codesign --force --sign \"${SHIFT_SIGN_IDENTITY:-Developer ID Application}\" \"$0\" >/dev/null 2>&1; exec \"$0\" \"$@\""]
+runner = ["sh", "-c", "codesign --force --sign \"${SHIFT_SIGN_IDENTITY:-Developer ID Application}\" \"$0\" >/dev/null 2>&1 || echo \"warning: couldn't sign $0, so the Keychain will ask again for each account (set SHIFT_SIGN_IDENTITY)\" >&2; exec \"$0\" \"$@\""]

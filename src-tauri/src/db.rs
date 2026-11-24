@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS attachments (
   PRIMARY KEY (message_id, idx)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS scheduled (
   id INTEGER PRIMARY KEY, draft_id TEXT, send_at INTEGER NOT NULL, draft TEXT NOT NULL, ui TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ai_labels (
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, label_id TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, label_id)) WITHOUT ROWID;
 ";
 
 pub fn open(path: &std::path::Path) -> Result<Connection> {
@@ -130,7 +133,7 @@ pub fn set_meta(conn: &Connection, k: &str, v: &str) -> Result<()> {
 }
 
 pub fn wipe(conn: &Connection) -> Result<()> {
-    conn.execute_batch("DELETE FROM messages; DELETE FROM thread_labels; DELETE FROM threads; DELETE FROM labels; DELETE FROM meta;")?;
+    conn.execute_batch("DELETE FROM messages; DELETE FROM thread_labels; DELETE FROM threads; DELETE FROM labels; DELETE FROM meta; DELETE FROM ai_labels;")?;
     Ok(())
 }
 
@@ -208,6 +211,22 @@ pub fn thread_ids(conn: &Connection, label: &str) -> Result<Vec<String>> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+pub fn all_thread_ids(conn: &Connection) -> Result<Vec<String>> {
+    let mut st = conn.prepare("SELECT id FROM threads ORDER BY date DESC")?;
+    let rows = st.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// In one transaction: one commit for the whole batch instead of one per thread.
+pub fn delete_threads(conn: &mut Connection, ids: &[String]) -> Result<()> {
+    let tx = conn.transaction()?;
+    for id in ids {
+        tx.execute("DELETE FROM threads WHERE id = ?1", [id])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn delete_thread(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM threads WHERE id = ?1", [id])?;
     Ok(())
@@ -253,10 +272,28 @@ pub fn mark_read(conn: &mut Connection, label: Option<&str>) -> Result<Vec<Strin
         .filter(|t| t.unread)
         .map(|t| t.id)
         .collect();
+    let tx = conn.transaction()?;
     for id in &ids {
-        change_labels(conn, id, &[], &["UNREAD".into()])?;
+        tx.execute(
+            "DELETE FROM thread_labels WHERE label_id = 'UNREAD' AND thread_id = ?1",
+            [id],
+        )?;
     }
+    tx.commit()?;
     Ok(ids)
+}
+
+pub fn insert_label(conn: &Connection, l: &gmail::Label) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO labels (id, name, kind, color) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            l.id,
+            l.name,
+            l.kind,
+            l.color.as_ref().map(|c| &c.background)
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn rename_label(conn: &Connection, id: &str, name: &str) -> Result<()> {
@@ -374,8 +411,10 @@ pub fn threads_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<ThreadRow
 }
 
 pub struct NewMail {
+    pub id: String,
     pub sender: String,
     pub subject: String,
+    pub snippet: String,
     pub date: i64,
     /// False for Gmail's Promotions/Social/Updates/Forums tabs.
     pub primary: bool,
@@ -387,14 +426,45 @@ pub fn new_mail(conn: &Connection, since: i64) -> Result<Vec<NewMail>> {
         .into_iter()
         .filter(|t| t.unread && t.date > since)
         .map(|t| NewMail {
+            id: t.id,
             sender: t.sender,
             subject: t.subject,
+            snippet: t.snippet,
             date: t.date,
             primary: t.primary,
         })
         .collect();
     out.reverse();
     Ok(out)
+}
+
+/// The newest Inbox threads, briefly, for AI cleanup: id, sender, subject, preview.
+pub fn inbox_brief(conn: &Connection, limit: usize) -> Result<Vec<[String; 4]>> {
+    Ok(threads(conn, Some("INBOX"))?
+        .into_iter()
+        .take(limit)
+        .map(|t| [t.id, t.sender, t.subject, t.snippet])
+        .collect())
+}
+
+/// Labels the AI added to a thread (and Shift still remembers), so the reader can show and undo them.
+pub fn ai_labels(conn: &Connection, thread: &str) -> Result<Vec<String>> {
+    let mut st = conn.prepare_cached("SELECT label_id FROM ai_labels WHERE thread_id = ?1")?;
+    let rows = st.query_map([thread], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn add_ai_label(conn: &Connection, thread: &str, label: &str, at: i64) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO ai_labels (thread_id, label_id, at) VALUES (?1, ?2, ?3)",
+        params![thread, label, at],
+    )?;
+    Ok(())
+}
+
+pub fn forget_ai_labels(conn: &Connection, thread: &str) -> Result<()> {
+    conn.execute("DELETE FROM ai_labels WHERE thread_id = ?1", [thread])?;
+    Ok(())
 }
 
 pub fn has_thread(conn: &Connection, id: &str) -> Result<bool> {
@@ -416,6 +486,8 @@ fn like(word: &str) -> String {
 
 /// Instant search over the local cache. Every word must match the subject, a sender or the preview;
 /// `from:x` must match a sender of any message in the thread (Gmail syntax).
+// shortcut: LIKE scans every cached thread (about 1 ms per 750 threads, measured); move to an FTS5 index if search
+// gets slow on a large cache, knowing FTS matches word prefixes where LIKE also matches mid-word.
 pub fn search_local(conn: &Connection, query: &str) -> Result<Vec<ThreadRow>> {
     let (mut clauses, mut args) = (Vec::new(), Vec::new());
     for token in query.split_whitespace() {

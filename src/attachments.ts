@@ -1,3 +1,5 @@
+import { iconClass } from "./icons";
+
 /** A file on a received message, as `db::messages` returns it. */
 export type Attachment = { idx: number; filename: string; mime: string; size: number; content_id: string | null };
 /** A file in the composer, sent as `Draft.attachments`. `data` is standard base64. */
@@ -9,7 +11,7 @@ export const MAX_BYTES = 25 * 1024 * 1024;
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-/** Phosphor icon name for a file. */
+/** Icon name for a file (mapped to Tabler by iconClass). */
 export function fileIcon(mime: string, name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (mime === "application/pdf" || ext === "pdf") return "file-pdf";
@@ -60,8 +62,8 @@ export function attachmentButton(icon: string, name: string, size: number, data:
   // Composer chips only remove; files under a message open on click.
   const [open, close] = removable ? ["<span", "</span>"] : ['<button type="button"', "</button>"];
   return `<span class="attachment" ${attrs}>
-    ${open} class="attachment-open" title="${esc(name)}"><i class="ph ph-${icon}"></i>
+    ${open} class="attachment-open" title="${esc(name)}"><i class="${iconClass(icon)}"></i>
       <span class="attachment-name">${esc(name)}</span><span class="attachment-size">${formatSize(size)}</span>${close}
-    ${removable ? `<button type="button" class="attachment-remove" aria-label="Remove ${esc(name)}"><i class="ph-bold ph-x"></i></button>` : ""}
+    ${removable ? `<button type="button" class="attachment-remove" aria-label="Remove ${esc(name)}"><i class="ti ti-x"></i></button>` : ""}
   </span>`;
 }
