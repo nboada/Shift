@@ -11,6 +11,10 @@ use serde_json::Value;
 use std::time::Duration;
 
 const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
+const UPLOAD: &str = "https://gmail.googleapis.com/upload/gmail/v1/users/me";
+/// Raw messages up to this size are sent inline as base64 JSON; bigger ones use the upload endpoint.
+const MAX_JSON_RAW: usize = 3 * 1024 * 1024;
+const BOUNDARY: &str = "shift-upload-7d1f3a9c2b";
 
 // Gmail pads base64url bodies inconsistently.
 const B64: GeneralPurpose = GeneralPurpose::new(
@@ -59,9 +63,26 @@ pub struct Header {
     pub value: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Body {
     pub data: Option<String>,
+    /// Set for attachments stored apart from the message; fetch with `attachment`.
+    pub attachment_id: Option<String>,
+    #[serde(default)]
+    pub size: i64,
+}
+
+/// A file part of a message. Without `attachment_id` the bytes came inline in `data`.
+#[derive(Debug, PartialEq)]
+pub struct Attachment {
+    pub filename: String,
+    pub mime_type: String,
+    pub size: i64,
+    pub attachment_id: Option<String>,
+    /// Content-ID without angle brackets, for inline images referenced as `cid:` in the HTML.
+    pub content_id: Option<String>,
+    pub data: Option<Vec<u8>>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +120,39 @@ impl Message {
         }
         walk(self.payload.as_ref()?, mime)
     }
+
+    /// Every part with a filename, plus inline non-text parts referenced by Content-ID.
+    pub fn attachments(&self) -> Vec<Attachment> {
+        fn walk(p: &Part, out: &mut Vec<Attachment>) {
+            let content_id = p
+                .headers
+                .iter()
+                .find(|h| h.name.eq_ignore_ascii_case("Content-ID"))
+                .map(|h| h.value.trim().trim_matches(['<', '>']).to_string())
+                .filter(|c| !c.is_empty());
+            let file = !p.filename.is_empty()
+                || (content_id.is_some() && !p.mime_type.starts_with("text/"));
+            if file && !p.mime_type.starts_with("multipart/") {
+                let body = p.body.as_ref();
+                out.push(Attachment {
+                    filename: p.filename.clone(),
+                    mime_type: p.mime_type.clone(),
+                    size: body.map_or(0, |b| b.size),
+                    attachment_id: body.and_then(|b| b.attachment_id.clone()),
+                    content_id,
+                    data: body
+                        .and_then(|b| b.data.as_deref())
+                        .and_then(|d| B64.decode(d).ok()),
+                });
+            }
+            p.parts.iter().for_each(|c| walk(c, out));
+        }
+        let mut out = Vec::new();
+        if let Some(p) = &self.payload {
+            walk(p, &mut out);
+        }
+        out
+    }
 }
 
 pub struct Gmail<'a> {
@@ -129,6 +183,17 @@ fn message_json(raw: &[u8], thread_id: Option<&str>) -> Value {
         m["threadId"] = t.into();
     }
     m
+}
+
+/// multipart/related body for the upload endpoint: JSON metadata, then the RFC 5322 message.
+fn upload_body(meta: &Value, raw: &[u8]) -> Vec<u8> {
+    let mut body = format!(
+        "--{BOUNDARY}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{meta}\r\n--{BOUNDARY}\r\nContent-Type: message/rfc822\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(raw);
+    body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+    body
 }
 
 pub fn is_not_found(e: &anyhow::Error) -> bool {
@@ -295,10 +360,50 @@ impl Gmail<'_> {
         Ok(())
     }
 
+    /// Writes a message to `path`. `wrap` puts the message object where the endpoint wants it.
+    /// Gmail rejects JSON bodies over about 5 MB, so bigger messages go to the upload endpoint as message/rfc822.
+    async fn write_message(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        raw: &[u8],
+        thread_id: Option<&str>,
+        wrap: impl Fn(Value) -> Value,
+    ) -> Result<Value> {
+        if raw.len() <= MAX_JSON_RAW {
+            let (url, body) = (format!("{BASE}{path}"), wrap(message_json(raw, thread_id)));
+            return self
+                .call(|| self.http.request(method.clone(), &url).json(&body))
+                .await;
+        }
+        let mut meta = serde_json::json!({});
+        if let Some(t) = thread_id {
+            meta["threadId"] = t.into();
+        }
+        let (url, body) = (format!("{UPLOAD}{path}"), upload_body(&wrap(meta), raw));
+        self.call(|| {
+            self.http
+                .request(method.clone(), &url)
+                .query(&[("uploadType", "multipart")])
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    format!("multipart/related; boundary={BOUNDARY}"),
+                )
+                .timeout(Duration::from_secs(600))
+                .body(body.clone())
+        })
+        .await
+    }
+
     pub async fn send(&self, raw: &[u8], thread_id: Option<&str>) -> Result<()> {
-        let _: Value = self
-            .post("/messages/send", &message_json(raw, thread_id))
-            .await?;
+        self.write_message(
+            reqwest::Method::POST,
+            "/messages/send",
+            raw,
+            thread_id,
+            |m| m,
+        )
+        .await?;
         Ok(())
     }
 
@@ -309,22 +414,45 @@ impl Gmail<'_> {
         raw: &[u8],
         thread_id: Option<&str>,
     ) -> Result<String> {
-        let body = serde_json::json!({ "message": message_json(raw, thread_id) });
-        let v: Value = match id {
+        let wrap = |m| serde_json::json!({ "message": m });
+        let v = match id {
             Some(id) => {
-                let url = format!("{BASE}/drafts/{id}");
-                self.call(|| self.http.put(&url).json(&body)).await?
+                self.write_message(
+                    reqwest::Method::PUT,
+                    &format!("/drafts/{id}"),
+                    raw,
+                    thread_id,
+                    wrap,
+                )
+                .await?
             }
-            None => self.post("/drafts", &body).await?,
+            None => {
+                self.write_message(reqwest::Method::POST, "/drafts", raw, thread_id, wrap)
+                    .await?
+            }
         };
         Ok(v["id"].as_str().unwrap_or_default().to_string())
     }
 
     /// Sends a draft with its latest content; Gmail removes it from Drafts.
     pub async fn send_draft(&self, id: &str, raw: &[u8], thread_id: Option<&str>) -> Result<()> {
-        let body = serde_json::json!({ "id": id, "message": message_json(raw, thread_id) });
-        let _: Value = self.post("/drafts/send", &body).await?;
+        self.write_message(
+            reqwest::Method::POST,
+            "/drafts/send",
+            raw,
+            thread_id,
+            |m| serde_json::json!({ "id": id, "message": m }),
+        )
+        .await?;
         Ok(())
+    }
+
+    /// Bytes of an attachment stored apart from its message.
+    pub async fn attachment(&self, message: &str, id: &str) -> Result<Vec<u8>> {
+        let v: Value = self
+            .get(&format!("/messages/{message}/attachments/{id}"), &[])
+            .await?;
+        Ok(B64.decode(v["data"].as_str().unwrap_or_default())?)
     }
 
     pub async fn delete_draft(&self, id: &str) -> Result<()> {
@@ -353,15 +481,52 @@ mod tests {
     }
 
     #[test]
-    fn finds_nested_bodies_and_skips_attachments() {
+    fn upload_body_wraps_metadata_and_message() {
+        let body = String::from_utf8(upload_body(
+            &serde_json::json!({ "message": { "threadId": "t" } }),
+            b"Subject: hi\r\n\r\nbody",
+        ))
+        .unwrap();
+        assert!(
+            body.starts_with(&format!("--{BOUNDARY}\r\nContent-Type: application/json")),
+            "{body}"
+        );
+        assert!(body.contains(r#"{"message":{"threadId":"t"}}"#), "{body}");
+        assert!(
+            body.contains("Content-Type: message/rfc822\r\n\r\nSubject: hi"),
+            "{body}"
+        );
+        assert!(body.ends_with(&format!("--{BOUNDARY}--\r\n")), "{body}");
+    }
+
+    #[test]
+    fn finds_nested_bodies_and_attachments() {
         let json = r#"{"id":"m","payload":{"mimeType":"multipart/mixed","headers":[{"name":"Subject","value":"Hi"}],"parts":[
-            {"mimeType":"multipart/alternative","parts":[
-                {"mimeType":"text/plain","body":{"data":"aGVsbG8"}},
-                {"mimeType":"text/html","body":{"data":"PGI-aGk8L2I-"}}]},
-            {"mimeType":"text/plain","filename":"a.txt","body":{"data":"bm8"}}]}}"#;
+            {"mimeType":"multipart/related","parts":[
+                {"mimeType":"multipart/alternative","parts":[
+                    {"mimeType":"text/plain","body":{"data":"aGVsbG8"}},
+                    {"mimeType":"text/html","body":{"data":"PGI-aGk8L2I-"}}]},
+                {"mimeType":"image/png","headers":[{"name":"Content-ID","value":"<logo@x>"}],"body":{"attachmentId":"A1","size":120}}]},
+            {"mimeType":"text/plain","filename":"a.txt","body":{"data":"bm8","size":2}},
+            {"mimeType":"application/pdf","filename":"c.pdf","body":{"attachmentId":"A2","size":5000}}]}}"#;
         let m: Message = serde_json::from_str(json).unwrap();
         assert_eq!(m.header("subject"), "Hi");
         assert_eq!(m.body("text/plain").as_deref(), Some("hello"));
         assert_eq!(m.body("text/html").as_deref(), Some("<b>hi</b>"));
+        let a = m.attachments();
+        assert_eq!(
+            a.iter()
+                .map(|a| (a.filename.as_str(), a.mime_type.as_str(), a.size))
+                .collect::<Vec<_>>(),
+            [
+                ("", "image/png", 120),
+                ("a.txt", "text/plain", 2),
+                ("c.pdf", "application/pdf", 5000)
+            ]
+        );
+        assert_eq!(a[0].content_id.as_deref(), Some("logo@x"));
+        assert_eq!(a[0].attachment_id.as_deref(), Some("A1"));
+        assert_eq!(a[1].data.as_deref(), Some(&b"no"[..]));
+        assert_eq!(a[2].content_id, None);
     }
 }
