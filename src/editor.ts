@@ -3,7 +3,7 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { Menu } from "@tauri-apps/api/menu";
-import { Signature, extensions, hasMessage } from "./compose";
+import { Quote, Signature, extensions, hasMessage } from "./compose";
 import { renderSignaturePreview } from "./settings-ui";
 
 /** Whether a reply's quoted message is folded behind its ••• button (true until the user opens it). */
@@ -17,7 +17,7 @@ function findQuote(doc: PMNode): [number, PMNode, PMNode] | null {
   let found: [number, PMNode, PMNode] | null = null;
   let prev: [number, PMNode] | null = null;
   doc.forEach((node, offset) => {
-    if (node.type.name === "blockquote" && prev && /wrote:\s*$/.test(prev[1].textContent)) found = [prev[0], prev[1], node];
+    if (["blockquote", "quote"].includes(node.type.name) && prev && /wrote:\s*$/.test(prev[1].textContent)) found = [prev[0], prev[1], node];
     prev = [offset, node];
   });
   return found;
@@ -65,14 +65,28 @@ const QuoteFold = Extension.create({
 type Command = "bold" | "italic" | "underline" | "link" | "bulletList" | "orderedList" | "blockquote";
 
 /** Tiptap editor for the composer body, with the floating format bar that shows over a selection. */
-export function createEditor(element: HTMLElement, bar: HTMLElement, onChange: () => void, signatureHtml: () => string) {
+export function createEditor(
+  element: HTMLElement, bar: HTMLElement, onChange: () => void, signatureHtml: () => string,
+  renderQuote: (frame: HTMLIFrameElement, html: string) => void,
+) {
   const linkInput = bar.querySelector<HTMLInputElement>("input")!;
   let linking = false;
 
   const editor: Editor = new Editor({
     element,
     extensions: [
-      ...extensions.filter((e) => e !== Signature),
+      ...extensions.filter((e) => e !== Signature && e !== Quote),
+      Quote.extend({
+        addNodeView: () => ({ node }) => {
+          const dom = document.createElement("div");
+          dom.className = "compose-quote";
+          const frame = document.createElement("iframe");
+          frame.title = "Quoted email";
+          dom.append(frame);
+          renderQuote(frame, node.attrs.html);
+          return { dom };
+        },
+      }),
       QuoteFold,
       Signature.extend({
         addNodeView: () => () => {
