@@ -48,3 +48,8 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# Proc macros and build scripts are dlopened at build time, and dyld on macOS 27 refuses a stripped one whose string
+# table lands 4-byte aligned ("mis-aligned LINKEDIT string pool"), so only the shipped binary is stripped.
+[profile.release.build-override]
+strip = false
