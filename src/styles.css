@@ -306,8 +306,8 @@ button.primary:disabled { opacity: 0.6; }
   font-weight: 500;
   color: var(--sidebar-muted);
 }
-.label-add { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--sidebar-muted); opacity: 0.7; transition: opacity 0.12s, background-color 0.12s; }
-.label-add i { font-size: 15px; }
+.label-add { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; line-height: 1; border-radius: 6px; color: var(--sidebar-muted); opacity: 0.7; transition: opacity 0.12s, background-color 0.12s; }
+.label-add i { display: block; font-size: 15px; line-height: 1; }
 .mailboxes h3:hover .label-add, .label-add:focus-visible { opacity: 1; }
 .label-add:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
 .mailboxes a {
@@ -327,16 +327,9 @@ button.primary:disabled { opacity: 0.6; }
 .mailboxes a:hover { background: var(--sidebar-hover); }
 .mailboxes a.active { background: var(--sidebar-selected); color: var(--sidebar-strong); font-weight: 600; box-shadow: var(--pane-shadow); }
 .mailboxes a.active small { color: var(--sidebar-strong); }
-/* Gmail-style coloured dot per label, picked from the label name. */
+/* A label's Gmail colour (from the generated #label-colors stylesheet); labels without one get a grey outline. */
 .label-dot { flex: none; width: 10px; height: 10px; margin: 0 3px 0 4px; border-radius: 3px; }
-.label-dot.l0 { background: #f59e0b; }
-.label-dot.l1 { background: #22c55e; }
-.label-dot.l2 { background: #3b82f6; }
-.label-dot.l3 { background: #a855f7; }
-.label-dot.l4 { background: #ec4899; }
-.label-dot.l5 { background: #14b8a6; }
-.label-dot.l6 { background: #ef4444; }
-.label-dot.l7 { background: #eab308; }
+.label-dot.none { box-shadow: inset 0 0 0 1.5px var(--muted); opacity: 0.7; }
 
 .account {
   display: flex;
@@ -503,14 +496,16 @@ button.primary:disabled { opacity: 0.6; }
   display: grid;
   grid-template-columns: 8px 32px minmax(0, 1fr) auto;
   column-gap: 10px;
-  padding: 11px 12px 11px 4px;
+  padding: 8px 12px 8px 4px;
   border-radius: 12px;
 }
 .threads li[data-id] { margin-top: 3px; }
 .threads li[data-id] { position: relative; }
-/* Quick delete on hover; inherits the row's hover/selected background so it covers the snippet beneath. */
-.threads .row-trash { position: absolute; right: 8px; bottom: 8px; display: none; background: inherit; }
-.threads li[data-id]:hover .row-trash { display: inline-grid; }
+/* Quick reply, archive and delete on hover; inherits the row's hover/selected background so it covers the snippet beneath. */
+.threads .row-actions { position: absolute; right: 8px; bottom: 7px; display: none; background: inherit; }
+.threads li[data-id]:hover .row-actions { display: flex; }
+/* Shorter than a toolbar button so they stay on the snippet line, clear of the subject and its label chips. */
+.threads .row-actions button.icon { width: 26px; height: 22px; }
 .threads li[data-id]:hover { background: var(--hover); }
 .threads li.selected { box-shadow: var(--pane-shadow); }
 .threads li.selected { background: var(--selected); }
@@ -539,7 +534,12 @@ button.primary:disabled { opacity: 0.6; }
   vertical-align: 1px;
 }
 .threads .date { grid-column: 4; color: var(--muted); font-size: 12px; white-space: nowrap; }
-.threads .subject { grid-column: 3 / 5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.threads .subject { grid-column: 3 / 5; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.threads .subject-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-labels { flex: none; display: flex; gap: 4px; }
+.row-label { display: inline-flex; align-items: center; gap: 5px; max-width: 110px; padding: 1px 7px; border-radius: 6px; background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 500; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-label.more { padding: 1px 6px; }
+.threads li.selected .row-label:not([data-color]) { background: var(--card); }
 .threads li.unread .subject { font-weight: 600; }
 .threads .snippet {
   grid-column: 3 / 5;
@@ -766,6 +766,8 @@ body.resizing iframe { pointer-events: none; }
 .cu-loading { display: grid; justify-items: center; gap: 6px; padding: 48px 12px; text-align: center; color: var(--muted); }
 .cu-loading p { margin: 6px 0 0; color: var(--text); font-weight: 500; }
 .cu-loading small { max-width: 380px; line-height: 1.5; }
+.cu-loading .cu-minimize { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; }
+.cu-loading .cu-minimize i { font-size: 15px; color: var(--muted); }
 .cu-loading i { font-size: 30px; color: var(--brand); }
 .cu-spinner { width: 26px; height: 26px; border: 2.5px solid var(--line); border-top-color: var(--brand); border-radius: 50%; animation: spin 0.8s linear infinite; }
 .cu-spinner.small { flex: none; width: 18px; height: 18px; border-width: 2px; }
@@ -904,6 +906,10 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .compose-editor ul, .compose-editor ol { margin: 0; padding-left: 24px; }
 .compose-editor blockquote { margin: 4px 0 4px 2px; padding-left: 12px; border-left: 3px solid var(--card-line); color: var(--muted); }
 .compose-editor a { color: var(--accent); }
+/* A reply's quoted message, folded behind a ••• button like the reader's (the quote is still sent). */
+.compose-editor .quote-folded { display: none; }
+.compose-editor .quote-toggle { display: flex; align-items: center; justify-content: center; margin: 12px 0; padding: 0 0 2px 1px; width: 32px; height: 16px; border: 0; border-radius: 8px; background: var(--hover); color: var(--muted); font: 600 10px/1 -apple-system, system-ui, sans-serif; letter-spacing: 1px; cursor: pointer; }
+.compose-editor .quote-toggle:hover { background: var(--line); color: var(--text); }
 .compose-editor:not(.has-message) > p.is-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; color: var(--muted); pointer-events: none; }
 .compose-signature { margin: 2px 0; border-radius: 6px; overflow: hidden; }
 .compose-signature.ProseMirror-selectednode { box-shadow: 0 0 0 2px var(--accent); }
@@ -1106,7 +1112,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 :root[data-layout="wide"] .threads li.unread .subject { font-weight: 650; }
 :root[data-layout="wide"] .threads .snippet { order: 2; flex: 1; min-width: 0; display: block; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
 :root[data-layout="wide"] .threads .date { order: 3; flex: none; margin-left: 12px; font-size: 11.5px; font-weight: 500; }
-:root[data-layout="wide"] .threads .row-trash { top: 50%; bottom: auto; transform: translateY(-50%); }
+:root[data-layout="wide"] .threads .row-actions { top: 50%; bottom: auto; transform: translateY(-50%); }
 :root[data-reduce-motion="true"] *, :root[data-reduce-motion="true"] *::before { transition: none !important; animation: none !important; }
 
 /* swipes: the row slides and tints with the colour of the action it will run */

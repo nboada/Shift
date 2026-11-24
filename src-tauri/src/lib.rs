@@ -707,7 +707,7 @@ async fn apply_label_rules(
             ai::LABEL,
             &user,
             Some(&schema),
-            Some("low"),
+            Some(ai::SORTING_EFFORT),
         )
         .await?,
     )?;
@@ -829,7 +829,7 @@ async fn ai_cleanup(
                     ai::CLEANUP,
                     &serde_json::to_string(&emails).map_err(anyhow::Error::from)?,
                     Some(&schema),
-                    Some("low"),
+                    Some(ai::SORTING_EFFORT),
                 )
                 .await?,
             )?;
@@ -894,6 +894,22 @@ fn set_open_at_login(app: AppHandle, enabled: bool) -> R<()> {
 /// Restarts into the update `spawn_update_checks` installed.
 #[tauri::command]
 fn restart_app(app: AppHandle) {
+    // macOS: relaunch through LaunchServices (`open`) once this process has exited. Tauri's restart starts the new
+    // binary as a child of this one, which the Dock shows as a second Shift icon next to the pinned one.
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(Path::to_path_buf))
+    {
+        let script = format!(
+            "while kill -0 {} 2>/dev/null; do sleep 0.1; done; open \"$0\"",
+            std::process::id()
+        );
+        if std::process::Command::new("/bin/sh").args(["-c", &script]).arg(&bundle).spawn().is_ok() {
+            app.exit(0);
+            return;
+        }
+    }
     app.restart();
 }
 

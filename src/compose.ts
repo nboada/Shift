@@ -34,6 +34,8 @@ export function hasMessage(doc: PMNode) {
   for (let i = 0; i < doc.childCount; i++) {
     const node = doc.child(i);
     if (node.type.name === "signature" || node.type.name === "blockquote" || node.textContent === "-- ") return false;
+    // A reply's "On … wrote:" line, right before its quote.
+    if (/wrote:\s*$/.test(node.textContent) && doc.maybeChild(i + 1)?.type.name === "blockquote") return false;
     if (node.textContent.trim() || node.type.name !== "paragraph") return true;
   }
   return false;

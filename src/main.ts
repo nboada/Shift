@@ -12,7 +12,7 @@ import {
 import { closeSettings, initSettings, openSettings, settingsOpen } from "./settings-ui";
 import { arrange } from "./sidebar";
 import { docToText, emailHtml, textToHtml } from "./compose";
-import { createEditor } from "./editor";
+import { createEditor, foldReplyQuote } from "./editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
 import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
 import { FOLD_CSS, foldQuote } from "./quote";
@@ -162,10 +162,14 @@ const isHex = (c: string | null): c is string => !!c && /^#[0-9a-f]{6}$/i.test(c
 // Gmail colours go through a generated stylesheet (no inline styles); only #rrggbb values get into it.
 function labelColorCss(colors: string[]) {
   const hexes = new Set([...colors, ...LABEL_COLORS.map((c) => c[1])].filter(isHex).map((c) => c.toLowerCase()));
-  $("#label-colors").textContent = [...hexes].map((h) => `.label-dot[data-color="${h.slice(1)}"] { background: ${h}; }`).join("\n");
+  // Dots take the colour as is; list chips a faded tint of it with the name in the colour, mixed toward the text colour
+  // so pale ones (yellow, mint) stay readable.
+  $("#label-colors").textContent = [...hexes].map((h) => `.label-dot[data-color="${h.slice(1)}"] { background: ${h}; }
+.row-label[data-color="${h.slice(1)}"] { background: color-mix(in srgb, ${h} 16%, transparent); color: color-mix(in srgb, ${h} 70%, var(--text)); }`).join("\n");
 }
-const labelDot = (name: string, color: string | null) =>
-  isHex(color) ? `<span class="label-dot" data-color="${color.slice(1).toLowerCase()}"></span>` : `<span class="label-dot l${hash(name) % 8}"></span>`;
+/** A label's Gmail colour, or a plain grey dot when it has none, as in Gmail (a made-up colour looked like a real one). */
+const labelDot = (_name: string, color: string | null) =>
+  isHex(color) ? `<span class="label-dot" data-color="${color.slice(1).toLowerCase()}"></span>` : `<span class="label-dot none"></span>`;
 
 /** Unread Inbox mail across every account in the unified view, on the Dock icon, whichever account is on screen. */
 async function updateDockBadge() {
@@ -265,6 +269,23 @@ function renderViewButton() {
   btn.querySelector("i")!.className = smart ? "ti ti-stack-2" : "ti ti-list";
 }
 
+/** The thread's own labels as small chips after the subject: two at most, then "+N". The label being viewed is left out. */
+function rowLabels(t: Thread) {
+  const ids = t.labels.split(" ");
+  const own = (accountLabels.get(t.account) ?? []).filter((l) => ids.includes(l.id) && mailbox !== l.id && mailbox !== `name:${l.name}`);
+  if (!own.length) return "";
+  const chips = own.slice(0, 2).map((l) => `<span class="row-label"${isHex(l.color) ? ` data-color="${l.color.slice(1).toLowerCase()}"` : ""}>${esc(l.name)}</span>`).join("");
+  return `<span class="row-labels">${chips}${own.length > 2 ? `<span class="row-label more">+${own.length - 2}</span>` : ""}</span>`;
+}
+
+/** Hover buttons on a row: reply, archive (Inbox mail only) and delete, each with its shortcut in the tooltip. */
+function rowActions(t: Thread) {
+  const button = (action: string, label: string, icon: string) =>
+    `<button type="button" class="icon" data-row-action="${action}" data-tip="${esc(keyLabel(action) ? `${label} (${keyLabel(action)})` : label)}" aria-label="${label}">${iconHtml(icon)}</button>`;
+  return `<span class="row-actions">${button("reply", "Reply", "arrow-bend-up-left")}${
+    t.labels.split(" ").includes("INBOX") ? button("archive", "Archive", "archive") : ""}${button("trash", "Delete", "trash")}</span>`;
+}
+
 function threadRow(t: Thread) {
   const on = multiPicked() ? picked.has(t.id) : t.id === selected;
   return `<li data-id="${t.id}" role="option" aria-selected="${on}" aria-label="${esc(`${t.unread ? "Unread, " : ""}${displayName(t.sender)}, ${t.subject || "(no subject)"}`)}" class="${t.unread ? "unread" : ""} ${on ? "selected" : ""}">
@@ -272,9 +293,9 @@ function threadRow(t: Thread) {
         <span class="avatar-ring${multi() ? ` acct-${accountSettings(t.account).color}` : ""}" ${multi() ? `data-tip="${esc(accountName(t.account))}"` : ""}>${avatar(t.sender)}</span>
         <span class="from">${esc(displayName(t.sender) || "(no sender)")}${t.count > 1 ? `<em>${t.count}</em>` : ""}${t.starred ? '<i class="ti ti-pinned pin"></i>' : ""}</span>
         <span class="date">${shortDate(t.date)}</span>
-        <span class="subject">${esc(t.subject || "(no subject)")}</span>
+        <span class="subject"><span class="subject-text">${esc(t.subject || "(no subject)")}</span>${rowLabels(t)}</span>
         <span class="snippet">${esc(decodeEntities(t.snippet))}</span>
-        <button class="icon row-trash" data-tip="${keyLabel("trash") ? `Delete (${keyLabel("trash")})` : "Delete"}" aria-label="Delete"><i class="ti ti-trash"></i></button>
+        ${mailbox === "SCHEDULED" ? "" : rowActions(t)}
       </li>`;
 }
 
@@ -1237,6 +1258,7 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
   subjectInput.value = fields.subject ?? "";
   // setContent leaves the selection at the end, which selects the signature node.
   editor.chain().setContent(fields.body ?? "", { emitUpdate: false }).setTextSelection(0).run();
+  foldReplyQuote(editor);
   $("#compose-title").textContent = compose.title;
   $("#compose-error").textContent = "";
   draftStatus(compose.draftId ? "Saved" : "");
@@ -1632,6 +1654,12 @@ async function forwardAttachments(m: Message, account: string) {
   const state = compose;
   for (const a of m.attachments) {
     const name = a.filename || "attachment";
+    // Same 25 MB limit as files added by hand, checked before downloading; smaller files after it can still fit.
+    const tooBig = checkSize(state?.attachments ?? [], a.size);
+    if (tooBig) {
+      $("#compose-error").textContent = `${name} wasn't attached. ${tooBig}`;
+      continue;
+    }
     const data = await invoke<string>("attachment_data", { account, message: m.id, idx: a.idx }).catch(() => null);
     if (compose !== state || !state) return;
     if (data === null) {
@@ -1749,7 +1777,8 @@ threadList.addEventListener("click", (e) => {
   if (suppressClick) return void (suppressClick = false);
   const li = (e.target as Element).closest<HTMLElement>("li[data-id]");
   if (!li) return;
-  if ((e.target as Element).closest(".row-trash")) act("trash", li.dataset.id);
+  const rowAction = (e.target as Element).closest<HTMLElement>("[data-row-action]")?.dataset.rowAction;
+  if (rowAction) act(rowAction, li.dataset.id);
   else if ((e.metaKey || e.shiftKey) && mailbox !== "SCHEDULED") pick(li.dataset.id!, e.shiftKey);
   else openThread(li.dataset.id!);
 });

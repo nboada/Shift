@@ -104,7 +104,8 @@ function render() {
   }
   if (!run.result) {
     body().innerHTML = `<div class="cu-loading"><span class="cu-spinner"></span><p>Sorting your Inbox with AI…</p>
-      <small>This reads the sender, subject and preview of your newest Inbox emails. It can take a minute: close this and keep working, and Shift lets you know when it's done.</small></div>`;
+      <small>This reads the sender, subject and preview of your newest Inbox emails. It can take a minute: minimise this and keep working, and Shift lets you know when it's done.</small>
+      <button type="button" class="secondary cu-minimize" data-cu-close>${iconHtml("arrows-diagonal-minimize-2")}Minimise</button></div>`;
     return;
   }
   const items = run.result;

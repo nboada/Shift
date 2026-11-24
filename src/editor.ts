@@ -1,7 +1,66 @@
 import { Editor, Extension } from "@tiptap/core";
+import type { Node as PMNode } from "@tiptap/pm/model";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { Menu } from "@tauri-apps/api/menu";
 import { Signature, extensions, hasMessage } from "./compose";
 import { renderSignaturePreview } from "./settings-ui";
+
+/** Whether a reply's quoted message is folded behind its ••• button (true until the user opens it). */
+const quoteFoldKey = new PluginKey<boolean>("quoteFold");
+
+/** Folds the quoted message again, for a newly opened reply. */
+export const foldReplyQuote = (editor: Editor) => editor.view.dispatch(editor.state.tr.setMeta(quoteFoldKey, true));
+
+/** The reply's quote: the last top-level blockquote and the "On … wrote:" line before it, as [from, header, quote]. */
+function findQuote(doc: PMNode): [number, PMNode, PMNode] | null {
+  let found: [number, PMNode, PMNode] | null = null;
+  let prev: [number, PMNode] | null = null;
+  doc.forEach((node, offset) => {
+    if (node.type.name === "blockquote" && prev && /wrote:\s*$/.test(prev[1].textContent)) found = [prev[0], prev[1], node];
+    prev = [offset, node];
+  });
+  return found;
+}
+
+/**
+ * Shows a reply's quoted history as a ••• button, as the reader does, and hides it until clicked. Display only: the
+ * quote stays in the document, so it is still sent and saved with the draft.
+ */
+const QuoteFold = Extension.create({
+  name: "quoteFold",
+  addProseMirrorPlugins: () => [
+    new Plugin<boolean>({
+      key: quoteFoldKey,
+      state: { init: () => true, apply: (tr, folded) => tr.getMeta(quoteFoldKey) ?? folded },
+      props: {
+        decorations(state) {
+          const quote = findQuote(state.doc);
+          if (!quote) return null;
+          const [from, header, block] = quote;
+          const folded = quoteFoldKey.getState(state)!;
+          const toggle = Decoration.widget(from, (view) => {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "quote-toggle";
+            b.textContent = "•••";
+            b.title = folded ? "Show quoted text" : "Hide quoted text";
+            b.setAttribute("aria-expanded", String(!folded));
+            b.contentEditable = "false";
+            b.addEventListener("mousedown", (e) => e.preventDefault());
+            b.addEventListener("click", () => view.dispatch(view.state.tr.setMeta(quoteFoldKey, !folded)));
+            return b;
+          }, { side: -1, key: folded ? "quote-folded" : "quote-open", ignoreSelection: true, stopEvent: () => true });
+          const hidden = folded
+            ? [Decoration.node(from, from + header.nodeSize, { class: "quote-folded" }),
+              Decoration.node(from + header.nodeSize, from + header.nodeSize + block.nodeSize, { class: "quote-folded" })]
+            : [];
+          return DecorationSet.create(state.doc, [toggle, ...hidden]);
+        },
+      },
+    }),
+  ],
+});
 
 type Command = "bold" | "italic" | "underline" | "link" | "bulletList" | "orderedList" | "blockquote";
 
@@ -14,6 +73,7 @@ export function createEditor(element: HTMLElement, bar: HTMLElement, onChange: (
     element,
     extensions: [
       ...extensions.filter((e) => e !== Signature),
+      QuoteFold,
       Signature.extend({
         addNodeView: () => () => {
           const dom = document.createElement("div");
