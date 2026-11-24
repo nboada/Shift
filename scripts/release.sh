@@ -47,6 +47,12 @@ bun run tauri build --target universal-apple-darwin
 OUT=src-tauri/target/universal-apple-darwin/release/bundle
 DMG=$(ls "$OUT"/dmg/*.dmg)
 TARBALL=$(ls "$OUT"/macos/*.app.tar.gz)
+# A stripped binary can come out with a string table dyld refuses (see build-override in Cargo.toml); that app wouldn't
+# open, and an update to it couldn't be undone by another update.
+if ! dyld_info -platform "$OUT"/macos/*.app/Contents/MacOS/* >/dev/null; then
+  echo "error: dyld won't load the built binary; don't ship it" >&2
+  exit 1
+fi
 
 # The .app inside is already notarized; the disk image gets its own ticket so it opens cleanly offline too.
 codesign --force --sign "$IDENTITY" "$DMG"
