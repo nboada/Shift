@@ -684,9 +684,10 @@ body.resizing iframe { pointer-events: none; }
   object-fit: cover;
   background: #fff;
 }
+.avatar img.pending { visibility: hidden; }
 /* Logo avatars: white base so the initials colour can't fringe the edge, ring drawn above the image. */
-.avatar:has(img) { background: #fff; color: transparent; }
-.avatar:has(img)::after {
+.avatar.logo { background: #fff; color: transparent; }
+.avatar.logo::after {
   content: "";
   position: absolute;
   inset: 0;

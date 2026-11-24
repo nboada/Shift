@@ -202,20 +202,51 @@ function avatar(addr: string) {
   const initials = name.split(/[\s.@_-]+/).filter((w) => /\w/.test(w)).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
   const color = hash(email) % 8;
   const domain = email.split("@")[1] ?? "";
-  const logo = domain && !PERSONAL_DOMAINS.has(domain)
-    ? `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(siteDomain(domain))}&sz=64" alt="" loading="lazy">`
-    : "";
-  return `<span class="avatar c${color}">${esc(initials)}${logo}</span>`;
+  const site = domain && !PERSONAL_DOMAINS.has(domain) ? siteDomain(domain) : "";
+  const known = site ? logos.get(site) : false;
+  // Initials show until a logo has loaded once; after that the domain's logo is drawn straight away.
+  const logo = known === false ? ""
+    : `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(site)}&sz=64" alt="" data-site="${esc(site)}"${known ? "" : ' class="pending"'}>`;
+  return `<span class="avatar c${color}${known ? " logo" : ""}">${esc(initials)}${logo}</span>`;
+}
+
+/** Which sites have a logo, remembered across launches so the list never waits on the favicon service to decide. */
+const logos = new Map<string, boolean>(Object.entries((() => {
+  try {
+    return JSON.parse(localStorage.getItem("avatar-logos") ?? "{}") as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+})()));
+let logosSave = 0;
+function rememberLogo(site: string, has: boolean) {
+  if (logos.get(site) === has) return;
+  logos.set(site, has);
+  clearTimeout(logosSave);
+  logosSave = window.setTimeout(() => {
+    try {
+      localStorage.setItem("avatar-logos", JSON.stringify(Object.fromEntries(logos)));
+    } catch {
+      // Storage full or blocked: the logos just get looked up again next launch.
+    }
+  }, 1000);
 }
 
 // Google answers unknown domains with a 16px globe, so anything that small falls back to initials.
 document.addEventListener("load", (e) => {
   const img = e.target;
-  if (img instanceof HTMLImageElement && img.parentElement?.classList.contains("avatar") && img.naturalWidth < 32) img.remove();
+  if (!(img instanceof HTMLImageElement) || !img.dataset.site) return;
+  const has = img.naturalWidth >= 32;
+  rememberLogo(img.dataset.site, has);
+  if (!has) return img.remove();
+  img.classList.remove("pending");
+  img.parentElement?.classList.add("logo");
 }, true);
 document.addEventListener("error", (e) => {
   const img = e.target;
-  if (img instanceof HTMLImageElement && img.parentElement?.classList.contains("avatar")) img.remove();
+  if (!(img instanceof HTMLImageElement) || !img.dataset.site) return;
+  rememberLogo(img.dataset.site, false);
+  img.remove();
 }, true);
 
 type Section = "pinned" | "new" | "people" | "notifications" | "seen";
