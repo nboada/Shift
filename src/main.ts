@@ -16,7 +16,7 @@ import { docToText, emailHtml, textToHtml } from "./compose";
 import { createEditor, foldReplyQuote } from "./editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
 import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
-import { FOLD_CSS, foldQuote } from "./quote";
+import { FOLD_CSS } from "./quote";
 import DOMPurify from "dompurify";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
@@ -347,7 +347,7 @@ function decodeEntities(s: string) {
 
 type Scheduled = {
   id: number; account: string; draft_id: string | null; send_at: number;
-  draft: { to: string; attachments?: OutFile[] }; ui: { fields: Fields; opts: ComposeOptions };
+  draft: { to: string }; ui: { fields: Fields; opts: ComposeOptions };
 };
 /** Rows of the Scheduled view by list id; they are emails waiting in this Mac, not Gmail threads. */
 const scheduledRows = new Map<string, Scheduled>();
@@ -426,14 +426,6 @@ const EMAIL_CSS = `<style>
 // !important so it beats the inline font-family most HTML emails set; code keeps its monospace.
 const UNIFORM_FONT_CSS = `<style>body :not(pre, code, kbd, samp, pre *, code *) { font-family: -apple-system, system-ui, sans-serif !important; }</style>`;
 
-/** Body text arrives at 11–16px depending on the sender's client; bring that band to 14px, leave headings and fine print. */
-function evenTextSize(doc: Document) {
-  // Measure everything before changing anything, so em/% sizes are judged against the sender's original sizes.
-  const els = [...doc.body.querySelectorAll<HTMLElement>("*")];
-  const sizes = els.map((el) => parseFloat(doc.defaultView!.getComputedStyle(el).fontSize));
-  els.forEach((el, i) => sizes[i] >= 12 && sizes[i] <= 17 && el.style.setProperty("font-size", "14px", "important"));
-}
-
 /** Something in the email that would load from the network: shown as the "Load images" bar. */
 const REMOTE = `[src^="http" i], [src^="//"], [srcset], [poster], [background], image[href], [style*="url(" i]`;
 
@@ -457,52 +449,39 @@ function cleanEmail(html: string): { html: string; remote: boolean } {
 function mountEmail(frame: HTMLIFrameElement, html: string, images = settings.appearance.loadRemoteImages): boolean {
   const clean = cleanEmail(html);
   const hidden = !images && clean.remote;
-  // WebKit drops our click listener in a frame without allow-scripts, so scripts are allowed by the sandbox
-  // and blocked by a CSP that comes before any email markup. allow-same-origin lets us size the frame.
-  // The frame also inherits the app's CSP from index.html; this one only tightens it. With remote images off,
-  // network loads are blocked whatever the markup looks like, not only when we spot a remote URL.
-  const csp = `script-src 'none'; form-action 'none'${images ? "" : "; img-src data: blob:; media-src 'none'; font-src data:"}`;
-  frame.setAttribute("sandbox", "allow-same-origin allow-scripts");
-  // Hidden until it's sized and its text evened out, so the default 150px frame and the sender's raw fonts never show.
+  // No allow-same-origin: the email gets an opaque origin of its own, so nothing in it can reach the app. Scripts are
+  // allowed only for public/email-frame.js, which reports size, links and keys by postMessage (see the listener
+  // below); the CSP comes before any email markup and names that one file. The frame also inherits the app's CSP from
+  // index.html; this one only tightens it. With remote images off, network loads are blocked whatever the markup.
+  const script = new URL("/email-frame.js", location.href).href;
+  const csp = `default-src 'none'; script-src ${script}; style-src 'unsafe-inline'; form-action 'none'; ${
+    images ? "img-src data: blob: https: http:; media-src https: http:; font-src data: https: http:" : "img-src data: blob:; font-src data:"}`;
+  frame.setAttribute("sandbox", "allow-scripts");
+  // Hidden until it reports its height, so the default 150px frame and the sender's raw fonts never show.
   frame.classList.add("loading");
-  frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="${csp}">` + EMAIL_CSS + clean.html + (settings.appearance.uniformEmailFont ? UNIFORM_FONT_CSS : "");
-  // onload, not addEventListener: loading images re-mounts the frame and must replace the handler, not add one.
-  frame.onload = () => {
-    const doc = frame.contentDocument;
-    if (!doc) return frame.classList.remove("loading");
-    try {
-      if (settings.appearance.uniformEmailFont) evenTextSize(doc);
-      foldQuote(doc);
-    } finally {
-      // Shown even if evening out the text or folding the quote fails on odd markup.
-      frame.classList.remove("loading");
-    }
-    // The <html> box is as tall as the content (scrollHeight never drops below the frame's own height), so the frame
-    // also shrinks when the quote folds away. Only a real change is written, so the observer doesn't loop.
-    const fit = () => {
-      const h = `${Math.ceil(Math.max(doc.documentElement.getBoundingClientRect().height, doc.body.scrollHeight))}px`;
-      if (frame.style.height !== h) frame.style.height = h;
-    };
-    fit();
-    new ResizeObserver(() => requestAnimationFrame(fit)).observe(doc.body);
-    // Every link opens in the browser, never inside the frame: HTML links, image-map areas and SVG links alike.
-    doc.addEventListener("click", (e) => {
-      const a = (e.target as Element).closest?.("a, area");
-      if (!a) return;
-      e.preventDefault();
-      const raw = a.getAttribute("href") ?? a.getAttributeNS("http://www.w3.org/1999/xlink", "href") ?? "";
-      const url = (() => { try { return new URL(raw, "about:blank").href; } catch { return ""; } })();
-      if (/^(https?|mailto):/i.test(url)) openUrl(url);
-    });
-    // Keys pressed after clicking into the email land in the frame; hand them to the app's shortcuts.
-    doc.addEventListener("keydown", (e) => {
-      if ((e.target as Element).closest?.("input, textarea, select, [contenteditable]")) return;
-      const fwd = new KeyboardEvent("keydown", { key: e.key, code: e.code, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, bubbles: true, cancelable: true });
-      if (!document.body.dispatchEvent(fwd)) e.preventDefault();
-    });
-  };
+  frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script defer src="${script}"${
+    settings.appearance.uniformEmailFont ? " data-even=\"1\"" : ""}></script>` + EMAIL_CSS + clean.html + (settings.appearance.uniformEmailFont ? UNIFORM_FONT_CSS : "");
+  // Shown even if the frame's script never reports (it failed on odd markup, or didn't load).
+  frame.onload = () => setTimeout(() => frame.classList.remove("loading"), 300);
   return hidden;
 }
+
+// Messages from email frames (public/email-frame.js). Only a frame of ours is listened to, matched by its window.
+window.addEventListener("message", (e) => {
+  if (!e.data?.shift) return;
+  const frame = [...document.querySelectorAll<HTMLIFrameElement>(".message iframe")].find((f) => f.contentWindow === e.source);
+  if (!frame) return;
+  const d = e.data as { type: string; height?: number; url?: string } & Partial<KeyboardEventInit>;
+  if (d.type === "height" && typeof d.height === "number") {
+    frame.style.height = `${d.height}px`;
+    frame.classList.remove("loading");
+  } else if (d.type === "link" && typeof d.url === "string" && /^(https?|mailto):/i.test(d.url)) {
+    openUrl(d.url);
+  } else if (d.type === "key" && typeof d.key === "string") {
+    const { key, code, metaKey, ctrlKey, altKey, shiftKey } = d;
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key, code, metaKey, ctrlKey, altKey, shiftKey, bubbles: true, cancelable: true }));
+  }
+});
 
 /** Under the subject: which labels AI auto-label added to this email, with Undo. */
 async function showAiLabels(account: string, id: string) {
@@ -552,11 +531,6 @@ function toggleMessage(header: HTMLElement) {
   const closed = el.getBoundingClientRect().height;
   if (opening) {
     el.classList.remove("collapsed");
-    // A frame that loaded while hidden was sized without layout; size it now so the animation ends at the true height.
-    for (const f of el.querySelectorAll("iframe")) {
-      const h = f.contentDocument?.documentElement.scrollHeight;
-      if (h) f.style.height = `${h}px`;
-    }
   }
   const to = opening ? el.getBoundingClientRect().height : closed;
   if (settings.accessibility.reduceMotion || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -700,16 +674,15 @@ function attachmentStrip(m: Message, account: string) {
     .join("")}</div>`;
 }
 
-/** Swaps `cid:` image sources for the attachment's bytes once the email has loaded. */
+/** Swaps `cid:` image sources for the attachment's bytes once the email has loaded (email-frame.js does the swap). */
 function showInlineImages(frame: HTMLIFrameElement, m: Message, account: string) {
-  const inline = m.attachments.filter((a) => a.content_id);
+  const html = m.html?.toLowerCase() ?? "";
+  const inline = m.attachments.filter((a) => a.content_id && html.includes(`cid:${a.content_id.toLowerCase()}`));
   if (!inline.length) return;
   frame.addEventListener("load", () => {
-    for (const img of frame.contentDocument!.querySelectorAll<HTMLImageElement>('img[src^="cid:" i]')) {
-      const a = inline.find((a) => a.content_id === decodeURIComponent(img.getAttribute("src")!.slice(4)));
-      if (!a) continue;
+    for (const a of inline) {
       invoke<string>("attachment_data", { account, message: m.id, idx: a.idx })
-        .then((data) => (img.src = `data:${a.mime};base64,${data}`))
+        .then((data) => frame.contentWindow?.postMessage({ type: "cid", cid: a.content_id, src: `data:${a.mime};base64,${data}` }, "*"))
         .catch(() => {});
     }
   }, { once: true });
@@ -743,11 +716,15 @@ function clearReader() {
 
 // Takes the thread itself, not its id: archive/trash drop it from `threads` first, and looking it up again
 // would fall back to the default account and change the wrong mailbox.
-async function modify(t: Thread, add: string[], remove: string[], trash = false) {
+function changeLocally(t: Thread, add: string[], remove: string[]) {
   if (add.includes("UNREAD")) t.unread = true;
   if (remove.includes("UNREAD")) t.unread = false;
   if (add.includes("STARRED")) t.starred = true;
   if (remove.includes("STARRED")) t.starred = false;
+}
+
+async function modify(t: Thread, add: string[], remove: string[], trash = false) {
+  changeLocally(t, add, remove);
   renderThreads();
   try {
     await invoke("modify", { account: t.account, id: t.id, add, remove, trash });
@@ -767,14 +744,34 @@ function undoableAll(list: Thread[], add: string[], remove: string[], trash = fa
   const changes = list.map((t) => ({ t, add, remove: remove.filter((l) => t.labels.split(" ").includes(l)) }));
   undoStack.push(changes);
   if (undoStack.length > 50) undoStack.shift();
-  return Promise.all(changes.map((c) => modify(c.t, c.add, c.remove, trash)));
+  return applyChanges(changes, trash);
 }
 function undo() {
   const last = undoStack.pop();
   if (!last) return toast("Nothing to undo");
   toast("Undone");
   // The backend's mail-changed refresh puts the threads back in the list.
-  return Promise.all(last.map((u) => modify(u.t, u.remove, u.add)));
+  return applyChanges(last.map((u) => ({ t: u.t, add: u.remove, remove: u.add })));
+}
+
+/** Label changes for several threads: one `modify_many` (Gmail's batch call) per account and change. */
+function applyChanges(changes: { t: Thread; add: string[]; remove: string[] }[], trash = false) {
+  const groups = new Map<string, typeof changes>();
+  for (const c of changes) {
+    const key = JSON.stringify([c.t.account, c.add, c.remove]);
+    groups.set(key, [...(groups.get(key) ?? []), c]);
+  }
+  return Promise.all([...groups.values()].map(async (group) => {
+    const [{ t, add, remove }] = group;
+    if (group.length === 1) return modify(t, add, remove, trash);
+    group.forEach((c) => changeLocally(c.t, add, remove));
+    renderThreads();
+    try {
+      await invoke("modify_many", { account: t.account, ids: group.map((c) => c.t.id), add, remove, trash });
+    } catch (e) {
+      toast(`Couldn't update ${group.length} emails: ${e}`);
+    }
+  }));
 }
 
 /** Archive/trash: drop the thread from the list and move selection to its neighbour. */
@@ -864,10 +861,10 @@ function pick(id: string, range: boolean) {
   else renderThreads();
 }
 
-// Each picked email is its own Gmail call (threads.modify 10 units, threads.trash 20). Gmail allows 6,000 units a
-// minute per user, and sync shares them: 100 deletes is 2,000.
-// shortcut: per-thread calls cap a bulk action at 100, move to messages.batchModify (1,000 messages for 50 units) to lift it.
-const PICK_MAX = 100;
+// Label changes go out as one messages.batchModify (50 units per 1,000 messages), but Delete is still a
+// threads.trash call per email (20 units). Gmail allows 6,000 units a minute per user, and sync shares them:
+// 250 deletes is 5,000.
+const PICK_MAX = 250;
 
 function selectAll() {
   if (mailbox === "SCHEDULED" || !threads.length) return;
@@ -950,12 +947,12 @@ function actOnPicked(action: string) {
     case "unread": {
       // Any unread: mark them all read; otherwise all unread.
       const read = list.some((t) => t.unread);
-      list.forEach((t) => void modify(t, read ? [] : ["UNREAD"], read ? ["UNREAD"] : []));
+      void applyChanges(list.map((t) => ({ t, add: read ? [] : ["UNREAD"], remove: read ? ["UNREAD"] : [] })));
       return showPicked();
     }
     case "star": {
       const pin = list.some((t) => !t.starred);
-      list.forEach((t) => void modify(t, pin ? ["STARRED"] : [], pin ? [] : ["STARRED"]));
+      void applyChanges(list.map((t) => ({ t, add: pin ? ["STARRED"] : [], remove: pin ? [] : ["STARRED"] })));
       return showPicked();
     }
     default:
@@ -1773,9 +1770,10 @@ $("#ai-write").addEventListener("click", async () => {
 async function editScheduled(id: string) {
   const r = scheduledRows.get(id);
   if (!r) return;
+  const attachments = await invoke<OutFile[] | null>("scheduled_files", { account: r.account, id: r.id });
   await invoke("reschedule", { account: r.account, id: r.id, sendAt: null });
   await openComposer(r.ui.fields, {
-    ...r.ui.opts, account: r.account, draftId: r.draft_id, attachments: r.draft.attachments ?? [], touched: true, inline: false,
+    ...r.ui.opts, account: r.account, draftId: r.draft_id, attachments: attachments ?? [], touched: true, inline: false,
     resumeAt: r.send_at,
   });
   toast("Paused while you edit. Closing keeps it scheduled.");

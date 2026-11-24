@@ -1,0 +1,11 @@
+# Checked 2026-11-25: none of these crates is built for macOS (`cargo tree -i <crate> --target aarch64-apple-darwin -e all`
+# prints nothing). They come with Tauri's Linux backends (GTK, D-Bus). Look again before shipping a Linux or Windows build.
+[advisories]
+ignore = [
+  "RUSTSEC-2026-0543", # chrono: unmaintained
+  "RUSTSEC-2024-0370", # proc-macro-error: unmaintained
+  "RUSTSEC-2026-0371", # zbus_names: unmaintained
+  "RUSTSEC-2026-0370", # zvariant: unmaintained
+  "RUSTSEC-2026-0372", # zvariant_derive: unmaintained
+  "RUSTSEC-2024-0429", # glib: unsound VariantStrIter
+]

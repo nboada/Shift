@@ -2,6 +2,8 @@ mod ai;
 mod auth;
 mod db;
 mod demo;
+#[cfg(test)]
+mod fake_gmail;
 mod gmail;
 mod settings;
 
@@ -710,7 +712,8 @@ async fn ai_rewrite(
 ) -> R<String> {
     demo_has_no_ai(&s)?;
     let cfg = ai::config(&s.dir, ai::Task::Writing)?;
-    let user = format!("Instruction: {instruction}\n\nText:\n<<<\n{text}\n>>>");
+    // JSON, so nothing in the text can pass for the end of it and add instructions of its own.
+    let user = serde_json::json!({ "instruction": instruction, "text": text }).to_string();
     Ok(ai::complete(
         &s.ai_http,
         &cfg,
@@ -734,14 +737,13 @@ async fn ai_draft_reply(
 ) -> R<String> {
     demo_has_no_ai(&s)?;
     let cfg = ai::config(&s.dir, ai::Task::Writing)?;
-    let user = format!(
-        "I am {me}.\n\nConversation:\n<<<\n{conversation}\n>>>\n\nMy notes for the reply: {}",
-        if notes.trim().is_empty() {
-            "(none: write the natural reply)"
-        } else {
-            notes.trim()
-        }
-    );
+    let notes = notes.trim();
+    let user = serde_json::json!({
+        "me": me,
+        "conversation": conversation,
+        "notes": if notes.is_empty() { "(none: write the natural reply)" } else { notes },
+    })
+    .to_string();
     Ok(ai::complete(
         &s.ai_http,
         &cfg,
@@ -1489,26 +1491,89 @@ async fn modify(
     if s.demo {
         return Ok(());
     }
-    // Behind an earlier change still waiting for Gmail, this one waits too, so they arrive in order.
-    if db::has_pending(&a.db(), &id) {
-        db::add_pending(&a.db(), &id, &add, &remove, trash)?;
-        return Ok(());
+    Ok(push_change(&app, &s, &a, &id, &add, &remove, trash).await?)
+}
+
+/// Sends one thread's local change to Gmail. Offline (or behind a change still waiting) it waits in `pending_ops`
+/// for the sync loop (`replay_pending`); refused, the thread is re-fetched as Gmail has it.
+async fn push_change(
+    app: &AppHandle,
+    s: &State,
+    a: &Account,
+    id: &str,
+    add: &[String],
+    remove: &[String],
+    trash: bool,
+) -> anyhow::Result<()> {
+    if db::has_pending(&a.db(), id) {
+        return db::add_pending(&a.db(), id, add, remove, trash);
     }
     let remote = match a.access_token(&s.http).await {
-        Ok(token) => apply_remote(&Gmail { http: &s.http, token: &token }, &id, &add, &remove, trash).await,
+        Ok(token) => apply_remote(&Gmail { http: &s.http, token: &token }, id, add, remove, trash).await,
         Err(e) => Err(e),
     };
     match remote {
         Ok(()) => Ok(()),
-        // Offline or Gmail struggling: keep the change and let the sync loop send it (`replay_pending`).
-        Err(e) if gmail::is_transient(&e) => {
-            db::add_pending(&a.db(), &id, &add, &remove, trash)?;
-            Ok(())
-        }
-        // Gmail refused it: put the thread back as Gmail has it.
+        Err(e) if gmail::is_transient(&e) => db::add_pending(&a.db(), id, add, remove, trash),
         Err(e) => {
             if let Ok(token) = a.access_token(&s.http).await {
-                refetch(&app, &a, &Gmail { http: &s.http, token: &token }, &id).await;
+                refetch(app, a, &Gmail { http: &s.http, token: &token }, id).await;
+            }
+            Err(e)
+        }
+    }
+}
+
+/// `modify` for several threads of one account (bulk actions, Clean up). Label changes reach Gmail in one
+/// `messages.batchModify` per 1000 messages instead of a call per thread; Trash has no batch form, so moving in or
+/// out of it goes thread by thread.
+#[tauri::command]
+async fn modify_many(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    account: String,
+    ids: Vec<String>,
+    add: Vec<String>,
+    remove: Vec<String>,
+    trash: bool,
+) -> R<()> {
+    let a = s.account(&account)?;
+    for id in &ids {
+        db::change_labels(&mut a.db(), id, &add, &remove)?;
+    }
+    let _ = app.emit(CHANGED, ());
+    if s.demo {
+        return Ok(());
+    }
+    let (waiting, now): (Vec<String>, Vec<String>) = ids.into_iter().partition(|id| db::has_pending(&a.db(), id));
+    if trash || remove.iter().any(|l| l == "TRASH") || now.len() < 2 {
+        let mut failed = None;
+        for id in waiting.iter().chain(&now) {
+            if let Err(e) = push_change(&app, &s, &a, id, &add, &remove, trash).await {
+                failed.get_or_insert(e);
+            }
+        }
+        return failed.map_or(Ok(()), |e| Err(e.into()));
+    }
+    for id in &waiting {
+        db::add_pending(&a.db(), id, &add, &remove, false)?;
+    }
+    let queue = |ids: &[String]| ids.iter().try_for_each(|id| db::add_pending(&a.db(), id, &add, &remove, false));
+    let token = match a.access_token(&s.http).await {
+        Ok(t) => t,
+        Err(e) if gmail::is_transient(&e) => return Ok(queue(&now)?),
+        Err(e) => return Err(e.into()),
+    };
+    let g = Gmail { http: &s.http, token: &token };
+    let msgs = db::message_ids(&a.db(), &now)?;
+    let add_ids: Vec<&str> = add.iter().map(String::as_str).collect();
+    let remove_ids: Vec<&str> = remove.iter().map(String::as_str).collect();
+    match g.batch_modify(&msgs, &add_ids, &remove_ids).await {
+        Ok(()) => Ok(()),
+        Err(e) if gmail::is_transient(&e) => Ok(queue(&now)?),
+        Err(e) => {
+            for id in &now {
+                refetch(&app, &a, &g, id).await;
             }
             Err(e.into())
         }
@@ -1679,8 +1744,14 @@ fn build_message(from: String, draft: &Draft) -> anyhow::Result<Vec<u8>> {
         .as_deref()
         .map(str::trim)
         .filter(|n| !n.is_empty());
+    // Our own Message-ID: mail-builder's default ends in this Mac's hostname, which recipients would see.
+    let mut id = [0u8; 16];
+    getrandom::fill(&mut id)?;
+    let domain = from.rsplit_once('@').map_or("gmail.com", |(_, d)| d);
+    let message_id = format!("{}@{domain}", id.iter().map(|b| format!("{b:02x}")).collect::<String>());
     let mut msg = MessageBuilder::new()
-        .from(Address::new_address(from_name.map(str::to_string), from))
+        .message_id(message_id)
+        .from(Address::new_address(from_name.map(str::to_string), from.clone()))
         .subject(draft.subject.clone())
         .text_body(draft.body.clone());
     // Drafts may be saved before any recipient is added.
@@ -1846,6 +1917,12 @@ fn send_when_due(app: &AppHandle, account: String, at: i64) {
     });
 }
 
+/// The files of one scheduled email, for reopening it in the composer.
+#[tauri::command(async)]
+fn scheduled_files(s: tauri::State<State>, account: String, id: i64) -> R<serde_json::Value> {
+    Ok(db::scheduled_files(&s.account(&account)?.db(), id)?)
+}
+
 #[tauri::command(async)]
 fn scheduled(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db::ScheduledRow>> {
     let mut all = Vec::new();
@@ -1853,9 +1930,15 @@ fn scheduled(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db:
         all.extend(
             db::scheduled(&a.db(), None)?
                 .into_iter()
-                .map(|r| db::ScheduledRow {
-                    account: a.email.clone(),
-                    ..r
+                .map(|mut r| {
+                    // Sent to the UI on every refresh, so without file contents (`scheduled_files`).
+                    if let Some(d) = r.draft.as_object_mut() {
+                        d.remove("attachments");
+                    }
+                    db::ScheduledRow {
+                        account: a.email.clone(),
+                        ..r
+                    }
                 }),
         );
     }
@@ -2350,6 +2433,7 @@ pub fn run() {
             delete_label,
             thread,
             modify,
+            modify_many,
             search,
             send,
             get_settings,
@@ -2360,6 +2444,7 @@ pub fn run() {
             delete_draft,
             schedule_send,
             scheduled,
+            scheduled_files,
             reschedule,
             attachment_data,
             open_attachment,
@@ -2547,6 +2632,8 @@ mod tests {
         assert!(raw.contains("multipart/mixed"), "{raw}");
         assert!(raw.contains("filename=\"notes.txt\""), "{raw}");
         assert!(raw.contains("see attached"), "{raw}");
+        let id = raw.lines().find(|l| l.starts_with("Message-ID:")).unwrap();
+        assert!(id.ends_with("@x.com>"), "{id}");
         d.attachments[0].data = STANDARD.encode(vec![0u8; MAX_ATTACHMENTS + 1]);
         assert!(build_message("me@x.com".into(), &d).is_err());
     }

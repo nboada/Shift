@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-ai-key"
+description = "Enables the delete_ai_key command without any pre-configured scope."
+commands.allow = ["delete_ai_key"]
+
+[[permission]]
+identifier = "deny-delete-ai-key"
+description = "Denies the delete_ai_key command without any pre-configured scope."
+commands.deny = ["delete_ai_key"]

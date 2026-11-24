@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ai-labels"
+description = "Enables the ai_labels command without any pre-configured scope."
+commands.allow = ["ai_labels"]
+
+[[permission]]
+identifier = "deny-ai-labels"
+description = "Denies the ai_labels command without any pre-configured scope."
+commands.deny = ["ai_labels"]
