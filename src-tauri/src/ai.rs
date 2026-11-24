@@ -225,8 +225,12 @@ pub fn json_in(text: &str) -> Result<Value> {
 }
 
 /// Effort for Write with AI and Draft a reply: medium is plenty for a short email and quicker than high (Claude Sonnet
-/// 5.5's default). Sorting asks for `low`. Only Anthropic's API takes it.
+/// 5.5's default). Only Anthropic's API takes it.
 pub const WRITING_EFFORT: &str = "medium";
+
+/// Effort for Auto-label and Clean up Inbox: medium judges borderline emails better than low at a small cost in time,
+/// and sorting is meant to run on a cheap model such as Claude Haiku.
+pub const SORTING_EFFORT: &str = "medium";
 
 // ---- Prompts. Stable text first, so providers that cache prompt prefixes can reuse them.
 

@@ -47,4 +47,5 @@ test("the placeholder goes once anything is written above the signature", () => 
   expect(hasMessage(doc(p(), p(t("hi")), sig))).toBe(true);
   expect(hasMessage(doc(p(), p(t("-- ")), p(t("Nic"))))).toBe(false);
   expect(hasMessage(doc(p(), { type: "blockquote", content: [p(t("old"))] }))).toBe(false);
+  expect(hasMessage(doc(p(), p(t("On Monday, Sam wrote:")), { type: "blockquote", content: [p(t("old"))] }))).toBe(false);
 });
