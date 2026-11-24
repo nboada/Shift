@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Shift app icon: white caret (the shift key) on orange, macOS icon grid (824px tile). -->
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#FF5A1F" filter="url(#shadow)"/>
+  <path d="M396.6 561.4 L512 446.1 L627.4 561.4" fill="none" stroke="#fff" stroke-width="57.7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

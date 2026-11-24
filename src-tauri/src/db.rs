@@ -1,0 +1,458 @@
+use crate::gmail;
+use anyhow::Result;
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
+
+const SCHEMA: &str = "
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS labels (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS threads (
+  id TEXT PRIMARY KEY, subject TEXT NOT NULL, sender TEXT NOT NULL,
+  snippet TEXT NOT NULL, date INTEGER NOT NULL, count INTEGER NOT NULL,
+  full INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS threads_date ON threads(date DESC);
+CREATE TABLE IF NOT EXISTS thread_labels (
+  label_id TEXT NOT NULL, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  PRIMARY KEY (label_id, thread_id)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS thread_labels_thread ON thread_labels(thread_id);
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  sender TEXT NOT NULL, recipients TEXT NOT NULL, cc TEXT NOT NULL, date INTEGER NOT NULL,
+  subject TEXT NOT NULL, message_id TEXT NOT NULL, refs TEXT NOT NULL,
+  html TEXT, text TEXT);
+CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id, date);
+";
+
+pub fn open(path: &std::path::Path) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    conn.execute_batch(SCHEMA)?;
+    // Databases created before bodies were loaded lazily lack the column; the error just means it exists.
+    let _ = conn.execute(
+        "ALTER TABLE threads ADD COLUMN full INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    Ok(conn)
+}
+
+pub fn get_meta(conn: &Connection, k: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT v FROM meta WHERE k = ?1", [k], |r| r.get(0))
+        .optional()?)
+}
+
+pub fn set_meta(conn: &Connection, k: &str, v: &str) -> Result<()> {
+    conn.execute("INSERT OR REPLACE INTO meta (k, v) VALUES (?1, ?2)", [k, v])?;
+    Ok(())
+}
+
+pub fn wipe(conn: &Connection) -> Result<()> {
+    conn.execute_batch("DELETE FROM messages; DELETE FROM thread_labels; DELETE FROM threads; DELETE FROM labels; DELETE FROM meta;")?;
+    Ok(())
+}
+
+pub fn replace_labels(conn: &mut Connection, labels: &[gmail::Label]) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM labels", [])?;
+    for l in labels {
+        tx.execute(
+            "INSERT INTO labels (id, name, kind) VALUES (?1, ?2, ?3)",
+            params![l.id, l.name, l.kind],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// `full` records whether `t` carries message bodies (format=full) or only metadata.
+pub fn upsert_thread(conn: &mut Connection, t: &gmail::Thread, full: bool) -> Result<()> {
+    let (Some(first), Some(last)) = (t.messages.first(), t.messages.last()) else {
+        return delete_thread(conn, &t.id);
+    };
+    // Show the other party, like Gmail: the latest sender who isn't me, or the recipient if I wrote every message.
+    let me = get_meta(conn, "email")?.unwrap_or_default().to_lowercase();
+    let from_me =
+        |m: &&gmail::Message| !me.is_empty() && m.header("From").to_lowercase().contains(&me);
+    let sender = t
+        .messages
+        .iter()
+        .rev()
+        .find(|m| !from_me(m))
+        .map_or_else(|| last.header("To"), |m| m.header("From"));
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT OR REPLACE INTO threads (id, subject, sender, snippet, date, count, full) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![t.id, first.header("Subject"), sender, last.snippet, last.date_ms(), t.messages.len() as i64, full],
+    )?;
+    tx.execute("DELETE FROM thread_labels WHERE thread_id = ?1", [&t.id])?;
+    tx.execute("DELETE FROM messages WHERE thread_id = ?1", [&t.id])?;
+    for m in &t.messages {
+        for l in &m.label_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO thread_labels (label_id, thread_id) VALUES (?1, ?2)",
+                [l, &t.id],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO messages (id, thread_id, sender, recipients, cc, date, subject, message_id, refs, html, text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                m.id, t.id, m.header("From"), m.header("To"), m.header("Cc"), m.date_ms(), m.header("Subject"),
+                m.header("Message-ID"), m.header("References"), m.body("text/html"), m.body("text/plain")
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn delete_thread(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM threads WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+pub fn change_labels(
+    conn: &mut Connection,
+    thread: &str,
+    add: &[String],
+    remove: &[String],
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    for l in add {
+        tx.execute(
+            "INSERT OR IGNORE INTO thread_labels (label_id, thread_id) VALUES (?1, ?2)",
+            [l, thread],
+        )?;
+    }
+    for l in remove {
+        tx.execute(
+            "DELETE FROM thread_labels WHERE label_id = ?1 AND thread_id = ?2",
+            [l, thread],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct LabelRow {
+    pub id: String,
+    name: String,
+    pub kind: String,
+    pub unread: i64,
+}
+
+pub fn labels(conn: &Connection) -> Result<Vec<LabelRow>> {
+    let mut st = conn.prepare(
+        "SELECT l.id, l.name, l.kind,
+           (SELECT count(*) FROM thread_labels a JOIN thread_labels u ON u.thread_id = a.thread_id AND u.label_id = 'UNREAD'
+            WHERE a.label_id = l.id)
+         FROM labels l ORDER BY l.kind DESC, l.name COLLATE NOCASE",
+    )?;
+    let rows = st.query_map([], |r| {
+        Ok(LabelRow {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            kind: r.get(2)?,
+            unread: r.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+#[derive(Serialize)]
+pub struct ThreadRow {
+    /// Which account the thread belongs to; filled in by the caller, since each account has its own database.
+    pub account: String,
+    id: String,
+    subject: String,
+    sender: String,
+    snippet: String,
+    pub date: i64,
+    count: i64,
+    unread: bool,
+    starred: bool,
+    /// False for Gmail's Promotions/Social/Updates/Forums tabs.
+    primary: bool,
+    /// Space-separated Gmail label ids.
+    labels: String,
+}
+
+const THREAD_COLS: &str = "t.id, t.subject, t.sender, t.snippet, t.date, t.count,
+  EXISTS(SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id = 'UNREAD'),
+  EXISTS(SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id = 'STARRED'),
+  NOT EXISTS(SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id
+    AND x.label_id IN ('CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS')),
+  (SELECT group_concat(x.label_id, ' ') FROM thread_labels x WHERE x.thread_id = t.id)";
+
+fn thread_row(r: &rusqlite::Row) -> rusqlite::Result<ThreadRow> {
+    Ok(ThreadRow {
+        account: String::new(),
+        id: r.get(0)?,
+        subject: r.get(1)?,
+        sender: r.get(2)?,
+        snippet: r.get(3)?,
+        date: r.get(4)?,
+        count: r.get(5)?,
+        unread: r.get(6)?,
+        starred: r.get(7)?,
+        primary: r.get(8)?,
+        labels: r.get::<_, Option<String>>(9)?.unwrap_or_default(),
+    })
+}
+
+/// `label = None` is All Mail; `ARCHIVE` is everything outside the Inbox (Gmail has no archive label).
+/// Spam and trash only show inside their own folders, like Gmail.
+pub fn threads(conn: &Connection, label: Option<&str>) -> Result<Vec<ThreadRow>> {
+    let sql = format!(
+        "SELECT {THREAD_COLS} FROM threads t
+         WHERE (?1 IS NULL OR ?1 = 'ARCHIVE' OR EXISTS(SELECT 1 FROM thread_labels l WHERE l.thread_id = t.id AND l.label_id = ?1))
+           AND (?1 IS NOT 'ARCHIVE' OR NOT EXISTS(
+             SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN ('INBOX', 'DRAFT')))
+           AND (?1 IN ('TRASH', 'SPAM') OR NOT EXISTS(
+             SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN ('TRASH', 'SPAM')))
+         ORDER BY t.date DESC LIMIT 1000"
+    );
+    let mut st = conn.prepare_cached(&sql)?;
+    let rows = st.query_map([label], thread_row)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn threads_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<ThreadRow>> {
+    let mut st = conn.prepare_cached(&format!(
+        "SELECT {THREAD_COLS} FROM threads t WHERE t.id = ?1"
+    ))?;
+    let mut out = Vec::new();
+    for id in ids {
+        if let Some(row) = st.query_row([id], thread_row).optional()? {
+            out.push(row);
+        }
+    }
+    Ok(out)
+}
+
+pub fn has_thread(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM threads WHERE id = ?1)",
+        [id],
+        |r| r.get(0),
+    )?)
+}
+
+/// `%word%` for LIKE, with the user's own `%`, `_` and `\` matched literally.
+fn like(word: &str) -> String {
+    let escaped = word
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
+/// Instant search over the local cache. Every word must match the subject, a sender or the preview;
+/// `from:x` must match a sender of any message in the thread (Gmail syntax).
+pub fn search_local(conn: &Connection, query: &str) -> Result<Vec<ThreadRow>> {
+    let (mut clauses, mut args) = (Vec::new(), Vec::new());
+    for token in query.split_whitespace() {
+        let n = args.len() + 1;
+        if let Some(from) = token.strip_prefix("from:").filter(|f| !f.is_empty()) {
+            clauses.push(format!(
+                "EXISTS(SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.sender LIKE ?{n} ESCAPE '\\')"
+            ));
+            args.push(like(from));
+        } else {
+            clauses.push(format!(
+                "(t.subject LIKE ?{n} ESCAPE '\\' OR t.snippet LIKE ?{n} ESCAPE '\\'
+                  OR EXISTS(SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.sender LIKE ?{n} ESCAPE '\\'))"
+            ));
+            args.push(like(token));
+        }
+    }
+    if clauses.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "SELECT {THREAD_COLS} FROM threads t WHERE {}
+           AND NOT EXISTS(SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN ('TRASH', 'SPAM'))
+         ORDER BY t.date DESC LIMIT 100",
+        clauses.join(" AND ")
+    );
+    let mut st = conn.prepare(&sql)?;
+    let rows = st.query_map(rusqlite::params_from_iter(args.iter()), thread_row)?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Raw From/To/Cc header values from recent messages mentioning `query`, for contact autocomplete.
+pub fn contact_headers(conn: &Connection, query: &str) -> Result<Vec<String>> {
+    let mut st = conn.prepare_cached(
+        "SELECT sender, recipients, cc FROM messages
+         WHERE sender LIKE ?1 ESCAPE '\\' OR recipients LIKE ?1 ESCAPE '\\' OR cc LIKE ?1 ESCAPE '\\'
+         ORDER BY date DESC LIMIT 400",
+    )?;
+    let rows = st.query_map([like(query.trim())], |r| {
+        Ok([r.get::<_, String>(0)?, r.get(1)?, r.get(2)?])
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.extend(row?);
+    }
+    Ok(out)
+}
+
+/// Senders whose name or address contains `query`, most frequent first: "Name <addr>".
+pub fn suggest_senders(conn: &Connection, query: &str) -> Result<Vec<String>> {
+    let query = query.trim().trim_start_matches("from:");
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut st = conn.prepare_cached(
+        "SELECT sender FROM messages WHERE sender LIKE ?1 ESCAPE '\\'
+         GROUP BY lower(sender) ORDER BY count(*) DESC, max(date) DESC LIMIT 5",
+    )?;
+    let rows = st.query_map([like(query)], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn is_full(conn: &Connection, id: &str) -> bool {
+    conn.query_row("SELECT full FROM threads WHERE id = ?1", [id], |r| r.get(0))
+        .unwrap_or(false)
+}
+
+/// Newest threads in `label` whose bodies aren't cached yet.
+pub fn missing_bodies(conn: &Connection, label: &str, limit: usize) -> Result<Vec<String>> {
+    let mut st = conn.prepare(
+        "SELECT t.id FROM threads t JOIN thread_labels l ON l.thread_id = t.id AND l.label_id = ?1
+         WHERE t.full = 0 ORDER BY t.date DESC LIMIT ?2",
+    )?;
+    let rows = st.query_map(params![label, limit as i64], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+#[derive(Serialize)]
+pub struct MessageRow {
+    id: String,
+    sender: String,
+    recipients: String,
+    cc: String,
+    date: i64,
+    subject: String,
+    message_id: String,
+    refs: String,
+    pub html: Option<String>,
+    text: Option<String>,
+}
+
+pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
+    let mut st = conn.prepare_cached(
+        "SELECT id, sender, recipients, cc, date, subject, message_id, refs, html, text
+         FROM messages WHERE thread_id = ?1 ORDER BY date",
+    )?;
+    let rows = st.query_map([thread], |r| {
+        Ok(MessageRow {
+            id: r.get(0)?,
+            sender: r.get(1)?,
+            recipients: r.get(2)?,
+            cc: r.get(3)?,
+            date: r.get(4)?,
+            subject: r.get(5)?,
+            message_id: r.get(6)?,
+            refs: r.get(7)?,
+            html: r.get(8)?,
+            text: r.get(9)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn thread(id: &str, labels: &[&str], date: &str) -> gmail::Thread {
+        let json = serde_json::json!({ "id": id, "messages": [{
+            "id": format!("{id}-m"), "labelIds": labels, "snippet": "s", "internalDate": date,
+            "payload": { "headers": [{ "name": "Subject", "value": "subj" }, { "name": "From", "value": "a@b.c" }, { "name": "To", "value": "to@x.y" }] }
+        }]});
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn label_filtering_and_label_changes() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        upsert_thread(&mut c, &thread("a", &["INBOX", "UNREAD"], "2"), false).unwrap();
+        upsert_thread(&mut c, &thread("b", &["INBOX"], "3"), false).unwrap();
+        upsert_thread(&mut c, &thread("c", &["TRASH"], "4"), false).unwrap();
+
+        let inbox = threads(&c, Some("INBOX")).unwrap();
+        assert_eq!(
+            inbox.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["b", "a"]
+        );
+        assert!(inbox[1].unread && !inbox[0].unread);
+        assert_eq!(
+            threads(&c, None).unwrap().len(),
+            2,
+            "trash hidden from All Mail"
+        );
+        assert_eq!(threads(&c, Some("TRASH")).unwrap().len(), 1);
+        assert!(
+            threads(&c, Some("ARCHIVE")).unwrap().is_empty(),
+            "inbox and trash aren't archived"
+        );
+
+        change_labels(&mut c, "a", &[], &["INBOX".into()]).unwrap();
+        assert_eq!(threads(&c, Some("INBOX")).unwrap().len(), 1);
+        assert_eq!(
+            threads(&c, Some("ARCHIVE")).unwrap()[0].id,
+            "a",
+            "archiving moves it to Archive"
+        );
+
+        upsert_thread(&mut c, &thread("a", &["INBOX"], "5"), false).unwrap();
+        assert_eq!(
+            threads(&c, Some("INBOX")).unwrap()[0].id,
+            "a",
+            "re-sync replaces labels and date"
+        );
+        assert_eq!(messages(&c, "a").unwrap().len(), 1);
+        assert!(!is_full(&c, "a"));
+        assert_eq!(missing_bodies(&c, "INBOX", 10).unwrap(), ["a", "b"]);
+        upsert_thread(&mut c, &thread("b", &["INBOX"], "3"), true).unwrap();
+        assert!(is_full(&c, "b"));
+        assert_eq!(missing_bodies(&c, "INBOX", 10).unwrap(), ["a"]);
+
+        assert_eq!(threads(&c, Some("INBOX")).unwrap()[0].sender, "a@b.c");
+        upsert_thread(
+            &mut c,
+            &thread("p", &["INBOX", "CATEGORY_PROMOTIONS"], "1"),
+            false,
+        )
+        .unwrap();
+        let inbox = threads(&c, Some("INBOX")).unwrap();
+        assert!(inbox.iter().all(|t| t.primary == (t.id != "p")));
+        set_meta(&c, "email", "A@b.c").unwrap();
+        upsert_thread(&mut c, &thread("a", &["INBOX"], "5"), false).unwrap();
+        assert_eq!(
+            threads(&c, Some("INBOX")).unwrap()[0].sender,
+            "to@x.y",
+            "my own thread shows the recipient"
+        );
+
+        assert_eq!(
+            search_local(&c, "SUBJ").unwrap().len(),
+            3,
+            "case-insensitive, trash excluded"
+        );
+        assert_eq!(search_local(&c, "from:a@b.c subj").unwrap().len(), 3);
+        assert!(search_local(&c, "from:nobody").unwrap().is_empty());
+        assert!(search_local(&c, "100%").unwrap().is_empty(), "% is literal");
+        assert!(search_local(&c, "  ").unwrap().is_empty());
+        assert_eq!(suggest_senders(&c, "a@b").unwrap(), ["a@b.c"]);
+
+        delete_thread(&c, "a").unwrap();
+        assert!(messages(&c, "a").unwrap().is_empty(), "messages cascade");
+    }
+}

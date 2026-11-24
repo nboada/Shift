@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Shift</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <section id="signin" class="signin" data-tauri-drag-region hidden>
+      <div class="signin-card">
+        <img class="signin-mark" src="/shift-icon.png" alt="" />
+        <h1>Shift</h1>
+        <p>Fast Gmail, stored on your Mac.</p>
+        <button id="signin-btn" class="primary">Sign in with Google</button>
+        <p id="signin-error" class="error"></p>
+      </div>
+    </section>
+
+    <div id="app" class="app" data-view="list" hidden>
+      <header class="topbar" data-tauri-drag-region>
+        <button id="sidebar-toggle" class="icon" data-tip="Hide sidebar" aria-label="Hide sidebar" aria-controls="sidebar" aria-expanded="true"><i class="ph ph-sidebar-simple"></i></button>
+        <form class="search search-top">
+          <i class="ph ph-magnifying-glass"></i>
+          <input type="search" placeholder="Search mail" autocomplete="off" spellcheck="false" />
+        </form>
+      </header>
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-top" data-tauri-drag-region></div>
+        <button id="compose-btn" class="compose" data-tip="New email (⌘N)"><i class="ph ph-pencil-simple-line"></i> New Email</button>
+        <nav id="mailboxes" class="mailboxes"></nav>
+        <div class="account">
+          <button id="account-btn" class="account-btn" aria-haspopup="menu">
+            <span id="account-dot" class="account-dot"></span>
+            <span id="account-email"></span>
+            <i class="ph ph-caret-up-down"></i>
+          </button>
+          <button id="settings-btn" class="icon" data-tip="Settings (⌘,)"><i class="ph ph-gear-six"></i></button>
+        </div>
+      </aside>
+
+      <section class="list-pane">
+        <header class="toolbar" data-tauri-drag-region>
+          <button class="icon back" data-back="mailboxes" data-tip="Mailboxes"><i class="ph ph-sidebar-simple"></i></button>
+          <h2 id="list-title" data-tauri-drag-region></h2>
+          <button id="view-btn" class="icon"><i class="ph"></i></button>
+          <button id="sync-btn" class="icon" data-tip="Check for mail"><i class="ph ph-arrows-clockwise"></i></button>
+        </header>
+        <form class="search search-list">
+          <i class="ph ph-magnifying-glass"></i>
+          <input type="search" placeholder="Search all mail" autocomplete="off" spellcheck="false" />
+        </form>
+        <ul id="threads" class="threads" tabindex="0" role="listbox" aria-label="Messages"></ul>
+        <div id="resizer" class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize message list" tabindex="0"></div>
+      </section>
+
+      <section class="reader-pane">
+        <header class="toolbar" data-tauri-drag-region>
+          <button class="icon back" data-back="list" data-tip="Back"><i class="ph ph-caret-left"></i></button>
+          <div class="actions">
+            <div class="action-group">
+              <button data-action="archive" data-tip="Archive (e)" aria-label="Archive"><i class="ph ph-archive"></i></button>
+              <button data-action="trash" data-tip="Delete (⌫)" aria-label="Trash"><i class="ph ph-trash"></i></button>
+              <button data-action="unread" data-tip="Mark unread (u)" aria-label="Mark unread"><i class="ph ph-envelope-simple"></i></button>
+              <button data-action="move" data-tip="Move to (v)" aria-label="Move to"><i class="ph ph-folder"></i></button>
+              <button data-action="label" data-tip="Label (l)" aria-label="Label"><i class="ph ph-tag"></i></button>
+              <button data-action="star" data-tip="Pin (d)" aria-label="Pin"><i class="ph ph-push-pin"></i></button>
+            </div>
+            <div class="action-group divided">
+              <button data-action="reply" data-tip="Reply (r)" aria-label="Reply"><i class="ph ph-arrow-bend-up-left"></i></button>
+              <button data-action="replyAll" data-tip="Reply all (⇧R)" aria-label="Reply all"><i class="ph ph-arrow-bend-double-up-left"></i></button>
+              <button data-action="forward" data-tip="Forward (f)" aria-label="Forward"><i class="ph ph-arrow-bend-up-right"></i></button>
+            </div>
+          </div>
+        </header>
+        <article id="reader" class="reader"></article>
+      </section>
+    </div>
+
+    <dialog id="composer" class="composer" aria-labelledby="compose-title">
+      <form id="compose-form" class="compose-form">
+        <header>
+          <strong id="compose-title">New Email</strong>
+          <span id="draft-status" class="draft-status" aria-live="polite"></span>
+          <button type="button" class="icon" id="compose-discard" data-tip="Discard draft"><i class="ph ph-trash"></i></button>
+          <button type="button" class="icon" id="compose-close" data-tip="Close and keep draft (Esc)"><i class="ph ph-x"></i></button>
+        </header>
+        <div class="field-row" id="from-row" hidden>
+          <span class="field-label">From</span>
+          <div class="from-choices segmented" role="radiogroup" aria-label="Send from"></div>
+        </div>
+        <div class="field-row">
+          <span class="field-label">To</span>
+          <div class="rcpt" id="rcpt-to"><input autocomplete="off" spellcheck="false" aria-label="To" /></div>
+          <button type="button" class="cc-toggle" id="cc-toggle">Cc Bcc</button>
+        </div>
+        <div class="field-row" data-row="cc" hidden>
+          <span class="field-label">Cc</span>
+          <div class="rcpt" id="rcpt-cc"><input autocomplete="off" spellcheck="false" aria-label="Cc" /></div>
+        </div>
+        <div class="field-row" data-row="bcc" hidden>
+          <span class="field-label">Bcc</span>
+          <div class="rcpt" id="rcpt-bcc"><input autocomplete="off" spellcheck="false" aria-label="Bcc" /></div>
+        </div>
+        <label class="field-row subject-row"><span class="field-label">Subject</span><input name="subject" autocomplete="off" /></label>
+        <textarea name="body" aria-label="Message"></textarea>
+        <div id="compose-signature" class="compose-signature" hidden>
+          <iframe sandbox="allow-same-origin" title="Signature"></iframe>
+        </div>
+        <footer>
+          <span id="compose-error" class="error"></span>
+          <button type="submit" class="primary"><i class="ph ph-paper-plane-right"></i> Send</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div id="settings" class="settings" hidden>
+      <div class="settings-window" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <nav class="settings-nav"></nav>
+        <section class="settings-body">
+          <header class="settings-head">
+            <h2 id="settings-title"></h2>
+            <button id="settings-close" class="icon" data-tip="Close (Esc)"><i class="ph ph-x"></i></button>
+          </header>
+          <div id="settings-panel" class="settings-panel"></div>
+        </section>
+      </div>
+    </div>
+    <div id="menu" class="menu" role="menu" hidden></div>
+    <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+    <dialog id="palette" class="palette" aria-label="Command palette">
+      <div class="palette-input">
+        <i class="ph ph-magnifying-glass"></i>
+        <input type="text" placeholder="Type a command or search…" autocomplete="off" spellcheck="false" role="combobox" aria-controls="palette-list" aria-expanded="true" />
+        <kbd>esc</kbd>
+      </div>
+      <ul id="palette-list" class="palette-list" role="listbox"></ul>
+    </dialog>
+    <dialog id="ask" class="ask" aria-labelledby="ask-title">
+      <h3 id="ask-title"></h3>
+      <p></p>
+      <footer>
+        <button type="button" class="secondary" data-cancel></button>
+        <button type="button" class="primary" data-ok></button>
+      </footer>
+    </dialog>
+    <div id="toast" class="toast" hidden></div>
+  </body>
+</html>
