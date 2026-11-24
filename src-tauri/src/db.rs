@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   sender TEXT NOT NULL, recipients TEXT NOT NULL, cc TEXT NOT NULL, date INTEGER NOT NULL,
   subject TEXT NOT NULL, message_id TEXT NOT NULL, refs TEXT NOT NULL,
-  html TEXT, text TEXT);
+  html TEXT, text TEXT, reply_to TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id, date);
 CREATE TABLE IF NOT EXISTS attachments (
   message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, idx INTEGER NOT NULL,
@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS attachments (
   attachment_id TEXT, content_id TEXT, data BLOB,
   PRIMARY KEY (message_id, idx)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS scheduled (
-  id INTEGER PRIMARY KEY, draft_id TEXT, send_at INTEGER NOT NULL, draft TEXT NOT NULL, ui TEXT NOT NULL);
+  id INTEGER PRIMARY KEY, draft_id TEXT, send_at INTEGER NOT NULL, draft TEXT NOT NULL, ui TEXT NOT NULL,
+  sending INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS ai_labels (
   thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, label_id TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (thread_id, label_id)) WITHOUT ROWID;
@@ -50,6 +51,11 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
         [],
     );
     let _ = conn.execute("ALTER TABLE labels ADD COLUMN color TEXT", []);
+    let _ = conn.execute("ALTER TABLE scheduled ADD COLUMN sending INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''", []);
+    // A send claimed when Shift quit or crashed never finished from this side: let it go out again. A draft-backed
+    // send that did reach Gmail comes back 404 and is dropped, so this can't duplicate it.
+    conn.execute("UPDATE scheduled SET sending = 0", [])?;
     // `live`: the thread has a message outside Trash and Spam. Older caches only knew "has a trashed message", which hid
     // whole conversations; mark those not live and queue them for a re-fetch, which works out the real value.
     if conn
@@ -105,16 +111,22 @@ pub fn add_scheduled(
     Ok(conn.last_insert_rowid())
 }
 
-/// Every scheduled email, soonest first; with `due_by`, only those due by then.
-/// Whether scheduled row `id` still exists and is due by `now` (not cancelled or moved later meanwhile).
-pub fn is_due(conn: &Connection, id: i64, now: i64) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM scheduled WHERE id = ?1 AND send_at <= ?2)",
+/// Claims scheduled row `id` for sending if it is still due and nobody else holds it. Once claimed, `reschedule`
+/// refuses it, so a cancel can't race the send. Returns whether this caller got it.
+pub fn claim(conn: &Connection, id: i64, now: i64) -> Result<bool> {
+    Ok(conn.execute(
+        "UPDATE scheduled SET sending = 1 WHERE id = ?1 AND send_at <= ?2 AND sending = 0",
         [id, now],
-        |r| r.get(0),
-    )?)
+    )? == 1)
 }
 
+/// Gives a claimed row back after a failed send, so the next tick retries it.
+pub fn release(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("UPDATE scheduled SET sending = 0 WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// Every scheduled email, soonest first; with `due_by`, only those due by then.
 pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<ScheduledRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, draft_id, send_at, draft, ui FROM scheduled WHERE ?1 IS NULL OR send_at <= ?1 ORDER BY send_at",
@@ -137,14 +149,25 @@ pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<Scheduled
 }
 
 /// Moves a scheduled email to a new time, or with `None` drops the schedule (the Gmail draft stays).
+/// New send time, or `None` to cancel. Refused once the email is being sent (`claim`).
 pub fn reschedule(conn: &Connection, id: i64, send_at: Option<i64>) -> Result<()> {
-    match send_at {
+    let changed = match send_at {
         Some(t) => conn.execute(
-            "UPDATE scheduled SET send_at = ?2 WHERE id = ?1",
+            "UPDATE scheduled SET send_at = ?2 WHERE id = ?1 AND sending = 0",
             params![id, t],
         )?,
-        None => conn.execute("DELETE FROM scheduled WHERE id = ?1", [id])?,
+        None => conn.execute("DELETE FROM scheduled WHERE id = ?1 AND sending = 0", [id])?,
     };
+    let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM scheduled WHERE id = ?1)", [id], |r| r.get(0))?;
+    if changed == 0 && exists {
+        anyhow::bail!("It's already being sent");
+    }
+    Ok(())
+}
+
+/// Drops a scheduled row after its send finished (sent, or its draft gone), whether or not it was claimed.
+pub fn finish_scheduled(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM scheduled WHERE id = ?1", [id])?;
     Ok(())
 }
 
@@ -233,11 +256,11 @@ pub fn upsert_thread(conn: &mut Connection, t: &gmail::Thread, full: bool) -> Re
     }
     for m in &t.messages {
         tx.execute(
-            "INSERT INTO messages (id, thread_id, sender, recipients, cc, date, subject, message_id, refs, html, text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO messages (id, thread_id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 m.id, t.id, m.header("From"), m.header("To"), m.header("Cc"), m.date_ms(), m.header("Subject"),
-                m.header("Message-ID"), m.header("References"), m.body("text/html"), m.body("text/plain")
+                m.header("Message-ID"), m.header("References"), m.body("text/html"), m.body("text/plain"), m.header("Reply-To")
             ],
         )?;
         for (i, a) in m.attachments().into_iter().enumerate() {
@@ -637,6 +660,8 @@ pub struct MessageRow {
     refs: String,
     pub html: Option<String>,
     text: Option<String>,
+    /// Where replies go, when the sender set it (mailing lists, help desks); empty otherwise.
+    reply_to: String,
     pub attachments: Vec<AttachmentRow>,
 }
 
@@ -651,7 +676,7 @@ pub struct AttachmentRow {
 
 pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
     let mut st = conn.prepare_cached(
-        "SELECT id, sender, recipients, cc, date, subject, message_id, refs, html, text
+        "SELECT id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to
          FROM messages WHERE thread_id = ?1 ORDER BY date",
     )?;
     let rows = st.query_map([thread], |r| {
@@ -666,6 +691,7 @@ pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
             refs: r.get(7)?,
             html: r.get(8)?,
             text: r.get(9)?,
+            reply_to: r.get(10)?,
             attachments: Vec::new(),
         })
     })?;
@@ -793,6 +819,22 @@ mod tests {
         assert_eq!(get_meta(&c, "backfill").unwrap().as_deref(), Some(r#"["t"]"#), "the trashed one is re-fetched");
         drop(c);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_claimed_send_cannot_be_cancelled() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        let v = serde_json::json!({});
+        let id = add_scheduled(&c, Some("d"), 100, &v, &v).unwrap();
+        assert!(!claim(&c, id, 50).unwrap(), "not due yet");
+        assert!(claim(&c, id, 100).unwrap());
+        assert!(!claim(&c, id, 100).unwrap(), "only one sender gets it");
+        assert!(reschedule(&c, id, None).is_err(), "cancel refused while sending");
+        release(&c, id).unwrap();
+        reschedule(&c, id, None).unwrap();
+        assert!(scheduled(&c, None).unwrap().is_empty(), "cancelled once released");
+        reschedule(&c, id, None).unwrap(); // gone already: nothing to refuse
     }
 
     #[test]

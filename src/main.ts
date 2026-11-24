@@ -34,6 +34,8 @@ type Thread = {
 type Message = {
   id: string; sender: string; recipients: string; cc: string; date: number; subject: string;
   message_id: string; refs: string; html: string | null; text: string | null; attachments: Attachment[];
+  /** Where replies go when the sender set Reply-To (mailing lists, help desks); empty otherwise. */
+  reply_to: string;
 };
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
@@ -557,6 +559,7 @@ function scrollToLatest() {
 
 async function openThread(id: string) {
   if (mailbox === "SCHEDULED") return editScheduled(id);
+  if (mailbox === "DRAFT" && (await openDraft(id))) return;
   picked.clear();
   pickAnchor = id;
   delete app.dataset.picked;
@@ -1209,22 +1212,30 @@ function currentDraft(state: ComposeState): Record<string, unknown> {
   };
 }
 
-/** Saves are queued, so a slow save can't race the next one into creating a duplicate draft. */
-function saveDraft(state = compose, payload = state && currentDraft(state)) {
+/**
+ * Saves are queued, so a slow save can't race the next one into creating a duplicate draft. Resolves to whether this
+ * save reached Gmail.
+ */
+function saveDraft(state = compose, payload = state && currentDraft(state)): Promise<boolean> {
   clearTimeout(draftTimer);
-  if (!state || !payload) return draftQueue;
+  if (!state || !payload) return draftQueue.then(() => true);
   draftStatus("Saving…");
   // The account is fixed now; the draft id is read when the save runs, after the saves queued before it.
   const account = state.account;
-  draftQueue = draftQueue.then(() =>
+  const saved = draftQueue.then(() =>
     invoke<string>("save_draft", { account, draft: payload, draftId: state.draftId })
       .then((id) => {
         state.draftId = id;
         if (compose === state) draftStatus("Saved");
+        return true;
       })
-      .catch(() => compose === state && draftStatus("Not saved — will retry")),
+      .catch(() => {
+        if (compose === state) draftStatus("Not saved — will retry");
+        return false;
+      }),
   );
-  return draftQueue;
+  draftQueue = saved;
+  return saved;
 }
 
 /** Takes the form out of the reader / window and parks it back in the (closed) dialog. */
@@ -1241,19 +1252,27 @@ async function closeComposer(discard = false) {
   if (!state) return;
   const keep = !discard && hasContent();
   const payload = keep ? currentDraft(state) : null;
+  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
   compose = null;
   detachComposer();
   if (discard) {
     await draftQueue;
     if (state.draftId) invoke("delete_draft", { account: state.account, draftId: state.draftId }).catch(() => {});
   } else if (keep) {
-    await saveDraft(state, payload);
-    toast(state.draftId ? "Draft saved" : "Couldn't save the draft to Gmail");
+    if (await saveDraft(state, payload)) return toast("Draft saved");
+    // Not in Gmail: bring it back rather than lose it, unless another email was opened meanwhile.
+    if (compose) return toast("Couldn't save a draft to Gmail; it wasn't kept");
+    await openComposer(fields, { ...state, touched: true });
+    $("#compose-error").textContent = "Couldn't save this draft to Gmail, so it's still open. Check your connection and close it again.";
   }
 }
 
 async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
-  if (compose) await closeComposer();
+  if (compose) {
+    await closeComposer();
+    // Its draft couldn't be saved, so it came back open: keep it rather than replace it.
+    if (compose) return;
+  }
   const inline = !!opts.inline && !!selected && (!opts.context || opts.context.thread_id === selected);
   compose = {
     title: opts.title ?? "New Email", context: opts.context ?? null,
@@ -1335,15 +1354,10 @@ function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
       { subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`, body: signature(account) + quoted(last, header) },
       { title: "Forward", inline: settings.composer.replyIn === "inline", account },
     );
-    return opened.then(() => {
-      const state = compose;
-      const files = forwardAttachments(last, account);
-      if (state) pendingFiles.set(state, files.finally(() => pendingFiles.delete(state)));
-      return files;
-    });
+    return opened.then(() => attachFrom(last, account));
   }
   const mine = !notMe(last.sender);
-  const primary = mine ? splitAddresses(last.recipients) : [last.sender];
+  const primary = mine ? splitAddresses(last.recipients) : [last.reply_to || last.sender];
   const others = kind === "all" ? [...splitAddresses(last.recipients), ...splitAddresses(last.cc)] : [];
   const cc = [...new Set(others.filter((a) => notMe(a) && !primary.some((p) => bareEmail(p) === bareEmail(a))))];
   const header = textToHtml(`On ${when}, ${displayName(last.sender)} wrote:`);
@@ -1403,22 +1417,24 @@ composeForm.addEventListener("submit", async (e) => {
   const reopen = (msg = "") => openComposer(fields, { ...state, touched: true }).then(() => error(msg));
   const delay = settings.composer.undoSendSeconds;
   if (delay > 0) {
-    // Undo send: the email only leaves this Mac when the countdown ends.
+    // Undo send goes through the scheduled queue, due in `delay` seconds: it's saved in Drafts and on this Mac, so
+    // quitting or restarting for an update during the countdown still sends it, and Undo cancels the schedule.
+    let id: number;
+    try {
+      if (!(await saveDraft(state, draft))) throw new Error("Couldn't save it to Drafts, so it wasn't sent. Check your connection and try again");
+      id = await invoke<number>("schedule_send", {
+        account: state.account, draft, draftId: state.draftId, sendAt: Date.now() + delay * 1000,
+        ui: { fields, opts: { title: state.title, context: state.context } },
+      });
+    } catch (err) {
+      submitting.delete(state);
+      return error(err instanceof Error ? err.message : String(err));
+    }
     compose = null;
     detachComposer();
-    const timer = window.setTimeout(async () => {
-      clearInterval(tick);
-      try {
-        await send();
-        toast("Message sent");
-      } catch (err) {
-        reopen(String(err));
-      }
-    }, delay * 1000);
     toastAction(`Sending in ${delay}s…`, "Undo", () => {
-      clearTimeout(timer);
       clearInterval(tick);
-      reopen();
+      invoke("reschedule", { account: state.account, id, sendAt: null }).then(() => reopen(), (err) => toast(String(err)));
     }, delay * 1000);
     const label = $("#toast span");
     let left = delay;
@@ -1689,6 +1705,37 @@ async function addComposeFiles(list: Iterable<File>) {
 }
 
 /** Adds the forwarded message's files (including inline images) to the composer as they download. */
+/** Adds `m`'s files to the open composer (a forward, a reopened draft). Send waits for them (`pendingFiles`). */
+function attachFrom(m: Message, account: string) {
+  const state = compose;
+  const files = forwardAttachments(m, account);
+  if (state) pendingFiles.set(state, files.finally(() => pendingFiles.delete(state)));
+  return files;
+}
+
+/**
+ * Drafts: reopens the Gmail draft in the composer to keep editing it (saves update the same draft). False when it
+ * can't be found, for example in demo mode or once sent, so the email opens read-only instead.
+ */
+async function openDraft(id: string): Promise<boolean> {
+  const account = threads.find((t) => t.id === id)?.account ?? defaultAccount();
+  const found = await invoke<[string, string, string] | null>("find_draft", { account, thread: id }).catch(() => null);
+  if (!found) return false;
+  const [draftId, messageId, bcc] = found;
+  const msgs = await invoke<Message[]>("thread", { account, id }).catch(() => [] as Message[]);
+  const m = msgs.find((x) => x.id === messageId);
+  if (!m) return false;
+  // A reply draft sits in its conversation: it answers the message before it.
+  const earlier = msgs.filter((x) => x.id !== messageId).at(-1);
+  await openComposer(
+    { to: m.recipients, cc: m.cc, bcc, subject: m.subject, body: m.html ?? textToHtml(m.text ?? "") },
+    { title: "Draft", draftId, account, inline: false,
+      context: earlier ? { thread_id: id, in_reply_to: earlier.message_id, references: m.refs } : null },
+  );
+  void attachFrom(m, account);
+  return true;
+}
+
 async function forwardAttachments(m: Message, account: string) {
   const state = compose;
   for (const a of m.attachments) {
@@ -2445,7 +2492,8 @@ listen("mail-changed", refresh);
 // Counted, since a manual sync can overlap the timed one.
 let syncs = 0;
 listen<boolean>("syncing", (e) => $("#sync-btn").classList.toggle("spinning", (syncs = Math.max(0, syncs + (e.payload ? 1 : -1))) > 0));
-listen("scheduled-sent", () => toast("Scheduled email sent"));
+// Undo send and Send later both go out through the scheduled queue.
+listen("scheduled-sent", () => toast("Email sent"));
 // A clicked new-mail notification: its email (or, for several, the Inbox), in a view that includes its account.
 listen<{ account?: string; thread?: string }>("open-from-notification", async ({ payload }) => {
   if (settingsOpen()) closeSettings();
@@ -2456,7 +2504,14 @@ listen<{ account?: string; thread?: string }>("open-from-notification", async ({
 });
 // Messages from the backend, such as the outcome of Shift → Check for Updates….
 listen<string>("app-toast", (e) => toast(e.payload));
-listen<string>("update-ready", (e) => toastAction(`Shift ${e.payload} is ready`, "Restart", () => void invoke("restart_app"), 10 * 60_000));
+/** Saves an open draft before Shift quits or restarts, so the last few seconds of typing aren't lost. */
+const saveBeforeQuit = async () => {
+  if (compose && hasContent()) await saveDraft();
+};
+// ⌘Q: the backend waits (up to 5 s) for this before quitting.
+listen("before-quit", () => void saveBeforeQuit().finally(() => invoke("quit_now")));
+listen<string>("update-ready", (e) =>
+  toastAction(`Shift ${e.payload} is ready`, "Restart", () => void saveBeforeQuit().finally(() => invoke("restart_app")), 10 * 60_000));
 listen<string>("sync-error", (e) => toast(`Sync failed: ${e.payload}`));
 
 loadSettings()
