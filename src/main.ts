@@ -644,6 +644,7 @@ async function openThread(id: string) {
     const account = thread?.account ?? defaultAccount();
     if (m.html) {
       const frame = document.createElement("iframe");
+      frame.title = `Email from ${name}`;
       el.append(frame);
       reader.append(el);
       const html = m.html;
@@ -966,6 +967,8 @@ let menuPos = { x: 0, y: 0 };
 type MenuItem = { id: string; label: string; icon: string; key?: string; disabled?: boolean; danger?: boolean; acct?: string; dot?: string } | "-";
 
 function closeMenu() {
+  if (!menu.hidden && menu.contains(document.activeElement)) menuReturn?.focus();
+  menuReturn = null;
   menu.hidden = true;
   menuAnchor = null;
   threadList.querySelector(".context")?.classList.remove("context");
@@ -974,6 +977,9 @@ function closeMenu() {
 /** Shows `items` at a point, kept inside the window. `pick` returns true to keep the menu open. */
 function showMenu(title: string | null, items: MenuItem[], pos: { x: number; y: number }, pick: (id: string) => boolean | void) {
   menuPos = pos;
+  // Re-rendered in place (the Label menu after a toggle): keep focus on the same item.
+  const keep = menu.hidden ? null : (document.activeElement as HTMLElement | null)?.dataset?.target;
+  if (menu.hidden) menuReturn = document.activeElement as HTMLElement | null;
   menu.innerHTML = (title ? `<h4>${esc(title)}</h4>` : "") + (items.length
     ? items.map((x) => x === "-" ? "<hr>" : `<button role="menuitem" data-target="${x.id}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
         ${x.dot ? labelDot(x.label, x.dot) : iconHtml(x.icon)}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}</button>`).join("")
@@ -986,7 +992,30 @@ function showMenu(title: string | null, items: MenuItem[], pos: { x: number; y: 
   menu.hidden = false;
   menu.style.left = `${Math.max(8, Math.min(pos.x, window.innerWidth - menu.offsetWidth - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(pos.y, window.innerHeight - menu.offsetHeight - 8))}px`;
+  const items$ = menuItems();
+  (items$.find((b) => b.dataset.target === keep) ?? items$[0])?.focus();
 }
+
+/** Where focus was before a menu opened, so closing it hands focus back. */
+let menuReturn: HTMLElement | null = null;
+const menuItems = () => [...menu.querySelectorAll<HTMLButtonElement>("button[data-target]:not(:disabled)")];
+
+// Keyboard menus: arrows and Home/End move, Return or Space picks, Esc closes. Keys stay in the menu, so a letter
+// doesn't also run a shortcut behind it.
+menu.addEventListener("keydown", (e) => {
+  const list = menuItems();
+  const i = list.indexOf(document.activeElement as HTMLButtonElement);
+  const go = (n: number) => list[(n + list.length) % list.length]?.focus();
+  e.stopPropagation();
+  if (e.key === "ArrowDown") go(i + 1);
+  else if (e.key === "ArrowUp") go(i < 0 ? -1 : i - 1);
+  else if (e.key === "Home") go(0);
+  else if (e.key === "End") go(-1);
+  else if (e.key === "Escape") closeMenu();
+  else if (e.key === "Tab") closeMenu();
+  else return; // Return and Space click the focused button natively
+  e.preventDefault();
+});
 
 const NEW_LABEL = "\u0000new-label";
 
@@ -1054,7 +1083,13 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
       "-", { id: "delete", label: "Delete label", icon: "trash", danger: true });
   }
   showMenu(null, items, { x: e.clientX, y: e.clientY }, (pick) => {
-    if (pick === "read") return void labelAction(invoke("mark_all_read", { label: id, accounts: scope }));
+    if (pick === "read") {
+      // Gmail marks every unread email in the mailbox, older ones not shown here included.
+      const box = a.querySelector("span")?.textContent ?? "this mailbox";
+      void ask({ title: `Mark all of ${box} as read?`, message: `Every unread email in ${box}${inAccounts()} is marked read in Gmail, including older ones not shown here.`, confirm: "Mark as read" })
+        .then((yes) => void (yes && labelAction(invoke("mark_all_read", { label: id, accounts: scope }))));
+      return;
+    }
     if (pick === "empty") return void emptyMailbox(id!);
     if (pick === "hide") return setSetting("sidebar.hidden", [...settings.sidebar.hidden, id ?? "ALL"]);
     if (pick.startsWith("show:")) return setSetting("sidebar.hidden", settings.sidebar.hidden.filter((k) => k !== pick.slice(5)));
@@ -1075,7 +1110,7 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
       });
     }
     if (pick === "delete") {
-      void ask({ title: `Delete “${label.name}”?`, message: "The label is removed in Gmail. Its emails keep their other labels and stay in All Mail.", confirm: "Delete", danger: true })
+      void ask({ title: `Delete “${label.name}”?`, message: `The label is removed in Gmail${inAccounts()}. Its emails keep their other labels and stay in All Mail.`, confirm: "Delete", danger: true })
         .then((yes) => void (yes && labelAction(invoke("delete_label", { label: label.id, accounts: scope }), mailbox === label.id ? "INBOX" : undefined)));
     }
   });
@@ -1104,9 +1139,15 @@ $("#mailboxes").addEventListener("dragend", () => {
   setSetting("sidebar.order", [...shown, ...settings.sidebar.order.filter((k) => !shown.includes(k))]);
 });
 
+/** " in both accounts" / " in all 3 accounts" when an action reaches every account in the unified view, else "". */
+function inAccounts() {
+  const n = (scope ?? accounts.filter((x) => accountSettings(x).unified !== false)).length;
+  return n < 2 ? "" : n === 2 ? " in both accounts" : ` in all ${n} accounts`;
+}
+
 async function emptyMailbox(id: string) {
   const name = id === "TRASH" ? "Trash" : "Spam";
-  const yes = await ask({ title: `Empty ${name}?`, message: `Everything in ${name} is deleted for good, in Gmail too. This can't be undone.`, confirm: `Empty ${name}`, danger: true });
+  const yes = await ask({ title: `Empty ${name}?`, message: `Everything in ${name}${inAccounts()} is deleted for good, in Gmail too. This can't be undone.`, confirm: `Empty ${name}`, danger: true });
   if (yes) await labelAction(invoke("empty_mailbox", { label: id, accounts: scope }));
 }
 $("#empty-btn").addEventListener("click", () => mailbox && emptyMailbox(mailbox));

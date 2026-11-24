@@ -420,7 +420,7 @@ button.primary:disabled { opacity: 0.6; }
   text-align: left;
 }
 .menu button i { font-size: 16px; color: var(--muted); }
-.menu button:hover:not(:disabled) { background: var(--hover); }
+.menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--hover); outline: 0; }
 .menu button:disabled { opacity: 0.45; }
 .menu button span:not(.account-dot) { flex: 1; }
 .menu kbd { font: inherit; font-size: 11px; color: var(--muted); }
