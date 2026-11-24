@@ -144,9 +144,18 @@ function updateCounts(group: HTMLElement) {
   all.indeterminate = n > 0 && n < boxes.length;
 }
 
-const setInbox = (list: { account: string; id: string }[], inInbox: boolean) =>
-  Promise.all(list.map(({ account, id }) =>
-    invoke("modify", { account, id, add: inInbox ? ["INBOX"] : [], remove: inInbox ? [] : ["INBOX"], trash: false })));
+/** One `modify_many` (Gmail's batch call) per account; resolves with the emails whose account succeeded. */
+async function setInbox(list: { account: string; id: string }[], inInbox: boolean) {
+  const accounts = [...new Set(list.map((i) => i.account))];
+  const results = await Promise.allSettled(accounts.map((account) =>
+    invoke("modify_many", {
+      account, ids: list.filter((i) => i.account === account).map((i) => i.id),
+      add: inInbox ? ["INBOX"] : [], remove: inInbox ? [] : ["INBOX"], trash: false,
+    })));
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  const ok = new Set(accounts.filter((_, i) => results[i].status === "fulfilled"));
+  return { done: list.filter((i) => ok.has(i.account)), error: failed && String(failed.reason) };
+}
 
 async function archive(group: HTMLElement) {
   const boxes = [...group.querySelectorAll<HTMLInputElement>("li input:checked")];
@@ -154,12 +163,11 @@ async function archive(group: HTMLElement) {
   if (!list.length) return;
   const button = group.querySelector<HTMLButtonElement>("[data-archive]")!;
   button.disabled = true;
-  // Each email on its own: only those Gmail archived leave the list and count toward "Archived N"; the rest stay ticked.
-  const results = await Promise.allSettled(list.map((item) => setInbox([item], false)));
-  const archived = list.filter((_, i) => results[i].status === "fulfilled");
-  const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
-  boxes.forEach((b, i) => results[i].status === "fulfilled" && b.closest("li")!.remove());
-  if (failed) ctx.toast(`Couldn't archive ${list.length - archived.length} of ${list.length}: ${failed.reason}`);
+  // Only those Gmail archived leave the list and count toward "Archived N"; the rest stay ticked.
+  const { done: archived, error } = await setInbox(list, false);
+  const left = new Set(archived.map((i) => `${i.account}:${i.id}`));
+  boxes.forEach((b) => left.has(`${b.dataset.account}:${b.dataset.id}`) && b.closest("li")!.remove());
+  if (error) ctx.toast(`Couldn't archive ${list.length - archived.length} of ${list.length}: ${error}`);
   button.disabled = false;
   if (archived.length) {
     // In the sheet, next to the group it came from, so Undo stays at hand while reviewing the rest.
@@ -177,7 +185,8 @@ async function restore(button: HTMLButtonElement) {
   const done = button.closest<HTMLElement>(".cu-done")!;
   button.disabled = true;
   try {
-    await setInbox(JSON.parse(done.dataset.list!), true);
+    const { error } = await setInbox(JSON.parse(done.dataset.list!), true);
+    if (error) throw error;
     done.querySelector("span")!.textContent = "Moved back to your Inbox";
     button.remove();
   } catch (err) {

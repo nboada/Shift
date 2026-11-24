@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-find-draft"
+description = "Enables the find_draft command without any pre-configured scope."
+commands.allow = ["find_draft"]
+
+[[permission]]
+identifier = "deny-find-draft"
+description = "Denies the find_draft command without any pre-configured scope."
+commands.deny = ["find_draft"]
