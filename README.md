@@ -26,17 +26,17 @@ Before public release, see `docs/google-verification.md`.
 
 ## Composer
 
-Replies and forwards open inline under the thread; new emails open in a resizable window. The body is a rich-text editor (Tiptap): ⌘B, ⌘I, ⌘U and ⌘K (link) format text, and a small toolbar appears over a selection with lists and quote too. Replies and forwards quote the original as a blockquote, with your signature above it in the editor. Mail goes out as HTML with a plain-text version. Recipients are chips with autocomplete from people you've emailed (`suggest_contacts`). Drafts save to Gmail Drafts about 1.5s after you stop typing (15s when over 1 MB of files is attached, since Gmail re-uploads them on every save), and closing keeps the draft; sending a saved draft uses `drafts.send`, which removes it from Drafts.
+New emails, replies and forwards open in a resizable window (Settings → Composer can open replies inline under the thread instead). The body is a rich-text editor (Tiptap): ⌘B, ⌘I, ⌘U and ⌘K (link) format text, and a small toolbar appears over a selection with lists and quote too. Replies and forwards quote the original as a blockquote, with your signature above it in the editor. Mail goes out as HTML with a plain-text version. Recipients are chips with autocomplete from people you've emailed (`suggest_contacts`). Drafts save to Gmail Drafts about 1.5s after you stop typing (15s when over 1 MB of files is attached, since Gmail re-uploads them on every save), and closing keeps the draft (if it can't be saved, the composer stays open). Emails in Drafts reopen in the composer. Sending a saved draft uses `drafts.send`, which removes it from Drafts. Undo send holds the email for a few seconds through the same queue as Send later, so quitting during the countdown still sends it.
 
 Attach files with the paperclip or by dropping them on the composer (25 MB in total, Gmail's limit). Forwarding includes the original attachments. In the reader, attachments are listed under each message. Click one to save it to Downloads and open it. Apps, scripts and other unusual file types are shown in Finder instead of being opened. Inline images (`cid:`) load on demand.
 
 ## Send later
 
-The clock next to Send schedules the email: Later today, Tomorrow morning, This weekend, Next week (set in Settings → Scheduling), or a date and time you pick. Gmail's API has no scheduled send, so the email is saved to Gmail Drafts and Shift sends it from the sync loop once it's due (within one sync interval). Shift has to be open at that time; anything overdue goes out the next time it opens. The **Scheduled** mailbox lists what's waiting: click one to edit it (that cancels its schedule until you send or schedule it again), or right-click to send now or cancel.
+The clock next to Send schedules the email: Later today, Tomorrow morning, This weekend, Next week (set in Settings → Scheduling), or a date and time you pick. Gmail's API has no scheduled send, so the email is saved to Gmail Drafts and Shift sends it when it's due. Shift has to be open at that time; anything overdue goes out the next time it opens. The **Scheduled** mailbox lists what's waiting: click one to edit it (that cancels its schedule until you send or schedule it again), or right-click to send now or cancel.
 
 ## Settings
 
-Open with the gear in the sidebar or `⌘,`. Preferences are saved to `settings.json` in the app data folder; AI provider keys go to the macOS Keychain. Notifications is a placeholder until that feature exists.
+Open with the gear in the sidebar or `⌘,`. Preferences are saved to `settings.json` in the app data folder; AI provider keys go to the macOS Keychain.
 
 ## Keyboard shortcuts
 

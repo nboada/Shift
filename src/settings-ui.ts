@@ -136,8 +136,16 @@ function toggle(path: string, disabled = false) {
   return `<input type="checkbox" class="switch" role="switch" data-path="${path}" ${getSetting(path) ? "checked" : ""} ${disabled ? "disabled" : ""} />`;
 }
 
+let rowIds = 0;
+/**
+ * A setting: its title and description, and the control. The control's first input or select is named by
+ * the title and described by the description, so VoiceOver reads "Open Shift at login, switch" rather than "switch".
+ */
 function row(title: string, control: string, desc = "") {
-  return `<div class="setting-row"><div class="setting-text"><strong>${title}</strong>${desc ? `<span>${desc}</span>` : ""}</div><div class="setting-control">${control}</div></div>`;
+  const id = `set-${++rowIds}`;
+  // Inputs only: buttons (dropdowns, segmented options) already say what they are, and this would replace that.
+  const named = control.replace(/<(input|select|textarea)\b(?![^>]*aria-label)/, `<$1 aria-labelledby="${id}"${desc ? ` aria-describedby="${id}-d"` : ""}`);
+  return `<div class="setting-row"><div class="setting-text"><strong id="${id}">${title}</strong>${desc ? `<span id="${id}-d">${desc}</span>` : ""}</div><div class="setting-control">${named}</div></div>`;
 }
 
 const group = (title: string, rows: string) => `<section class="setting-group">${title ? `<h3>${title}</h3>` : ""}${rows}</section>`;
