@@ -4,6 +4,7 @@ mod demo;
 mod gmail;
 mod settings;
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use futures::StreamExt;
 use gmail::Gmail;
 use mail_builder::{MessageBuilder, headers::address::Address, headers::message_id::MessageId};
@@ -547,7 +548,20 @@ struct Draft {
     from_name: Option<String>,
     /// HTML version of `body` (sent as multipart/alternative); set when an HTML signature is used.
     html: Option<String>,
+    #[serde(default)]
+    attachments: Vec<OutgoingFile>,
 }
+
+#[derive(Deserialize)]
+struct OutgoingFile {
+    name: String,
+    mime: String,
+    /// Standard base64.
+    data: String,
+}
+
+/// Gmail rejects messages over 25 MB; base64 makes the sent size about a third bigger than this.
+const MAX_ATTACHMENTS: usize = 25 * 1024 * 1024;
 
 /// RFC 5322 message for a draft or a send.
 fn build_message(from: String, draft: &Draft) -> anyhow::Result<Vec<u8>> {
@@ -585,6 +599,20 @@ fn build_message(from: String, draft: &Draft) -> anyhow::Result<Vec<u8>> {
         msg = msg
             .in_reply_to(MessageId::new_list(parent.into_iter()))
             .references(MessageId::new_list(refs.into_iter()));
+    }
+    let mut total = 0;
+    for f in &draft.attachments {
+        let bytes = STANDARD.decode(&f.data)?;
+        total += bytes.len();
+        let mime = if f.mime.is_empty() {
+            "application/octet-stream"
+        } else {
+            &f.mime
+        };
+        msg = msg.attachment(mime.to_string(), f.name.clone(), bytes);
+    }
+    if total > MAX_ATTACHMENTS {
+        anyhow::bail!("Attachments are over Gmail's 25 MB limit");
     }
     Ok(msg.write_to_vec()?)
 }
@@ -663,6 +691,114 @@ async fn delete_draft(s: tauri::State<'_, State>, account: String, draft_id: Str
     .delete_draft(&draft_id)
     .await?;
     Ok(())
+}
+
+/// An attachment's filename and bytes: from the cache when Gmail sent them inline, else fetched on demand.
+async fn attachment_bytes(
+    s: &State,
+    account: &str,
+    message: &str,
+    idx: i64,
+) -> anyhow::Result<(String, Vec<u8>)> {
+    let a = s.account(account)?;
+    let (name, data, id) = db::attachment_source(&a.db(), message, idx)?;
+    if let Some(data) = data {
+        return Ok((name, data));
+    }
+    let Some(id) = id.filter(|_| !s.demo) else {
+        anyhow::bail!("This attachment has no data");
+    };
+    let token = a.access_token(&s.http).await?;
+    let bytes = Gmail {
+        http: &s.http,
+        token: &token,
+    }
+    .attachment(message, &id)
+    .await?;
+    Ok((name, bytes))
+}
+
+/// Standard base64, for inline images and forwarding.
+#[tauri::command]
+async fn attachment_data(
+    s: tauri::State<'_, State>,
+    account: String,
+    message: String,
+    idx: i64,
+) -> R<String> {
+    let (_, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
+    Ok(STANDARD.encode(bytes))
+}
+
+/// The attachment's name reduced to a plain file name, so it can't point outside the folder.
+fn safe_filename(name: &str) -> String {
+    let name: String = name
+        .chars()
+        .map(|c| {
+            if "/\\:".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let name = name.trim().trim_start_matches('.');
+    if name.is_empty() {
+        "attachment".into()
+    } else {
+        name.into()
+    }
+}
+
+/// `dir/name`, or `dir/name (2).ext` and so on when that file already exists.
+fn free_path(dir: &Path, name: &str) -> PathBuf {
+    let p = Path::new(name);
+    let (stem, ext) = (
+        p.file_stem().and_then(|s| s.to_str()).unwrap_or(name),
+        p.extension().and_then(|e| e.to_str()),
+    );
+    (1..)
+        .map(|n| match (n, ext) {
+            (1, _) => dir.join(name),
+            (_, Some(ext)) => dir.join(format!("{stem} ({n}).{ext}")),
+            (_, None) => dir.join(format!("{stem} ({n})")),
+        })
+        .find(|p| !p.exists())
+        .unwrap()
+}
+
+/// Files that open in a viewer rather than run. Anything else (apps, scripts, installers) is revealed in Finder instead,
+/// since files written by Shift carry no quarantine flag for Gatekeeper to check.
+fn opens_directly(name: &str) -> bool {
+    const SAFE: &[&str] = &[
+        "pdf", "png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "bmp", "svg", "txt",
+        "md", "csv", "rtf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
+        "ics", "vcf", "mp3", "m4a", "wav", "mp4", "mov", "zip",
+    ];
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| SAFE.contains(&e.to_lowercase().as_str()))
+}
+
+/// Saves an attachment to Downloads and opens it; returns the saved path.
+#[tauri::command]
+async fn open_attachment(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    account: String,
+    message: String,
+    idx: i64,
+) -> R<String> {
+    let (name, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
+    let path = free_path(&app.path().download_dir()?, &safe_filename(&name));
+    std::fs::write(&path, bytes)?;
+    if opens_directly(&name) {
+        tauri_plugin_opener::open_path(&path, None::<&str>)?;
+    } else {
+        tauri_plugin_opener::reveal_item_in_dir(&path)?;
+    }
+    Ok(path.display().to_string())
 }
 
 /// People you've emailed or heard from whose name or address contains `query`, most frequent first.
@@ -827,6 +963,8 @@ pub fn run() {
             suggest_contacts,
             save_draft,
             delete_draft,
+            attachment_data,
+            open_attachment,
             set_settings,
             set_ai_key,
             has_ai_key,
@@ -913,6 +1051,7 @@ mod tests {
             references: None,
             from_name: Some("Me".into()),
             html: None,
+            attachments: Vec::new(),
         };
         let empty =
             String::from_utf8(build_message("me@x.com".into(), &d("", "")).unwrap()).unwrap();
@@ -928,6 +1067,49 @@ mod tests {
             bcc.contains("From: \"Me\" <me@x.com>") || bcc.contains("From: Me <me@x.com>"),
             "{bcc}"
         );
+    }
+
+    #[test]
+    fn attachments_are_added_and_size_capped() {
+        let mut d = Draft {
+            to: "a@x.com".into(),
+            cc: String::new(),
+            bcc: String::new(),
+            subject: "s".into(),
+            body: "see attached".into(),
+            thread_id: None,
+            in_reply_to: None,
+            references: None,
+            from_name: None,
+            html: None,
+            attachments: vec![OutgoingFile {
+                name: "notes.txt".into(),
+                mime: "text/plain".into(),
+                data: STANDARD.encode("hello file"),
+            }],
+        };
+        let raw = String::from_utf8(build_message("me@x.com".into(), &d).unwrap()).unwrap();
+        assert!(raw.contains("multipart/mixed"), "{raw}");
+        assert!(raw.contains("filename=\"notes.txt\""), "{raw}");
+        assert!(raw.contains("see attached"), "{raw}");
+        d.attachments[0].data = STANDARD.encode(vec![0u8; MAX_ATTACHMENTS + 1]);
+        assert!(build_message("me@x.com".into(), &d).is_err());
+    }
+
+    #[test]
+    fn attachment_files_stay_in_their_folder() {
+        assert_eq!(safe_filename("../../etc/passwd"), "_.._etc_passwd");
+        assert_eq!(safe_filename(".hidden"), "hidden");
+        assert_eq!(safe_filename("  "), "attachment");
+        let dir = std::env::temp_dir().join(format!("shift-dl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.pdf"), "x").unwrap();
+        assert_eq!(free_path(&dir, "a.pdf"), dir.join("a (2).pdf"));
+        assert_eq!(free_path(&dir, "b.pdf"), dir.join("b.pdf"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(opens_directly("Contract.PDF"));
+        assert!(!opens_directly("invoice.pdf.command"));
+        assert!(!opens_directly("noext"));
     }
 
     #[test]

@@ -535,6 +535,28 @@ body.resizing iframe { pointer-events: none; }
 .message iframe { display: block; width: 100%; border: 0; background: #fff; }
 .message .text { padding: 4px 16px 16px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; }
 
+/* attachments: a strip of file chips under a message, and in the composer */
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 14px; border-top: 1px solid var(--line); }
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--card-line);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 13px;
+}
+.attachment-open { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 5px 10px; border-radius: 8px; }
+.attachment-open:hover { background: var(--hover); }
+.attachment-open i { font-size: 18px; color: var(--muted); flex: none; }
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; font-weight: 500; }
+.attachment-size { color: var(--muted); font-size: 12px; flex: none; }
+.attachment-remove { display: grid; place-items: center; width: 22px; height: 22px; margin-right: 4px; border-radius: 50%; font-size: 10px; color: var(--muted); }
+.attachment-remove:hover { background: var(--hover); color: var(--text); }
+.compose-files { flex: none; padding: 8px 16px; }
+.compose-files .attachment-open:hover { background: none; }
+.compose-form.dropping { box-shadow: inset 0 0 0 2px var(--accent); }
+
 /* composer: a window for new emails, a card under the thread for replies */
 .composer {
   width: min(760px, calc(100vw - 32px));
@@ -570,7 +592,7 @@ body.resizing iframe { pointer-events: none; }
   flex: none;
 }
 .field-label { width: 56px; flex: none; color: var(--muted); }
-.field-row > input, .rcpt input, .compose-form textarea {
+.field-row > input, .rcpt input {
   flex: 1;
   min-width: 0;
   border: 0;
@@ -580,14 +602,37 @@ body.resizing iframe { pointer-events: none; }
   font: inherit;
   font-size: 14px;
 }
-.compose-form textarea {
-  flex: 1;
-  min-height: 160px;
-  padding: 14px 16px;
-  border-top: 1px solid var(--line);
-  resize: none;
-  line-height: 1.5;
+.compose-body { flex: 1; min-height: 160px; overflow-y: auto; border-top: 1px solid var(--line); cursor: text; }
+.compose-editor { min-height: 100%; padding: 14px 16px; outline: 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.compose-editor p { margin: 0; }
+.compose-editor ul, .compose-editor ol { margin: 0; padding-left: 24px; }
+.compose-editor blockquote { margin: 4px 0 4px 2px; padding-left: 12px; border-left: 3px solid var(--card-line); color: var(--muted); }
+.compose-editor a { color: var(--accent); }
+.compose-editor > p.is-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; color: var(--muted); pointer-events: none; }
+.compose-signature { margin: 2px 0; border-radius: 6px; overflow: hidden; }
+.compose-signature.ProseMirror-selectednode { box-shadow: 0 0 0 2px var(--accent); }
+
+/* format bar: floats over a text selection in the composer */
+.format-bar {
+  position: fixed;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
 }
+.format-bar[hidden] { display: none; }
+.format-bar button { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; font-size: 16px; color: var(--muted); }
+.format-bar button:hover { background: var(--hover); color: var(--text); }
+.format-bar button.on { background: var(--selected); color: var(--accent); }
+.format-sep { width: 1px; height: 16px; margin: 0 3px; background: var(--card-line); }
+.format-bar input { display: none; width: 280px; padding: 4px 8px; border: 0; outline: 0; background: none; color: var(--text); font: inherit; font-size: 13px; }
+.format-bar.linking button, .format-bar.linking .format-sep { display: none; }
+.format-bar.linking input { display: block; }
 .rcpt { position: relative; flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; padding: 3px 0; }
 .rcpt input { min-width: 140px; padding: 3px 0; }
 .rchip {
@@ -612,7 +657,7 @@ body.resizing iframe { pointer-events: none; }
 
 /* inline reply: lives in the reader as the last card of the thread */
 .compose-inline { overflow: visible; }
-.compose-inline .compose-form textarea { min-height: 200px; }
+.compose-inline .compose-body { min-height: 200px; overflow-y: visible; }
 .compose-inline .subject-row { display: none; }
 .compose-inline .compose-form header { padding-top: 12px; }
 
@@ -871,7 +916,7 @@ body.resizing iframe { pointer-events: none; }
 .sig-preview { margin: 0 0 12px; border: 1px solid var(--card-line); border-radius: 8px; overflow: hidden; }
 .sig-preview span { display: block; padding: 5px 10px; font-size: 11px; font-weight: 600; color: var(--muted); background: var(--search); }
 .sig-preview iframe, .compose-signature iframe { display: block; width: 100%; height: 60px; border: 0; background: #fff; }
-.compose-signature { border-top: 1px dashed var(--card-line); }
+.compose-signature iframe { pointer-events: none; }
 
 button.secondary { padding: 6px 12px; border: 1px solid var(--card-line); background: var(--bg); font-weight: 500; }
 button.secondary:hover:not(:disabled) { background: var(--hover); }

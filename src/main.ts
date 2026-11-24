@@ -5,11 +5,13 @@ import { SEND, bindingsFrom, comboOf, formatCombo, keysFor } from "./keys";
 import {
   ACCOUNT_COLOR_ORDER, accountSettings, applyVisualSettings, loadSettings, onSettingsChange, setAccountSetting, setSetting, settings, stepZoom,
 } from "./settings";
-import { closeSettings, initSettings, openSettings, renderSignaturePreview, settingsOpen } from "./settings-ui";
-import { withHtmlSignature } from "./compose";
+import { closeSettings, initSettings, openSettings, settingsOpen } from "./settings-ui";
+import { docToText, emailHtml, textToHtml } from "./compose";
+import { createEditor } from "./editor";
 import { ask, askOpen } from "./dialog";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
+import { type Attachment, type OutFile, attachmentButton, checkSize, fileIcon, listedAttachments, readFile } from "./attachments";
 
 type Label = { id: string; name: string; kind: string; unread: number };
 type Thread = {
@@ -20,7 +22,7 @@ type Thread = {
 };
 type Message = {
   id: string; sender: string; recipients: string; cc: string; date: number; subject: string;
-  message_id: string; refs: string; html: string | null; text: string | null;
+  message_id: string; refs: string; html: string | null; text: string | null; attachments: Attachment[];
 };
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
@@ -325,11 +327,13 @@ async function openThread(id: string) {
         <div class="meta"><strong>${esc(name)}</strong><span>To: ${esc(m.recipients)}${m.cc ? `, Cc: ${esc(m.cc)}` : ""}</span></div>
         <time>${new Date(m.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time>
       </header>`;
+    const account = thread?.account ?? defaultAccount();
     if (m.html) {
       const frame = document.createElement("iframe");
       el.append(frame);
       reader.append(el);
       mountEmail(frame, m.html);
+      showInlineImages(frame, m, account);
     } else {
       const text = document.createElement("div");
       text.className = "text";
@@ -337,6 +341,7 @@ async function openThread(id: string) {
       el.append(text);
       reader.append(el);
     }
+    el.insertAdjacentHTML("beforeend", attachmentStrip(m, account));
   }
   reader.scrollTop = 0;
   if (thread?.unread && settings.general.markReadOnOpen) {
@@ -344,6 +349,43 @@ async function openThread(id: string) {
     modify(id, [], ["UNREAD"]);
   }
 }
+
+// ---- Attachments in the reader
+
+function attachmentStrip(m: Message, account: string) {
+  const files = listedAttachments(m.attachments, m.html);
+  if (!files.length) return "";
+  return `<div class="attachments message-files">${files
+    .map((a) => attachmentButton(fileIcon(a.mime, a.filename), a.filename || "attachment", a.size, { account, message: m.id, idx: a.idx }))
+    .join("")}</div>`;
+}
+
+/** Swaps `cid:` image sources for the attachment's bytes once the email has loaded. */
+function showInlineImages(frame: HTMLIFrameElement, m: Message, account: string) {
+  const inline = m.attachments.filter((a) => a.content_id);
+  if (!inline.length) return;
+  frame.addEventListener("load", () => {
+    for (const img of frame.contentDocument!.querySelectorAll<HTMLImageElement>('img[src^="cid:" i]')) {
+      const a = inline.find((a) => a.content_id === decodeURIComponent(img.getAttribute("src")!.slice(4)));
+      if (!a) continue;
+      invoke<string>("attachment_data", { account, message: m.id, idx: a.idx })
+        .then((data) => (img.src = `data:${a.mime};base64,${data}`))
+        .catch(() => {});
+    }
+  }, { once: true });
+}
+
+reader.addEventListener("click", async (e) => {
+  const el = (e.target as Element).closest<HTMLElement>(".message-files .attachment");
+  if (!el) return;
+  const { account, message, idx } = el.dataset;
+  try {
+    const path = await invoke<string>("open_attachment", { account, message, idx: Number(idx) });
+    toast(`Saved to ${path.split("/").slice(-2).join("/")}`);
+  } catch (err) {
+    toast(String(err));
+  }
+});
 
 function clearReader() {
   if (compose?.inline) closeComposer();
@@ -529,13 +571,12 @@ type Fields = { to?: string; cc?: string; bcc?: string; subject?: string; body?:
 type ComposeOptions = {
   title?: string;
   context?: ReplyContext | null;
-  /** Where the quoted message starts in the body, so an HTML signature can go above it. */
-  quoteMarker?: string | null;
   inline?: boolean;
   draftId?: string | null;
   touched?: boolean;
   /** Which account sends it. Replies use the thread's account. */
   account?: string;
+  attachments?: OutFile[];
 };
 type ComposeState = Required<ComposeOptions>;
 
@@ -544,7 +585,7 @@ let draftTimer = 0;
 let draftQueue: Promise<unknown> = Promise.resolve();
 
 const subjectInput = composeForm.elements.namedItem("subject") as HTMLInputElement;
-const bodyInput = composeForm.elements.namedItem("body") as HTMLTextAreaElement;
+const editor = createEditor($("#compose-body"), $("#format-bar"), () => markTouched());
 const suggestContacts = (q: string) => invoke<string[]>("suggest_contacts", { query: q }).catch(() => [] as string[]);
 const rcpt = {
   to: new Recipients($("#rcpt-to"), suggestContacts, () => markTouched()),
@@ -583,27 +624,24 @@ function markTouched() {
   if (!compose) return;
   compose.touched = true;
   clearTimeout(draftTimer);
-  draftTimer = window.setTimeout(() => saveDraft(), 1500);
+  // drafts.update replaces the whole message, so every save re-uploads the files; with big ones, save less often.
+  const bytes = compose.attachments.reduce((n, f) => n + f.size, 0);
+  draftTimer = window.setTimeout(() => saveDraft(), bytes > 1_000_000 ? 15_000 : 1500);
 }
 subjectInput.addEventListener("input", markTouched);
-bodyInput.addEventListener("input", markTouched);
 
 const hasContent = () =>
-  !!compose?.touched && !!(bodyInput.value.trim() || subjectInput.value.trim() || rcpt.to.count || rcpt.cc.count || rcpt.bcc.count);
+  !!compose?.touched && !!(compose.attachments.length || editor.getText().trim() || subjectInput.value.trim() || rcpt.to.count || rcpt.cc.count || rcpt.bcc.count);
 
-/** The message as the backend expects it, with an HTML signature merged in when one is set. */
+/** The message as the backend expects it: HTML from the editor plus a plain-text version. */
 function currentDraft(state: ComposeState): Record<string, unknown> {
-  const draft: Record<string, unknown> = {
-    to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: bodyInput.value,
-    from_name: accountSettings(state.account).name, ...(state.context ?? {}),
+  const sigHtml = settings.composer.signatureHtml;
+  const sigText = new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
+  return {
+    to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value,
+    body: docToText(editor.state.doc, sigText), html: emailHtml(editor.getHTML(), sigHtml),
+    from_name: accountSettings(state.account).name, ...(state.context ?? {}), attachments: state.attachments,
   };
-  if (htmlSignature()) {
-    const sigHtml = settings.composer.signatureHtml;
-    const sigText = new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
-    const { text, html } = withHtmlSignature(bodyInput.value, state.quoteMarker, sigHtml, sigText);
-    Object.assign(draft, { body: text, html });
-  }
-  return draft;
 }
 
 /** Saves are queued, so a slow save can't race the next one into creating a duplicate draft. */
@@ -651,23 +689,21 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
   if (compose) await closeComposer();
   const inline = !!opts.inline && !!selected && (!opts.context || opts.context.thread_id === selected);
   compose = {
-    title: opts.title ?? "New Email", context: opts.context ?? null, quoteMarker: opts.quoteMarker ?? null,
+    title: opts.title ?? "New Email", context: opts.context ?? null,
     inline, draftId: opts.draftId ?? null, touched: !!opts.touched, account: opts.account ?? defaultAccount(),
+    attachments: opts.attachments ?? [],
   };
+  renderComposeFiles();
   renderFromRow();
   rcpt.to.set(fields.to ?? "");
   rcpt.cc.set(fields.cc ?? "");
   rcpt.bcc.set(fields.bcc ?? "");
   showCcRows(!!fields.cc, !!fields.bcc);
   subjectInput.value = fields.subject ?? "";
-  bodyInput.value = fields.body ?? "";
+  editor.commands.setContent(fields.body ?? "", { emitUpdate: false });
   $("#compose-title").textContent = compose.title;
   $("#compose-error").textContent = "";
   draftStatus(compose.draftId ? "Saved" : "");
-  // HTML signatures can't live in a plain textarea, so they show as a preview and are added on send.
-  const sig = $("#compose-signature");
-  sig.hidden = !htmlSignature();
-  if (!sig.hidden) renderSignaturePreview(sig.querySelector("iframe"));
   if (inline) {
     const host = document.createElement("section");
     host.className = "message compose-inline";
@@ -679,18 +715,26 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     composer.showModal();
   }
   if (fields.to || opts.context) {
-    bodyInput.focus();
-    bodyInput.setSelectionRange(0, 0);
-    bodyInput.scrollTop = 0;
+    editor.commands.focus("start");
+    $("#compose-body").scrollTop = 0;
   } else rcpt.to.focus();
 }
 
 /** Splits an address header on commas that aren't inside a quoted display name. */
 const splitAddresses = (list: string) => list.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((a) => a.trim()).filter(Boolean);
 
-/** Signature block ("-- " separator, the email convention) or nothing. */
+/** An empty line to write on, then the signature ("-- " separator for text, the email convention) if one is set. */
 const signature = () =>
-  settings.composer.signatureMode === "text" && settings.composer.signature.trim() ? `\n\n-- \n${settings.composer.signature.trim()}` : "";
+  "<p></p>" +
+  (htmlSignature()
+    ? "<p></p><div data-signature></div>"
+    : settings.composer.signatureMode === "text" && settings.composer.signature.trim()
+      ? `<p></p>${textToHtml(`-- \n${settings.composer.signature.trim()}`)}`
+      : "");
+
+/** The original message for a reply or forward: its HTML where there is some, quoted under a header line. */
+const quoted = (m: Message, header: string) =>
+  `<p></p>${header}<blockquote>${m.html ?? textToHtml(m.text ?? "")}</blockquote>`;
 
 function reply(kind: "reply" | "all" | "forward") {
   const last = messages.at(-1);
@@ -700,33 +744,31 @@ function reply(kind: "reply" | "all" | "forward") {
   const notMe = (a: string) => !accounts.includes(bareEmail(a));
   const when = new Date(last.date).toLocaleString();
   if (kind === "forward") {
-    // shortcut: forwards the text only; attachments aren't synced yet.
-    const marker = "---------- Forwarded message ----------";
-    return openComposer(
-      {
-        subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`,
-        body: `${signature()}\n\n${marker}\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}\n\n${last.text ?? ""}`,
-      },
-      { title: "Forward", quoteMarker: marker, inline: true, account },
+    // shortcut: the editor keeps just its own formatting (no images, tables or styles) from the forwarded body.
+    const header = textToHtml(
+      `---------- Forwarded message ----------\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}`,
     );
+    const opened = openComposer(
+      { subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`, body: signature() + quoted(last, header) },
+      { title: "Forward", inline: true, account },
+    );
+    return opened.then(() => forwardAttachments(last, account));
   }
   const mine = !notMe(last.sender);
   const primary = mine ? splitAddresses(last.recipients) : [last.sender];
   const others = kind === "all" ? [...splitAddresses(last.recipients), ...splitAddresses(last.cc)] : [];
   const cc = [...new Set(others.filter((a) => notMe(a) && !primary.some((p) => bareEmail(p) === bareEmail(a))))];
-  const marker = `On ${when}, ${displayName(last.sender)} wrote:`;
-  const quoted = (last.text ?? "").split("\n").map((l) => `> ${l}`).join("\n");
+  const header = textToHtml(`On ${when}, ${displayName(last.sender)} wrote:`);
   return openComposer(
     {
       to: primary.join(", "),
       cc: cc.join(", "),
       subject: /^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`,
-      body: signature() + (settings.composer.quoteOriginal ? `\n\n${marker}\n${quoted}` : ""),
+      body: signature() + (settings.composer.quoteOriginal ? quoted(last, header) : ""),
     },
     {
       title: kind === "all" ? "Reply all" : "Reply",
       context: { thread_id: selected, in_reply_to: last.message_id, references: last.refs },
-      quoteMarker: marker,
       inline: true,
       account,
     },
@@ -743,7 +785,7 @@ composeForm.addEventListener("submit", async (e) => {
   const bad = all.find((a) => !isValidAddress(a));
   if (bad) return error(`Check this address: ${bad}`);
   const draft = currentDraft(state);
-  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: bodyInput.value };
+  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
   // Let any pending save finish first, so it can't recreate the draft after it's been sent.
   clearTimeout(draftTimer);
   await draftQueue;
@@ -779,6 +821,78 @@ composeForm.addEventListener("submit", async (e) => {
   } finally {
     button.disabled = false;
   }
+});
+
+// ---- Composer attachments: the paperclip, drag and drop, and removable chips.
+
+const composeFiles = $("#compose-files");
+const fileInput = $<HTMLInputElement>("#compose-file");
+
+function renderComposeFiles() {
+  const files = compose?.attachments ?? [];
+  composeFiles.hidden = !files.length;
+  composeFiles.innerHTML = files.map((f, i) => attachmentButton(fileIcon(f.mime, f.name), f.name, f.size, { i }, true)).join("");
+}
+
+async function addComposeFiles(list: Iterable<File>) {
+  const state = compose;
+  if (!state) return;
+  for (const file of list) {
+    const tooBig = checkSize(state.attachments, file.size);
+    if (tooBig) {
+      $("#compose-error").textContent = tooBig;
+      break;
+    }
+    const f = await readFile(file).catch(() => null);
+    if (compose !== state) return;
+    if (!f) continue;
+    state.attachments.push(f);
+    renderComposeFiles();
+    markTouched();
+  }
+}
+
+/** Adds the forwarded message's files (including inline images) to the composer as they download. */
+async function forwardAttachments(m: Message, account: string) {
+  const state = compose;
+  for (const a of m.attachments) {
+    const name = a.filename || "attachment";
+    const data = await invoke<string>("attachment_data", { account, message: m.id, idx: a.idx }).catch(() => null);
+    if (compose !== state || !state) return;
+    if (data === null) {
+      toast(`Couldn't attach ${name}`);
+      continue;
+    }
+    state.attachments.push({ name, mime: a.mime, data, size: a.size });
+    renderComposeFiles();
+  }
+}
+
+$("#compose-attach").addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  addComposeFiles([...(fileInput.files ?? [])]);
+  fileInput.value = "";
+});
+composeFiles.addEventListener("click", (e) => {
+  const el = (e.target as Element).closest<HTMLElement>(".attachment-remove");
+  if (!el || !compose) return;
+  compose.attachments.splice(Number(el.closest<HTMLElement>(".attachment")!.dataset.i), 1);
+  renderComposeFiles();
+  markTouched();
+});
+composeForm.addEventListener("dragover", (e) => {
+  if (!e.dataTransfer?.types.includes("Files")) return;
+  e.preventDefault();
+  composeForm.classList.add("dropping");
+});
+composeForm.addEventListener("dragleave", (e) => {
+  if (!composeForm.contains(e.relatedTarget as Node)) composeForm.classList.remove("dropping");
+});
+composeForm.addEventListener("drop", (e) => {
+  composeForm.classList.remove("dropping");
+  if (!e.dataTransfer?.files.length) return;
+  e.preventDefault();
+  addComposeFiles([...e.dataTransfer.files]);
 });
 
 $("#compose-close").addEventListener("click", () => closeComposer());
@@ -1229,7 +1343,7 @@ document.addEventListener("keydown", (e) => {
     action = action === "reply" ? "replyAll" : "reply";
   }
   // In the search field only ⌘ shortcuts act, so typing (and Backspace) stays text editing.
-  if ((e.target as Element).closest("input, textarea")) {
+  if ((e.target as Element).closest("input, textarea, [contenteditable]")) {
     if (e.key === "Escape") (e.target as HTMLElement).blur();
     if (!combo.includes("cmd+")) return;
   }
