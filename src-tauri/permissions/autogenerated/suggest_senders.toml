@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-suggest-senders"
+description = "Enables the suggest_senders command without any pre-configured scope."
+commands.allow = ["suggest_senders"]
+
+[[permission]]
+identifier = "deny-suggest-senders"
+description = "Denies the suggest_senders command without any pre-configured scope."
+commands.deny = ["suggest_senders"]
