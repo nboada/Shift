@@ -23,17 +23,31 @@ CREATE TABLE IF NOT EXISTS messages (
   subject TEXT NOT NULL, message_id TEXT NOT NULL, refs TEXT NOT NULL,
   html TEXT, text TEXT);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id, date);
+CREATE TABLE IF NOT EXISTS attachments (
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, idx INTEGER NOT NULL,
+  filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+  attachment_id TEXT, content_id TEXT, data BLOB,
+  PRIMARY KEY (message_id, idx)) WITHOUT ROWID;
 ";
 
 pub fn open(path: &std::path::Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let had_attachments: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'attachments')",
+        [],
+        |r| r.get(0),
+    )?;
     conn.execute_batch(SCHEMA)?;
     // Databases created before bodies were loaded lazily lack the column; the error just means it exists.
     let _ = conn.execute(
         "ALTER TABLE threads ADD COLUMN full INTEGER NOT NULL DEFAULT 0",
         [],
     );
+    // Bodies cached before attachments were stored carry none; mark them for a re-fetch on open.
+    if !had_attachments {
+        conn.execute("UPDATE threads SET full = 0", [])?;
+    }
     Ok(conn)
 }
 
@@ -103,6 +117,13 @@ pub fn upsert_thread(conn: &mut Connection, t: &gmail::Thread, full: bool) -> Re
                 m.header("Message-ID"), m.header("References"), m.body("text/html"), m.body("text/plain")
             ],
         )?;
+        for (i, a) in m.attachments().into_iter().enumerate() {
+            tx.execute(
+                "INSERT INTO attachments (message_id, idx, filename, mime, size, attachment_id, content_id, data)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![m.id, i as i64, a.filename, a.mime_type, a.size, a.attachment_id, a.content_id, a.data],
+            )?;
+        }
     }
     tx.commit()?;
     Ok(())
@@ -341,6 +362,16 @@ pub struct MessageRow {
     refs: String,
     pub html: Option<String>,
     text: Option<String>,
+    pub attachments: Vec<AttachmentRow>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct AttachmentRow {
+    pub idx: i64,
+    pub filename: String,
+    pub mime: String,
+    pub size: i64,
+    pub content_id: Option<String>,
 }
 
 pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
@@ -360,9 +391,40 @@ pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
             refs: r.get(7)?,
             html: r.get(8)?,
             text: r.get(9)?,
+            attachments: Vec::new(),
         })
     })?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    let mut out: Vec<MessageRow> = rows.collect::<Result<_, _>>()?;
+    let mut st = conn.prepare_cached(
+        "SELECT idx, filename, mime, size, content_id FROM attachments WHERE message_id = ?1 ORDER BY idx",
+    )?;
+    for m in &mut out {
+        m.attachments = st
+            .query_map([&m.id], |r| {
+                Ok(AttachmentRow {
+                    idx: r.get(0)?,
+                    filename: r.get(1)?,
+                    mime: r.get(2)?,
+                    size: r.get(3)?,
+                    content_id: r.get(4)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+    }
+    Ok(out)
+}
+
+/// Where an attachment's bytes are: inline `data`, or the Gmail `attachment_id` to fetch. Also its filename.
+pub fn attachment_source(
+    conn: &Connection,
+    message: &str,
+    idx: i64,
+) -> Result<(String, Option<Vec<u8>>, Option<String>)> {
+    Ok(conn.query_row(
+        "SELECT filename, data, attachment_id FROM attachments WHERE message_id = ?1 AND idx = ?2",
+        params![message, idx],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?)
 }
 
 #[cfg(test)]
@@ -451,6 +513,30 @@ mod tests {
         assert!(search_local(&c, "100%").unwrap().is_empty(), "% is literal");
         assert!(search_local(&c, "  ").unwrap().is_empty());
         assert_eq!(suggest_senders(&c, "a@b").unwrap(), ["a@b.c"]);
+
+        let with_file: gmail::Thread = serde_json::from_value(serde_json::json!({ "id": "f", "messages": [{
+            "id": "f-m", "labelIds": ["INBOX"], "internalDate": "6", "payload": { "mimeType": "multipart/mixed", "parts": [
+                { "mimeType": "text/plain", "body": { "data": "aGk" } },
+                { "mimeType": "application/pdf", "filename": "c.pdf", "body": { "attachmentId": "A", "size": 9 } }] }
+        }]}))
+        .unwrap();
+        upsert_thread(&mut c, &with_file, true).unwrap();
+        upsert_thread(&mut c, &with_file, true).unwrap();
+        let files = &messages(&c, "f").unwrap()[0].attachments;
+        assert_eq!(
+            (files.len(), files[0].filename.as_str(), files[0].size),
+            (1, "c.pdf", 9),
+            "re-sync replaces rows"
+        );
+        assert_eq!(
+            attachment_source(&c, "f-m", 0).unwrap().2.as_deref(),
+            Some("A")
+        );
+        delete_thread(&c, "f").unwrap();
+        assert!(
+            attachment_source(&c, "f-m", 0).is_err(),
+            "attachments cascade"
+        );
 
         delete_thread(&c, "a").unwrap();
         assert!(messages(&c, "a").unwrap().is_empty(), "messages cascade");

@@ -46,6 +46,55 @@ fn thread(id: &str, subject: &str, labels: &[&str], msgs: &[Msg]) -> gmail::Thre
     serde_json::from_value(json!({ "id": id, "messages": messages })).expect("demo thread shape")
 }
 
+/// (filename, MIME type, bytes, Content-ID for an inline image).
+type File = (
+    &'static str,
+    &'static str,
+    &'static [u8],
+    Option<&'static str>,
+);
+
+const WIREFRAMES: &[u8] = include_bytes!("demo-files/wireframes.png");
+const LOGO: &[u8] = include_bytes!("demo-files/logo.png");
+const CONTRACT: &[u8] = include_bytes!("demo-files/contract.pdf");
+
+/// Wraps message `msg`'s body in multipart/mixed with `files` after it. Bytes go inline, so nothing is fetched.
+fn attach(t: &mut gmail::Thread, msg: usize, files: &[File]) {
+    let m = &mut t.messages[msg];
+    let payload = m.payload.take().expect("demo payload");
+    let mut parts = vec![gmail::Part {
+        mime_type: payload.mime_type,
+        body: payload.body,
+        ..Default::default()
+    }];
+    for (name, mime, bytes, cid) in files {
+        parts.push(gmail::Part {
+            mime_type: mime.to_string(),
+            filename: name.to_string(),
+            headers: cid
+                .map(|c| {
+                    vec![gmail::Header {
+                        name: "Content-ID".into(),
+                        value: format!("<{c}>"),
+                    }]
+                })
+                .unwrap_or_default(),
+            body: Some(gmail::Body {
+                data: Some(URL_SAFE_NO_PAD.encode(bytes)),
+                attachment_id: None,
+                size: bytes.len() as i64,
+            }),
+            parts: Vec::new(),
+        });
+    }
+    m.payload = Some(gmail::Part {
+        mime_type: "multipart/mixed".into(),
+        headers: payload.headers,
+        parts,
+        ..Default::default()
+    });
+}
+
 fn strip_tags(s: &str) -> String {
     let mut out = String::new();
     let mut in_tag = false;
@@ -81,7 +130,8 @@ const NEWSLETTER: &str = r#"<div style="max-width:560px;margin:auto;font-family:
 <hr><p style="font-size:12px;color:#999">You're receiving this because you subscribed. <a href="https://example.com/unsubscribe">Unsubscribe</a></p></div>"#;
 
 const INVOICE: &str = r#"<table style="font-family:-apple-system,sans-serif;max-width:480px;margin:auto;border-collapse:collapse">
-<tr><td style="padding:24px 0"><strong style="font-size:20px">Receipt from Stripe</strong></td></tr>
+<tr><td style="padding:24px 0 0"><img src="cid:logo@demo" width="48" height="48" alt="Northwind Studio"></td></tr>
+<tr><td style="padding:12px 0 24px"><strong style="font-size:20px">Receipt from Stripe</strong></td></tr>
 <tr><td>Amount paid <strong>$1,250.00 AUD</strong></td></tr><tr><td>Date paid 24 Nov 2026</td></tr>
 <tr><td style="padding-top:16px;color:#666">Website retainer &ndash; November</td></tr></table>"#;
 
@@ -172,7 +222,7 @@ pub fn seed(conn: &mut Connection) -> Result<()> {
     labels.push(label("Label_receipts", "Receipts", "user"));
     db::replace_labels(conn, &labels)?;
 
-    let threads = [
+    let mut threads = [
         thread(
             "t01",
             "Homepage wireframes, round two",
@@ -433,12 +483,32 @@ pub fn seed(conn: &mut Connection) -> Result<()> {
             )],
         ),
     ];
+    for t in &mut threads {
+        match t.id.as_str() {
+            "t01" => attach(
+                t,
+                0,
+                &[("Homepage wireframes v2.png", "image/png", WIREFRAMES, None)],
+            ),
+            "t05" => attach(t, 0, &[("logo.png", "image/png", LOGO, Some("logo@demo"))]),
+            "t14" => attach(
+                t,
+                0,
+                &[(
+                    "Services Agreement (signed).pdf",
+                    "application/pdf",
+                    CONTRACT,
+                    None,
+                )],
+            ),
+            _ => {}
+        }
+    }
     for t in &threads {
         db::upsert_thread(conn, t, true)?;
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -460,6 +530,18 @@ mod tests {
                 .contains("Weekly Render")
         );
         assert_eq!(db::search_local(&c, "wireframes").unwrap().len(), 1);
+        let contract = &db::messages(&c, "t14").unwrap()[0];
+        assert_eq!(contract.attachments[0].mime, "application/pdf");
+        assert_eq!(
+            db::attachment_source(&c, "t14-0", 0).unwrap().1.as_deref(),
+            Some(CONTRACT)
+        );
+        let receipt = &db::messages(&c, "t05").unwrap()[0];
+        assert!(receipt.html.as_deref().unwrap().contains("cid:logo@demo"));
+        assert_eq!(
+            receipt.attachments[0].content_id.as_deref(),
+            Some("logo@demo")
+        );
 
         let mut w = db::open(std::path::Path::new(":memory:")).unwrap();
         seed_work(&mut w).unwrap();

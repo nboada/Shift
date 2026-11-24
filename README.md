@@ -28,6 +28,8 @@ Before public release, see `docs/google-verification.md`.
 
 Replies and forwards open inline under the thread; new emails open in a resizable window. Recipients are chips with autocomplete from people you've emailed (`suggest_contacts`). Drafts save to Gmail Drafts about 1.5s after you stop typing, and closing keeps the draft; sending a saved draft uses `drafts.send`, which removes it from Drafts.
 
+Attach files with the paperclip or by dropping them on the composer (25 MB in total, Gmail's limit). Forwarding includes the original attachments. In the reader, attachments are listed under each message. Click one to save it to Downloads and open it. Apps, scripts and other unusual file types are shown in Finder instead of being opened. Inline images (`cid:`) load on demand.
+
 ## Settings
 
 Open with the gear in the sidebar or `⌘,`. Preferences are saved to `settings.json` in the app data folder; AI provider keys go to the macOS Keychain. Notifications and Scheduling are placeholders until those features exist.
@@ -62,7 +64,7 @@ Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every acti
 
 - `src-tauri/src/auth.rs`: OAuth loopback + PKCE; the refresh token lives in the macOS Keychain
 - `src-tauri/src/gmail.rs`: Gmail REST client (backoff on 429/5xx)
-- `src-tauri/src/db.rs`: SQLite cache (threads, labels, messages)
+- `src-tauri/src/db.rs`: SQLite cache (threads, labels, messages, attachment details)
 - `src-tauri/src/lib.rs`: sync loop and Tauri commands
 - `src-tauri/src/demo.rs`: demo mailbox fixtures
 - `src-tauri/src/settings.rs`: settings file and AI keys in the Keychain
