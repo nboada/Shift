@@ -1,5 +1,6 @@
 // "Clean up Inbox": the AI sorts the newest Inbox mail into groups and the user archives a group (or some of it) in
-// one click. Nothing moves until the user clicks Archive, and every archive can be undone.
+// one click. Nothing moves until the user clicks Archive, and every archive can be undone. Sorting takes a while, so
+// it runs in the background: closing the sheet leaves a small card in the corner that says when the results are ready.
 import { invoke } from "@tauri-apps/api/core";
 import { iconHtml } from "./icons";
 
@@ -22,12 +23,21 @@ const name = (sender: string) => sender.split("<")[0].trim().replace(/^"|"$/g, "
 
 const sheet = () => document.getElementById("cleanup") as HTMLDialogElement;
 const body = () => sheet().querySelector<HTMLElement>(".cu-body")!;
+const card = () => document.getElementById("cleanup-status")!;
 let ctx: Context;
+
+/** The sort in progress (or finished, until it's reviewed). */
+let run: { result: Item[] | null; error: string | null } | null = null;
 
 export function initCleanup(context: Context) {
   ctx = context;
   sheet().addEventListener("click", (e) => {
     if (e.target === sheet() || (e.target as Element).closest("[data-cu-close]")) sheet().close();
+  });
+  // Results stay until they've been seen; closing while sorting leaves the corner card.
+  sheet().addEventListener("close", () => {
+    if (run && (run.result || run.error)) run = null;
+    showCard();
   });
   body().addEventListener("change", (e) => {
     const box = e.target as HTMLInputElement;
@@ -37,33 +47,85 @@ export function initCleanup(context: Context) {
     updateCounts(group);
   });
   body().addEventListener("click", (e) => {
-    const b = (e.target as Element).closest<HTMLButtonElement>("[data-archive]");
-    if (b) void archive(b.closest<HTMLElement>(".cu-group")!);
-    const undo = (e.target as Element).closest<HTMLButtonElement>("[data-undo]");
-    if (undo) void restore(undo);
+    const target = e.target as Element;
+    const b = target.closest<HTMLButtonElement>("[data-archive]");
+    if (b) return void archive(b.closest<HTMLElement>(".cu-group")!);
+    const undo = target.closest<HTMLButtonElement>("[data-undo]");
+    if (undo) return void restore(undo);
+    // The header opens and closes its group, except on the checkbox.
+    const head = target.closest(".cu-group header");
+    if (head && !target.closest(".cu-all")) head.parentElement!.classList.toggle("open");
+  });
+  card().addEventListener("click", (e) => {
+    if ((e.target as Element).closest("[data-cu-dismiss]")) {
+      run = null;
+      return showCard();
+    }
+    void openCleanup();
   });
 }
 
 export async function openCleanup() {
-  sheet().showModal();
-  body().innerHTML = `<div class="cu-loading"><span class="cu-spinner"></span><p>Sorting your Inbox with AI…</p><small>This reads the sender, subject and preview of your newest Inbox emails.</small></div>`;
-  let items: Item[];
+  if (!sheet().open) sheet().showModal();
+  card().hidden = true;
+  if (run) return render();
+  run = { result: null, error: null };
+  const mine = run;
+  render();
   try {
-    items = await invoke<Item[]>("ai_cleanup", { accounts: ctx.scope() });
+    mine.result = await invoke<Item[]>("ai_cleanup", { accounts: ctx.scope() });
   } catch (err) {
-    body().innerHTML = `<div class="cu-loading">${iconHtml("alert-circle")}<p>${esc(String(err))}</p></div>`;
+    mine.error = String(err);
+  }
+  if (run !== mine) return;
+  if (sheet().open) render();
+  else showCard();
+}
+
+function showCard() {
+  const c = card();
+  if (!run || sheet().open) return void (c.hidden = true);
+  c.hidden = false;
+  if (!run.result && !run.error) {
+    c.innerHTML = `<span class="cu-spinner small"></span><span><strong>Sorting your Inbox</strong><small>You can keep working</small></span>`;
     return;
   }
+  const n = run.result?.filter((i) => i.group !== "keep").length ?? 0;
+  c.innerHTML = `${iconHtml(run.error ? "alert-circle" : "circle-check")}<span><strong>${run.error ? "Couldn't sort your Inbox" : "Your Inbox is sorted"}</strong>
+    <small>${run.error ? "Click to see why" : n ? `${n} ${n === 1 ? "email" : "emails"} to review` : "Nothing to archive"}</small></span>
+    <button type="button" class="icon" data-cu-dismiss aria-label="Dismiss">${iconHtml("x")}</button>`;
+}
+
+function render() {
+  if (!run) return;
+  if (run.error) {
+    body().innerHTML = `<div class="cu-loading">${iconHtml("alert-circle")}<p>${esc(run.error)}</p></div>`;
+    return;
+  }
+  if (!run.result) {
+    body().innerHTML = `<div class="cu-loading"><span class="cu-spinner"></span><p>Sorting your Inbox with AI…</p>
+      <small>This reads the sender, subject and preview of your newest Inbox emails. It can take a minute: close this and keep working, and Shift lets you know when it's done.</small></div>`;
+    return;
+  }
+  const items = run.result;
   const kept = items.filter((i) => i.group === "keep").length;
+  let first = true;
   const groups = GROUPS.map(([id, title, icon, hint]) => {
     const rows = items.filter((i) => i.group === id);
     if (!rows.length) return "";
-    return `<section class="cu-group">
+    // The first group starts open; the rest open on click.
+    const open = first;
+    first = false;
+    return `<section class="cu-group${open ? " open" : ""}">
       <header>
-        <label class="cu-all"><input type="checkbox" data-all checked />${iconHtml(icon)}<span><strong>${title}</strong><small>${hint}</small></span></label>
-        <button type="button" class="primary" data-archive>Archive <b>${rows.length}</b></button>
+        <label class="cu-all"><input type="checkbox" data-all checked aria-label="Select all ${title}" /></label>
+        ${iconHtml(icon)}
+        <span class="cu-title"><strong>${title}</strong><small>${hint}</small></span>
+        <span class="cu-count" data-count>${rows.length}</span>
+        <button type="button" class="primary small" data-archive>Archive</button>
+        <i class="ti ti-chevron-down cu-caret" aria-hidden="true"></i>
       </header>
-      <ul>${rows.map((r) => `<li><label><input type="checkbox" checked data-account="${esc(r.account)}" data-id="${esc(r.id)}" /><b>${esc(name(r.sender))}</b><span>${esc(r.subject || "(no subject)")}</span></label></li>`).join("")}</ul>
+      <div class="cu-rows"><ul>${rows.map((r) => `<li><label><input type="checkbox" checked data-account="${esc(r.account)}" data-id="${esc(r.id)}" /><b>${esc(name(r.sender))}</b><span>${esc(r.subject || "(no subject)")}</span></label></li>`).join("")}</ul></div>
     </section>`;
   }).join("");
   body().innerHTML = groups
@@ -74,7 +136,7 @@ export async function openCleanup() {
 function updateCounts(group: HTMLElement) {
   const boxes = [...group.querySelectorAll<HTMLInputElement>("li input")];
   const n = boxes.filter((b) => b.checked).length;
-  group.querySelector("[data-archive] b")!.textContent = String(n);
+  group.querySelector("[data-count]")!.textContent = n === boxes.length ? String(n) : `${n} of ${boxes.length}`;
   group.querySelector<HTMLButtonElement>("[data-archive]")!.disabled = n === 0;
   const all = group.querySelector<HTMLInputElement>("[data-all]")!;
   all.checked = n === boxes.length;
@@ -96,7 +158,7 @@ async function archive(group: HTMLElement) {
     ctx.toast(`Couldn't archive everything: ${err}`);
   }
   boxes.forEach((b) => b.closest("li")!.remove());
-  // Shown in the sheet, not as a toast: the app's toasts sit under a modal sheet.
+  // In the sheet, next to the group it came from, so Undo stays at hand while reviewing the rest.
   const done = document.createElement("div");
   done.className = "cu-done";
   done.dataset.list = JSON.stringify(list);

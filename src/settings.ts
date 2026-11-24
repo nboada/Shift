@@ -25,6 +25,8 @@ export const DEFAULTS = {
     signatureHtml: "",
     defaultReply: "reply" as "reply" | "all",
     replyIn: "window" as "inline" | "window",
+    /** Account new emails are sent from; empty means the first account. Replies always use the thread's account. */
+    defaultFrom: "",
     quoteOriginal: true,
     undoSendSeconds: 5,
   },

@@ -63,7 +63,7 @@
           <button class="icon back" data-back="mailboxes" data-tip="Mailboxes"><i class="ti ti-layout-sidebar"></i></button>
           <h2 id="list-title" data-tauri-drag-region></h2>
           <button id="empty-btn" class="empty-btn" hidden><i class="ti ti-trash"></i><span></span></button>
-          <button id="cleanup-btn" class="icon" data-tip="Clean up Inbox with AI" aria-label="Clean up Inbox with AI"><i class="ti ti-wand"></i></button>
+          <button id="cleanup-btn" class="icon" data-tip="Clean up Inbox with AI" aria-label="Clean up Inbox with AI"><i class="ti ti-message-ai"></i></button>
           <button id="view-btn" class="icon"><i class="ti"></i></button>
         </header>
         <form class="search search-list">
@@ -99,12 +99,13 @@
 
     <dialog id="cleanup" class="cleanup" aria-labelledby="cleanup-title">
       <header class="cu-head">
-        <span class="ob-badge"><i class="ti ti-wand"></i></span>
+        <span class="cu-badge"><i class="ti ti-message-ai"></i></span>
         <div><h2 id="cleanup-title">Clean up your Inbox</h2><p>Archive what you don't need in your Inbox. Nothing moves until you click Archive.</p></div>
         <button type="button" class="icon" data-cu-close aria-label="Close"><i class="ti ti-x"></i></button>
       </header>
       <div class="cu-body"></div>
     </dialog>
+    <div id="cleanup-status" class="cu-status" role="status" hidden></div>
     <dialog id="composer" class="composer" aria-labelledby="compose-title">
       <form id="compose-form" class="compose-form">
         <header>
@@ -164,7 +165,7 @@
               <button type="button" class="primary later-go">Schedule</button>
             </div>
           </div>
-          <button type="button" class="icon" id="ai-write" data-tip="Write with AI" aria-label="Write with AI"><i class="ti ti-wand"></i></button>
+          <button type="button" class="icon" id="ai-write" data-tip="Write with AI" aria-label="Write with AI"><i class="ti ti-message-ai"></i></button>
           <button type="button" class="icon" id="send-later" data-tip="Send later"><i class="ti ti-clock"></i></button>
           <button type="submit" class="primary"><i class="ti ti-send"></i> Send</button>
         </footer>
@@ -183,7 +184,7 @@
       </div>
     </div>
     <div id="menu" class="menu" role="menu" hidden></div>
-    <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+    <div id="tooltip" class="tooltip" role="tooltip" popover="manual"></div>
     <dialog id="palette" class="palette" aria-label="Command palette">
       <div class="palette-input">
         <i class="ti ti-search"></i>
