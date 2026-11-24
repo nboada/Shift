@@ -44,6 +44,7 @@ Run all four checks (`bun test`, `bun run build`, `cargo test`, `cargo clippy`) 
 - `attachments.ts`: file chips, icons and sizes for the reader and the composer.
 - `recipients.ts`: the recipient chips.
 - `palette-match.ts`: ⌘K ranking.
+- `toast.ts`: the one toast at the bottom of the window: `toast(msg, { action, ms, icon })` returns a handle to update or close it.
 
 The keyboard handler skips single-key shortcuts while focus is in an `input`, `textarea` or `[contenteditable]`. Any new editable element needs to be covered by that check too. Icons are Tabler (the 300-weight webfont, `ti ti-*` classes). Render named icons with `iconHtml`/`iconClass` from `src/icons.ts`, which maps the older names still used in data.
 
