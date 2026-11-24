@@ -106,10 +106,26 @@ export function setSetting(path: string, value: unknown) {
   notify(path);
 }
 
+let dirty = false;
+let saving: Promise<void> = Promise.resolve();
+let saveError: (err: unknown) => void = () => {};
+/** Called when the settings file can't be written. */
+export const onSaveError = (fn: (err: unknown) => void) => (saveError = fn);
+
 function notify(path: string) {
   listeners.forEach((fn) => fn(path));
+  dirty = true;
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => invoke("set_settings", { value: settings }).catch(() => {}), 300);
+  saveTimer = window.setTimeout(flushSettings, 300);
+}
+
+/** Writes pending changes now, after any write already under way, so writes land in order. Awaited before quitting. */
+export function flushSettings() {
+  clearTimeout(saveTimer);
+  if (!dirty) return saving;
+  dirty = false;
+  saving = saving.then(() => invoke<void>("set_settings", { value: settings })).catch(saveError);
+  return saving;
 }
 
 export function getSetting(path: string): unknown {
