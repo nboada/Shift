@@ -81,12 +81,12 @@
     <dialog id="composer" class="composer" aria-labelledby="compose-title">
       <form id="compose-form" class="compose-form">
         <header>
+          <button type="button" class="icon" id="compose-close" data-tip="Close and keep draft (Esc)"><i class="ph ph-x"></i></button>
           <strong id="compose-title">New Email</strong>
           <span id="draft-status" class="draft-status" aria-live="polite"></span>
           <button type="button" class="icon" id="compose-attach" data-tip="Attach files"><i class="ph ph-paperclip"></i></button>
           <input type="file" id="compose-file" multiple hidden />
           <button type="button" class="icon" id="compose-discard" data-tip="Discard draft"><i class="ph ph-trash"></i></button>
-          <button type="button" class="icon" id="compose-close" data-tip="Close and keep draft (Esc)"><i class="ph ph-x"></i></button>
         </header>
         <div class="field-row" id="from-row" hidden>
           <span class="field-label">From</span>
@@ -137,7 +137,6 @@
         <section class="settings-body">
           <header class="settings-head">
             <h2 id="settings-title"></h2>
-            <button id="settings-close" class="icon" data-tip="Close (Esc)"><i class="ph ph-x"></i></button>
           </header>
           <div id="settings-panel" class="settings-panel"></div>
         </section>

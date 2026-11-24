@@ -577,7 +577,7 @@ body.resizing iframe { pointer-events: none; }
 .composer[open] { display: flex; animation: settings-window-in 0.24s cubic-bezier(0.32, 0.72, 0, 1); }
 .composer::backdrop { background: rgb(0 0 0 / 0.18); }
 .compose-form { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; }
-.compose-form header, .compose-form footer { display: flex; align-items: center; gap: 4px; padding: 10px 10px 10px 16px; flex: none; }
+.compose-form header, .compose-form footer { display: flex; align-items: center; gap: 4px; padding: 10px 10px 10px 8px; flex: none; }
 .compose-form header strong { margin-right: auto; }
 .draft-status { color: var(--muted); font-size: 12px; margin-right: 6px; }
 .compose-form footer { justify-content: flex-end; border-top: 1px solid var(--line); padding: 10px 14px; }
@@ -857,6 +857,7 @@ body.resizing iframe { pointer-events: none; }
   text-align: left;
 }
 .settings-nav button i { font-size: 16px; }
+.settings-nav .settings-close { display: inline-grid; padding: 0; margin: -6px 0 8px 2px; color: var(--sidebar-muted); }
 .settings-nav button:hover { background: var(--sidebar-hover); }
 .settings-nav button.active { background: var(--sidebar-selected); color: var(--sidebar-strong); box-shadow: var(--pane-shadow); }
 .settings-body { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--reader); }

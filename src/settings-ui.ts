@@ -331,7 +331,7 @@ window.addEventListener("keydown", async (e) => {
 export function initSettings(c: Ctx) {
   ctx = c;
   const nav = root().querySelector(".settings-nav")!;
-  nav.innerHTML = SECTIONS.map(([id, label, icon]) => `<button data-section="${id}"><i class="ph ph-${icon}"></i><span>${label}</span></button>`).join("");
+  nav.innerHTML = `<button id="settings-close" class="icon settings-close" data-tip="Close (Esc)"><i class="ph ph-x"></i></button>` + SECTIONS.map(([id, label, icon]) => `<button data-section="${id}"><i class="ph ph-${icon}"></i><span>${label}</span></button>`).join("");
   nav.addEventListener("click", (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-section]");
     if (b) show(b.dataset.section!);
