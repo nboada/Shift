@@ -16,6 +16,7 @@ import { createEditor, foldReplyQuote } from "./editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
 import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
 import { FOLD_CSS, foldQuote } from "./quote";
+import DOMPurify from "dompurify";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
 import { formatWhen, quickTimes } from "./schedule";
@@ -407,26 +408,38 @@ function evenTextSize(doc: Document) {
   els.forEach((el, i) => sizes[i] >= 12 && sizes[i] <= 17 && el.style.setProperty("font-size", "14px", "important"));
 }
 
-const REMOTE_URL = /\b(?:src|background)\s*=\s*["']?\s*(?:https?:)?\/\/|url\(\s*["']?\s*(?:https?:)?\/\//i;
+/** Something in the email that would load from the network: shown as the "Load images" bar. */
+const REMOTE = `[src^="http" i], [src^="//"], [srcset], [poster], [background], image[href], [style*="url(" i]`;
 
-/** Drops what can move the frame or change how its links resolve: meta refresh and friends, and <base>. */
-function cleanEmail(html: string) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  doc.querySelectorAll("meta[http-equiv], base").forEach((el) => el.remove());
-  return doc.documentElement.outerHTML;
+/**
+ * Sanitises an email for the reader with DOMPurify: no scripts, event handlers, javascript: links, forms, embedded
+ * frames, meta refresh or <base>. The frame's CSP and sandbox stay as a second layer, not the only one.
+ * Returns the HTML and whether it has remote content (images, backgrounds) to hold back.
+ */
+function cleanEmail(html: string): { html: string; remote: boolean } {
+  const clean = DOMPurify.sanitize(html, {
+    WHOLE_DOCUMENT: true,
+    ADD_TAGS: ["style"],
+    FORBID_TAGS: ["form", "input", "button", "textarea", "select", "meta", "base", "link", "iframe", "frame", "object", "embed"],
+  });
+  const doc = new DOMParser().parseFromString(clean, "text/html");
+  const remote = !!doc.querySelector(REMOTE) || [...doc.querySelectorAll("style")].some((s) => /url\(/i.test(s.textContent ?? ""));
+  return { html: doc.documentElement.outerHTML, remote };
 }
 
 /** Shows an email. Returns true when it has remote images that are being held back. */
 function mountEmail(frame: HTMLIFrameElement, html: string, images = settings.appearance.loadRemoteImages): boolean {
-  const hidden = !images && REMOTE_URL.test(html);
+  const clean = cleanEmail(html);
+  const hidden = !images && clean.remote;
   // WebKit drops our click listener in a frame without allow-scripts, so scripts are allowed by the sandbox
   // and blocked by a CSP that comes before any email markup. allow-same-origin lets us size the frame.
-  // The frame also inherits the app's CSP from index.html; this one only tightens it.
-  const csp = `script-src 'none'; form-action 'none'${hidden ? "; img-src data: blob:" : ""}`;
+  // The frame also inherits the app's CSP from index.html; this one only tightens it. With remote images off,
+  // network loads are blocked whatever the markup looks like, not only when we spot a remote URL.
+  const csp = `script-src 'none'; form-action 'none'${images ? "" : "; img-src data: blob:; media-src 'none'; font-src data:"}`;
   frame.setAttribute("sandbox", "allow-same-origin allow-scripts");
   // Hidden until it's sized and its text evened out, so the default 150px frame and the sender's raw fonts never show.
   frame.classList.add("loading");
-  frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="${csp}">` + EMAIL_CSS + cleanEmail(html) + (settings.appearance.uniformEmailFont ? UNIFORM_FONT_CSS : "");
+  frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="${csp}">` + EMAIL_CSS + clean.html + (settings.appearance.uniformEmailFont ? UNIFORM_FONT_CSS : "");
   // onload, not addEventListener: loading images re-mounts the frame and must replace the handler, not add one.
   frame.onload = () => {
     const doc = frame.contentDocument;
@@ -446,11 +459,14 @@ function mountEmail(frame: HTMLIFrameElement, html: string, images = settings.ap
     };
     fit();
     new ResizeObserver(() => requestAnimationFrame(fit)).observe(doc.body);
+    // Every link opens in the browser, never inside the frame: HTML links, image-map areas and SVG links alike.
     doc.addEventListener("click", (e) => {
-      const a = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null;
+      const a = (e.target as Element).closest?.("a, area");
       if (!a) return;
       e.preventDefault();
-      if (/^(https?|mailto):/i.test(a.href)) openUrl(a.href);
+      const raw = a.getAttribute("href") ?? a.getAttributeNS("http://www.w3.org/1999/xlink", "href") ?? "";
+      const url = (() => { try { return new URL(raw, "about:blank").href; } catch { return ""; } })();
+      if (/^(https?|mailto):/i.test(url)) openUrl(url);
     });
     // Keys pressed after clicking into the email land in the frame; hand them to the app's shortcuts.
     doc.addEventListener("keydown", (e) => {
