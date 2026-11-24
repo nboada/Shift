@@ -996,7 +996,7 @@ function showMenu(title: string | null, items: MenuItem[], pos: { x: number; y: 
   if (menu.hidden) menuReturn = document.activeElement as HTMLElement | null;
   menu.innerHTML = (title ? `<h4>${esc(title)}</h4>` : "") + (items.length
     ? items.map((x) => x === "-" ? "<hr>" : `<button role="${x.checked === undefined ? "menuitem" : `menuitemcheckbox" aria-checked="${x.checked}`}" data-target="${x.id}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
-        ${x.dot ? labelDot(x.label, x.dot) : iconHtml(x.icon)}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}${
+        ${x.dot ? labelDot(x.label, x.dot) : x.icon ? iconHtml(x.icon) : ""}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}${
         x.checked === undefined ? "" : `<i class="ti ti-check menu-check" aria-hidden="true"></i>`}</button>`).join("")
     : `<p>No labels yet</p>`);
   menu.onclick = (e) => {
@@ -2623,9 +2623,9 @@ function openAccountMenu() {
   const btn = $("#account-btn");
   const shown = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
   const items: MenuItem[] = [
-    { id: "", label: "All accounts", icon: scope ? "square" : "check-square" },
+    { id: "", label: "All accounts", icon: "users", checked: !scope },
     "-",
-    ...accounts.map((a) => ({ id: a, label: accountName(a), icon: shown.includes(a) ? "check-square" : "square", acct: accountSettings(a).color })),
+    ...accounts.map((a) => ({ id: a, label: accountName(a), icon: "", acct: accountSettings(a).color, checked: shown.includes(a) })),
   ];
   const r = btn.getBoundingClientRect();
   showMenu(null, items, { x: r.left, y: r.top }, (id) => {
@@ -2734,4 +2734,3 @@ loadSettings()
       });
     }
   });
-
