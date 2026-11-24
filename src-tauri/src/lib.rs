@@ -1653,7 +1653,15 @@ async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis() as i64;
     let due = db::scheduled(&a.db(), Some(now))?;
+    // One email that fails (a bad address, a file too big) mustn't hold up the others: each is tried, and the first
+    // error is reported once the rest have gone.
+    let mut first_error = None;
     for r in due {
+        // Re-read just before sending: the user may have cancelled or rescheduled it while earlier ones went out.
+        // shortcut: this narrows the window rather than closing it; a claimed "sending" state per row closes it.
+        if !db::is_due(&a.db(), r.id, now)? {
+            continue;
+        }
         let result = match serde_json::from_value::<Draft>(r.draft) {
             Ok(d) => deliver(&s, a, &d, r.draft_id.as_deref()).await,
             Err(e) => Err(e.into()),
@@ -1664,11 +1672,14 @@ async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
                 let _ = app.emit("scheduled-sent", ());
             }
             Err(e) if gmail::is_not_found(&e) => db::reschedule(&a.db(), r.id, None)?,
-            Err(e) => return Err(e),
+            Err(e) => {
+                first_error.get_or_insert(e);
+                continue;
+            }
         }
         let _ = app.emit(CHANGED, ());
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 /// Saves the composer to Gmail Drafts (so it follows you to other devices); returns the draft id.

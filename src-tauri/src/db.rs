@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS labels (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind
 CREATE TABLE IF NOT EXISTS threads (
   id TEXT PRIMARY KEY, subject TEXT NOT NULL, sender TEXT NOT NULL,
   snippet TEXT NOT NULL, date INTEGER NOT NULL, count INTEGER NOT NULL,
-  full INTEGER NOT NULL DEFAULT 0);
+  full INTEGER NOT NULL DEFAULT 0, live INTEGER NOT NULL DEFAULT 1);
 CREATE INDEX IF NOT EXISTS threads_date ON threads(date DESC);
 CREATE TABLE IF NOT EXISTS thread_labels (
   label_id TEXT NOT NULL, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
@@ -50,6 +50,29 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
         [],
     );
     let _ = conn.execute("ALTER TABLE labels ADD COLUMN color TEXT", []);
+    // `live`: the thread has a message outside Trash and Spam. Older caches only knew "has a trashed message", which hid
+    // whole conversations; mark those not live and queue them for a re-fetch, which works out the real value.
+    if conn
+        .execute("ALTER TABLE threads ADD COLUMN live INTEGER NOT NULL DEFAULT 1", [])
+        .is_ok()
+    {
+        let mut st = conn.prepare(
+            "SELECT DISTINCT thread_id FROM thread_labels WHERE label_id IN ('TRASH', 'SPAM')",
+        )?;
+        let ids: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        drop(st);
+        conn.execute(
+            "UPDATE threads SET live = 0 WHERE id IN (SELECT thread_id FROM thread_labels WHERE label_id IN ('TRASH', 'SPAM'))",
+            [],
+        )?;
+        if !ids.is_empty() {
+            let mut queue: Vec<String> = get_meta(&conn, "backfill")?
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+            queue.extend(ids);
+            set_meta(&conn, "backfill", &serde_json::to_string(&queue)?)?;
+        }
+    }
     // Bodies cached before attachments were stored carry none; mark them for a re-fetch on open.
     if !had_attachments {
         conn.execute("UPDATE threads SET full = 0", [])?;
@@ -83,6 +106,15 @@ pub fn add_scheduled(
 }
 
 /// Every scheduled email, soonest first; with `due_by`, only those due by then.
+/// Whether scheduled row `id` still exists and is due by `now` (not cancelled or moved later meanwhile).
+pub fn is_due(conn: &Connection, id: i64, now: i64) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM scheduled WHERE id = ?1 AND send_at <= ?2)",
+        [id, now],
+        |r| r.get(0),
+    )?)
+}
+
 pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<ScheduledRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, draft_id, send_at, draft, ui FROM scheduled WHERE ?1 IS NULL OR send_at <= ?1 ORDER BY send_at",
@@ -170,20 +202,36 @@ pub fn upsert_thread(conn: &mut Connection, t: &gmail::Thread, full: bool) -> Re
         .rev()
         .find(|m| !from_me(m))
         .map_or_else(|| last.header("To"), |m| m.header("From"));
+    // Like Gmail, a conversation is listed by its messages outside Trash and Spam: one trashed reply doesn't take the
+    // rest out of the Inbox. Its other labels come from those messages; Trash and Spam from any message, so the
+    // conversation also shows there. With every message trashed, it keeps all their labels and isn't live.
+    let binned = |m: &gmail::Message| m.label_ids.iter().any(|l| l == "TRASH" || l == "SPAM");
+    let live = t.messages.iter().any(|m| !binned(m));
+    let mut labels: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for m in &t.messages {
+        for l in &m.label_ids {
+            if !live || !binned(m) || l == "TRASH" || l == "SPAM" {
+                labels.insert(l);
+            }
+        }
+    }
     let tx = conn.transaction()?;
+    // An upsert, not INSERT OR REPLACE: replacing deletes the row first, and the delete cascades into `ai_labels`.
     tx.execute(
-        "INSERT OR REPLACE INTO threads (id, subject, sender, snippet, date, count, full) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![t.id, first.header("Subject"), sender, last.snippet, last.date_ms(), t.messages.len() as i64, full],
+        "INSERT INTO threads (id, subject, sender, snippet, date, count, full, live) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(id) DO UPDATE SET subject = excluded.subject, sender = excluded.sender, snippet = excluded.snippet,
+           date = excluded.date, count = excluded.count, full = excluded.full, live = excluded.live",
+        params![t.id, first.header("Subject"), sender, last.snippet, last.date_ms(), t.messages.len() as i64, full, live],
     )?;
     tx.execute("DELETE FROM thread_labels WHERE thread_id = ?1", [&t.id])?;
     tx.execute("DELETE FROM messages WHERE thread_id = ?1", [&t.id])?;
+    for l in labels {
+        tx.execute(
+            "INSERT OR IGNORE INTO thread_labels (label_id, thread_id) VALUES (?1, ?2)",
+            [l, &t.id],
+        )?;
+    }
     for m in &t.messages {
-        for l in &m.label_ids {
-            tx.execute(
-                "INSERT OR IGNORE INTO thread_labels (label_id, thread_id) VALUES (?1, ?2)",
-                [l, &t.id],
-            )?;
-        }
         tx.execute(
             "INSERT INTO messages (id, thread_id, sender, recipients, cc, date, subject, message_id, refs, html, text)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -250,6 +298,13 @@ pub fn change_labels(
             "DELETE FROM thread_labels WHERE label_id = ?1 AND thread_id = ?2",
             [l, thread],
         )?;
+    }
+    // A local action moves the whole conversation, so Trash or Spam in or out decides whether it's live.
+    let binned = |ls: &[String]| ls.iter().any(|l| l == "TRASH" || l == "SPAM");
+    if binned(add) {
+        tx.execute("UPDATE threads SET live = 0 WHERE id = ?1", [thread])?;
+    } else if binned(remove) {
+        tx.execute("UPDATE threads SET live = 1 WHERE id = ?1", [thread])?;
     }
     tx.commit()?;
     Ok(())
@@ -388,8 +443,7 @@ pub fn threads(conn: &Connection, label: Option<&str>) -> Result<Vec<ThreadRow>>
          WHERE (?1 IS NULL OR ?1 = 'ARCHIVE' OR EXISTS(SELECT 1 FROM thread_labels l WHERE l.thread_id = t.id AND l.label_id = ?1))
            AND (?1 IS NOT 'ARCHIVE' OR NOT EXISTS(
              SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN ('INBOX', 'DRAFT')))
-           AND (?1 IN ('TRASH', 'SPAM') OR NOT EXISTS(
-             SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN ('TRASH', 'SPAM')))
+           AND (?1 IN ('TRASH', 'SPAM') OR t.live = 1)
          ORDER BY t.date DESC LIMIT 1000"
     );
     let mut st = conn.prepare_cached(&sql)?;
@@ -516,7 +570,7 @@ pub fn search_local(conn: &Connection, query: &str) -> Result<Vec<ThreadRow>> {
     }
     let sql = format!(
         "SELECT {THREAD_COLS} FROM threads t WHERE {}
-           AND NOT EXISTS(SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN ('TRASH', 'SPAM'))
+           AND t.live = 1
          ORDER BY t.date DESC LIMIT 100",
         clauses.join(" AND ")
     );
@@ -696,6 +750,60 @@ mod tests {
         delete_label(&c, "Label_1").unwrap();
         assert!(threads(&c, Some("Label_1")).unwrap().is_empty());
         assert_eq!(label_id(&c, "Later").unwrap(), None);
+    }
+
+    /// A thread whose messages carry these labels, one message each.
+    fn convo(id: &str, messages: &[&[&str]]) -> gmail::Thread {
+        let msgs: Vec<_> = messages.iter().enumerate().map(|(i, labels)| serde_json::json!({
+            "id": format!("{id}-{i}"), "labelIds": labels, "snippet": "s", "internalDate": format!("{}", 10 + i),
+            "payload": { "headers": [{ "name": "Subject", "value": "subj" }, { "name": "From", "value": "a@b.c" }] }
+        })).collect();
+        serde_json::from_value(serde_json::json!({ "id": id, "messages": msgs })).unwrap()
+    }
+
+    #[test]
+    fn one_trashed_message_keeps_the_conversation_in_the_inbox() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        upsert_thread(&mut c, &convo("part", &[&["INBOX", "UNREAD"], &["TRASH"]]), false).unwrap();
+        upsert_thread(&mut c, &convo("all", &[&["TRASH", "INBOX"], &["TRASH"]]), false).unwrap();
+        let ids = |c: &Connection, l: &str| threads(c, Some(l)).unwrap().into_iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!(ids(&c, "INBOX"), ["part"], "a fully trashed thread leaves the Inbox, a partly trashed one stays");
+        assert_eq!(ids(&c, "TRASH").len(), 2, "both show in Trash");
+        // Undoing a delete brings the conversation back.
+        change_labels(&mut c, "all", &["INBOX".into()], &["TRASH".into()]).unwrap();
+        assert_eq!(ids(&c, "INBOX").len(), 2);
+        change_labels(&mut c, "part", &["TRASH".into()], &["INBOX".into()]).unwrap();
+        assert_eq!(ids(&c, "INBOX"), ["all"]);
+    }
+
+    #[test]
+    fn upgrading_an_old_cache_requeues_trashed_threads() {
+        let path = std::env::temp_dir().join(format!("shift-live-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            // The cache as written before `live`: no column, labels merged across a thread's messages.
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(&SCHEMA.replace(", live INTEGER NOT NULL DEFAULT 1", "")).unwrap();
+            c.execute_batch("INSERT INTO threads (id, subject, sender, snippet, date, count) VALUES ('t', '', '', '', 1, 2), ('u', '', '', '', 1, 1);
+                INSERT INTO thread_labels VALUES ('INBOX', 't'), ('TRASH', 't'), ('INBOX', 'u');").unwrap();
+        }
+        let c = open(&path).unwrap();
+        assert_eq!(threads(&c, Some("INBOX")).unwrap().len(), 1, "unaffected thread still listed");
+        assert_eq!(get_meta(&c, "backfill").unwrap().as_deref(), Some(r#"["t"]"#), "the trashed one is re-fetched");
+        drop(c);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_sync_keeps_the_ai_label_record() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        upsert_thread(&mut c, &thread("a", &["INBOX"], "2"), false).unwrap();
+        add_ai_label(&c, "a", "Label_1", 1).unwrap();
+        upsert_thread(&mut c, &thread("a", &["INBOX", "Label_1"], "2"), true).unwrap();
+        assert_eq!(ai_labels(&c, "a").unwrap(), ["Label_1"]);
     }
 
     #[test]
