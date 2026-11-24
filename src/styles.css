@@ -167,17 +167,12 @@ button.primary:disabled { opacity: 0.6; }
   padding: 0 8px 8px 0;
   background: var(--bg);
 }
-.app[data-sidebar="hidden"] { --sidebar-width: 8px; }
-.app[data-sidebar="hidden"] .sidebar { display: none; }
 .sidebar { grid-area: 2 / 1; }
 .list-pane { grid-area: 2 / 2; }
 .reader-pane { grid-area: 2 / 3; }
 
-/* Title bar: sidebar toggle beside the traffic lights, then search lined up with the message list. */
-.topbar { grid-column: 1 / -1; display: flex; align-items: center; padding-left: 84px; }
-.topbar #sidebar-toggle { flex: none; }
-.app .topbar #sidebar-toggle { margin-right: max(8px, calc(var(--sidebar-width) - 84px - 30px)); }
-.app[data-sidebar="hidden"] .topbar #sidebar-toggle { margin-right: 8px; }
+/* Title bar: search lined up with the message list, clear of the traffic lights. */
+.topbar { grid-column: 1 / -1; display: flex; align-items: center; padding-left: max(84px, var(--sidebar-width)); }
 .sidebar-top { display: none; }
 
 .sidebar {
