@@ -421,10 +421,16 @@ pub struct NewMail {
 }
 
 /// Unread Inbox threads whose latest message is newer than `since` (ms), oldest first.
+/// Unread Inbox threads newer than `since`, oldest first: what a new-mail notification announces.
 pub fn new_mail(conn: &Connection, since: i64) -> Result<Vec<NewMail>> {
+    inbox_mail(conn, since, true)
+}
+
+/// Inbox threads newer than `since`, oldest first; `unread_only` leaves out those already read.
+pub fn inbox_mail(conn: &Connection, since: i64, unread_only: bool) -> Result<Vec<NewMail>> {
     let mut out: Vec<NewMail> = threads(conn, Some("INBOX"))?
         .into_iter()
-        .filter(|t| t.unread && t.date > since)
+        .filter(|t| (t.unread || !unread_only) && t.date > since)
         .map(|t| NewMail {
             id: t.id,
             sender: t.sender,

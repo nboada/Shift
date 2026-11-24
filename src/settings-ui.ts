@@ -300,7 +300,9 @@ async function renderLabelRules() {
   const names = [...new Set(labels.filter((l) => l.kind === "user").map((l) => l.name))].sort((a, b) => a.localeCompare(b));
   box.innerHTML = names.length
     ? `<p class="group-note">Say when each label fits. Labels left empty are never used.</p>` +
-      names.map((n) => `<label class="ai-rule"><span>${esc(n)}</span><input type="text" data-ai-label="${esc(n)}" value="${esc(settings.ai.labelRules[n] ?? "")}" placeholder="e.g. Invoices and receipts from suppliers" spellcheck="false" /></label>`).join("")
+      names.map((n) => `<label class="ai-rule"><span>${esc(n)}</span><input type="text" data-ai-label="${esc(n)}" value="${esc(settings.ai.labelRules[n] ?? "")}" placeholder="e.g. Invoices and receipts from suppliers" spellcheck="false" /></label>`).join("") +
+      `<div class="ai-label-now"><p class="group-note" id="ai-label-status">New mail is labelled as it arrives. To apply the rules to emails already in your Inbox:</p>
+        <button class="secondary" data-cmd="label-inbox">Label my Inbox now</button></div>`
     : `<p class="group-note">You have no labels yet. Create one from an email's Label menu, then describe it here.</p>`;
 }
 
@@ -547,6 +549,19 @@ export function initSettings(c: Ctx) {
         const row = b.closest<HTMLElement>("[data-key-provider]")!;
         row.classList.add("replacing");
         row.querySelector<HTMLInputElement>(".ai-key")!.focus();
+        return;
+      }
+      case "label-inbox": {
+        const status = document.getElementById("ai-label-status")!;
+        (b as HTMLButtonElement).disabled = true;
+        status.textContent = "Labelling your newest Inbox emails…";
+        try {
+          const n = await invoke<number>("ai_label_inbox", { accounts: null });
+          status.textContent = n ? `Labelled ${n} ${n === 1 ? "email" : "emails"}. Each shows "Labelled by AI" with Undo.` : "No email in your Inbox fits a label.";
+        } catch (err) {
+          status.textContent = String(err);
+        }
+        (b as HTMLButtonElement).disabled = false;
         return;
       }
       case "reset-writing-rules":

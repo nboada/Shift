@@ -517,7 +517,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem};
     let menu = Menu::default(app)?;
     if let Some(app_menu) = menu.items()?.first().and_then(|m| m.as_submenu()) {
-        let check = MenuItem::with_id(app, CHECK_UPDATES, "Check for Updates…", true, None::<&str>)?;
+        let check =
+            MenuItem::with_id(app, CHECK_UPDATES, "Check for Updates…", true, None::<&str>)?;
         app_menu.insert(&check, 1)?;
     }
     Ok(menu)
@@ -556,14 +557,20 @@ static PRESENT_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 #[cfg(target_os = "macos")]
 fn allow_test_banner() {
     use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
-    unsafe extern "C-unwind" fn should_present(_: *mut AnyObject, _: Sel, _: *mut AnyObject, _: *mut AnyObject) -> Bool {
+    unsafe extern "C-unwind" fn should_present(
+        _: *mut AnyObject,
+        _: Sel,
+        _: *mut AnyObject,
+        _: *mut AnyObject,
+    ) -> Bool {
         Bool::new(PRESENT_NEXT.swap(false, std::sync::atomic::Ordering::SeqCst))
     }
     let Some(class) = AnyClass::get(c"NotificationCenterDelegate") else {
         return;
     };
     unsafe {
-        let imp: Imp = std::mem::transmute(should_present as unsafe extern "C-unwind" fn(_, _, _, _) -> Bool);
+        let imp: Imp =
+            std::mem::transmute(should_present as unsafe extern "C-unwind" fn(_, _, _, _) -> Bool);
         objc2::ffi::class_addMethod(
             class as *const AnyClass as *mut AnyClass,
             objc2::sel!(userNotificationCenter:shouldPresentNotification:),
@@ -591,7 +598,7 @@ async fn ai_rewrite(
         &ai::with_rules(ai::REWRITE, &rules),
         &user,
         None,
-        None,
+        Some(ai::WRITING_EFFORT),
     )
     .await?)
 }
@@ -621,7 +628,7 @@ async fn ai_draft_reply(
         &ai::with_rules(ai::DRAFT, &rules),
         &user,
         None,
-        None,
+        Some(ai::WRITING_EFFORT),
     )
     .await?)
 }
@@ -630,81 +637,132 @@ async fn ai_draft_reply(
 /// mail; only mail newer than the `ai_labeled_at` watermark, so turning it on doesn't relabel the backlog.
 async fn auto_label(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
     let s = app.state::<State>();
-    let Some(rules) = settings::ai_label_rules(&s.dir) else {
+    if settings::ai_label_rules(&s.dir).is_none() {
         return Ok(());
-    };
-    let (mail, ids) = {
+    }
+    let mail = {
         let c = a.db();
         let Some(since) = db::get_meta(&c, "ai_labeled_at")?.and_then(|v| v.parse().ok()) else {
             db::set_meta(&c, "ai_labeled_at", &now_ms().to_string())?;
             return Ok(());
         };
-        let mail = db::new_mail(&c, since)?;
-        let ids: std::collections::HashMap<String, String> = rules
-            .iter()
-            .filter_map(|(name, _)| Some((name.clone(), db::label_id(&c, name).ok()??)))
-            .collect();
-        (mail, ids)
+        // Read or not: opening an email from its notification before this runs shouldn't keep it unlabelled.
+        db::inbox_mail(&c, since, false)?
     };
     let Some(latest) = mail.iter().map(|m| m.date).max() else {
         return Ok(());
+    };
+    apply_label_rules(app, a, g, &mail).await?;
+    db::set_meta(&a.db(), "ai_labeled_at", &latest.to_string())?;
+    Ok(())
+}
+
+/// Asks the AI which of the user's described labels fit `mail` (up to 40 emails) and adds them, locally and in Gmail,
+/// recording each in `ai_labels` so the reader can show and undo it. Returns how many emails got a label.
+async fn apply_label_rules(
+    app: &AppHandle,
+    a: &Account,
+    g: &Gmail<'_>,
+    mail: &[db::NewMail],
+) -> anyhow::Result<usize> {
+    let s = app.state::<State>();
+    let Some(rules) = settings::ai_label_rules(&s.dir) else {
+        return Ok(0);
+    };
+    // Only labels this account has: Gmail labels belong to one account.
+    let ids: std::collections::HashMap<String, String> = {
+        let c = a.db();
+        rules
+            .iter()
+            .filter_map(|(name, _)| Some((name.clone(), db::label_id(&c, name).ok()??)))
+            .collect()
     };
     let rules: Vec<_> = rules
         .into_iter()
         .filter(|(n, _)| ids.contains_key(n))
         .collect();
-    if !rules.is_empty() {
-        let cfg = ai::config(&s.dir, ai::Task::Sorting)?;
-        let names: Vec<&str> = rules.iter().map(|(n, _)| n.as_str()).collect();
-        let schema = ai::results_schema(
-            "labels",
-            serde_json::json!({ "type": "array", "items": { "type": "string", "enum": names } }),
-        );
-        let labels: Vec<_> = rules
-            .iter()
-            .map(|(n, d)| serde_json::json!({ "name": n, "description": d }))
+    if rules.is_empty() || mail.is_empty() {
+        return Ok(0);
+    }
+    let cfg = ai::config(&s.dir, ai::Task::Sorting)?;
+    let names: Vec<&str> = rules.iter().map(|(n, _)| n.as_str()).collect();
+    let schema = ai::results_schema(
+        "labels",
+        serde_json::json!({ "type": "array", "items": { "type": "string", "enum": names } }),
+    );
+    let labels: Vec<_> = rules
+        .iter()
+        .map(|(n, d)| serde_json::json!({ "name": n, "description": d }))
+        .collect();
+    let emails: Vec<_> = mail.iter().take(40).map(|m| serde_json::json!({ "id": m.id, "from": m.sender, "subject": m.subject, "preview": m.snippet })).collect();
+    let user = format!(
+        "Labels:\n{}\n\nEmails:\n{}",
+        serde_json::to_string(&labels)?,
+        serde_json::to_string(&emails)?
+    );
+    let answer = ai::json_in(
+        &ai::complete(
+            &s.ai_http,
+            &cfg,
+            ai::LABEL,
+            &user,
+            Some(&schema),
+            Some("low"),
+        )
+        .await?,
+    )?;
+    let at = now_ms();
+    let mut labelled = 0;
+    for r in answer["results"].as_array().into_iter().flatten() {
+        let Some(thread) = r["id"].as_str().filter(|t| mail.iter().any(|m| m.id == *t)) else {
+            continue;
+        };
+        let add: Vec<String> = r["labels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| ids.get(n.as_str()?).cloned())
             .collect();
-        let emails: Vec<_> = mail.iter().take(40).map(|m| serde_json::json!({ "id": m.id, "from": m.sender, "subject": m.subject, "preview": m.snippet })).collect();
-        let user = format!(
-            "Labels:\n{}\n\nEmails:\n{}",
-            serde_json::to_string(&labels)?,
-            serde_json::to_string(&emails)?
-        );
-        let answer = ai::json_in(
-            &ai::complete(
-                &s.ai_http,
-                &cfg,
-                ai::LABEL,
-                &user,
-                Some(&schema),
-                Some("low"),
-            )
-            .await?,
-        )?;
-        let at = now_ms();
-        for r in answer["results"].as_array().into_iter().flatten() {
-            let Some(thread) = r["id"].as_str().filter(|t| mail.iter().any(|m| m.id == *t)) else {
-                continue;
-            };
-            let add: Vec<String> = r["labels"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|n| ids.get(n.as_str()?).cloned())
-                .collect();
-            if add.is_empty() {
-                continue;
-            }
-            db::change_labels(&mut a.db(), thread, &add, &[])?;
-            for l in &add {
-                db::add_ai_label(&a.db(), thread, l, at)?;
-            }
-            g.modify(thread, &add, &[]).await?;
+        if add.is_empty() {
+            continue;
         }
+        db::change_labels(&mut a.db(), thread, &add, &[])?;
+        for l in &add {
+            db::add_ai_label(&a.db(), thread, l, at)?;
+        }
+        g.modify(thread, &add, &[]).await?;
+        labelled += 1;
+    }
+    if labelled > 0 {
         let _ = app.emit(CHANGED, ());
     }
-    db::set_meta(&a.db(), "ai_labeled_at", &latest.to_string())?;
-    Ok(())
+    Ok(labelled)
+}
+
+/// Settings → AI → Auto-label → Label my Inbox now: applies the rules to the newest Inbox emails that came in before
+/// they existed (auto-label only looks at new mail). Returns how many emails got a label.
+#[tauri::command]
+async fn ai_label_inbox(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    accounts: Option<Vec<String>>,
+) -> R<usize> {
+    if s.demo {
+        return Err(anyhow::anyhow!("AI features need a real account, not the demo").into());
+    }
+    let mut labelled = 0;
+    for a in s.scope(accounts.as_deref())? {
+        let mut mail = db::inbox_mail(&a.db(), 0, false)?;
+        // Newest 40: inbox_mail lists oldest first.
+        let mail = mail.split_off(mail.len().saturating_sub(40));
+        let token = a.access_token(&s.http).await?;
+        let g = Gmail {
+            http: &s.http,
+            token: &token,
+        };
+        labelled += apply_label_rules(&app, &a, &g, &mail).await?;
+    }
+    Ok(labelled)
 }
 
 /// Labels the AI added to a thread, for the reader's "Labelled by AI" line.
@@ -1147,7 +1205,7 @@ async fn create_label(
         return Err(anyhow::anyhow!("A label needs a name").into());
     }
     let a = s.account(&account)?;
-    let label = if s.demo {
+    let mut label = if s.demo {
         gmail::Label {
             id: format!("Label_demo_{}", now_ms()),
             name: name.into(),
@@ -1163,6 +1221,11 @@ async fn create_label(
         .create_label(name)
         .await?
     };
+    // Gmail's create response can leave out `type`; the sidebar lists only "user" labels, so the new one stayed
+    // hidden until the next full label sync.
+    if label.kind.is_empty() {
+        label.kind = "user".into();
+    }
     db::insert_label(&a.db(), &label)?;
     let _ = app.emit(CHANGED, ());
     Ok(label.id)
@@ -2001,6 +2064,7 @@ pub fn run() {
             ai_cleanup,
             open_at_login,
             set_open_at_login,
+            ai_label_inbox,
             test_notification,
             empty_mailbox,
             create_label,
