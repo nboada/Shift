@@ -580,7 +580,11 @@ body.resizing iframe { pointer-events: none; }
 .compose-form header, .compose-form footer { display: flex; align-items: center; gap: 4px; padding: 10px 10px 10px 16px; flex: none; }
 .compose-form header strong { margin-right: auto; }
 .draft-status { color: var(--muted); font-size: 12px; margin-right: 6px; }
-.compose-form footer { justify-content: space-between; border-top: 1px solid var(--line); padding: 10px 14px; }
+.compose-form footer { justify-content: flex-end; border-top: 1px solid var(--line); padding: 10px 14px; }
+.compose-form footer .error { margin-right: auto; }
+.send-later-custom { display: flex; align-items: center; gap: 6px; }
+.send-later-custom[hidden] { display: none; }
+.send-later-custom input { font: inherit; color: inherit; background: var(--search); border: 0; border-radius: 6px; padding: 4px 6px; }
 .field-row {
   position: relative;
   display: flex;

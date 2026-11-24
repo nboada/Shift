@@ -257,6 +257,14 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
 /// Syncs every account; one failing account (e.g. signed out elsewhere) doesn't stop the others.
 async fn sync(app: &AppHandle) {
     let s = app.state::<State>();
+    for a in s.all() {
+        if let Err(e) = send_due(app, &a).await {
+            let _ = app.emit(
+                "sync-error",
+                format!("{}: scheduled send failed: {e:#}", a.email),
+            );
+        }
+    }
     if s.demo {
         return;
     }
@@ -626,28 +634,127 @@ async fn send(
     draft: Draft,
     draft_id: Option<String>,
 ) -> R<()> {
-    if parse_addresses(&draft.to).is_empty()
-        && parse_addresses(&draft.cc).is_empty()
-        && parse_addresses(&draft.bcc).is_empty()
-    {
+    if !has_recipients(&draft) {
         return Err(anyhow::anyhow!("Add at least one recipient").into());
     }
+    let a = s.account(&account)?;
+    deliver(&s, &a, &draft, draft_id.as_deref()).await?;
+    spawn_sync(&app);
+    Ok(())
+}
+
+/// Sends through Gmail; a saved draft goes out with `drafts.send`, which also removes it from Drafts.
+async fn deliver(
+    s: &State,
+    a: &Account,
+    draft: &Draft,
+    draft_id: Option<&str>,
+) -> anyhow::Result<()> {
     if s.demo {
         // shortcut: demo sends are accepted but not added to the mailbox; add a local Sent copy if testing threading.
         return Ok(());
     }
-    let a = s.account(&account)?;
-    let raw = build_message(a.email.clone(), &draft)?;
+    let raw = build_message(a.email.clone(), draft)?;
     let token = a.access_token(&s.http).await?;
     let g = Gmail {
         http: &s.http,
         token: &token,
     };
-    match draft_id.as_deref().filter(|id| !id.is_empty()) {
-        Some(id) => g.send_draft(id, &raw, draft.thread_id.as_deref()).await?,
-        None => g.send(&raw, draft.thread_id.as_deref()).await?,
+    match draft_id.filter(|id| !id.is_empty()) {
+        Some(id) => g.send_draft(id, &raw, draft.thread_id.as_deref()).await,
+        None => g.send(&raw, draft.thread_id.as_deref()).await,
     }
-    spawn_sync(&app);
+}
+
+fn has_recipients(d: &Draft) -> bool {
+    [&d.to, &d.cc, &d.bcc]
+        .iter()
+        .any(|l| !parse_addresses(l).is_empty())
+}
+
+/// Send later: Gmail's API has no scheduled send, so the email waits here (and in Gmail Drafts) and the sync loop
+/// sends it once due. `draft` is a `Draft`; `ui` is opaque data the composer uses to reopen it.
+#[tauri::command]
+fn schedule_send(
+    app: AppHandle,
+    s: tauri::State<State>,
+    account: String,
+    draft: serde_json::Value,
+    draft_id: Option<String>,
+    send_at: i64,
+    ui: serde_json::Value,
+) -> R<i64> {
+    if !has_recipients(&serde_json::from_value::<Draft>(draft.clone())?) {
+        return Err(anyhow::anyhow!("Add at least one recipient").into());
+    }
+    let id = db::add_scheduled(
+        &s.account(&account)?.db(),
+        draft_id.as_deref(),
+        send_at,
+        &draft,
+        &ui,
+    )?;
+    let _ = app.emit(CHANGED, ());
+    Ok(id)
+}
+
+#[tauri::command]
+fn scheduled(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db::ScheduledRow>> {
+    let mut all = Vec::new();
+    for a in s.scope(accounts.as_deref())? {
+        all.extend(
+            db::scheduled(&a.db(), None)?
+                .into_iter()
+                .map(|r| db::ScheduledRow {
+                    account: a.email.clone(),
+                    ..r
+                }),
+        );
+    }
+    all.sort_by_key(|r| r.send_at);
+    Ok(all)
+}
+
+/// New send time (milliseconds), or `None` to cancel the schedule and keep the draft.
+#[tauri::command]
+fn reschedule(
+    app: AppHandle,
+    s: tauri::State<State>,
+    account: String,
+    id: i64,
+    send_at: Option<i64>,
+) -> R<()> {
+    db::reschedule(&s.account(&account)?.db(), id, send_at)?;
+    let _ = app.emit(CHANGED, ());
+    if send_at.is_some() {
+        spawn_sync(&app);
+    }
+    Ok(())
+}
+
+/// Sends what's due. A draft deleted or sent elsewhere (404) is dropped; other failures retry on the next tick.
+// shortcut: only sends while Shift is running; a server-side sender would be needed to send with the Mac off.
+async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
+    let s = app.state::<State>();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as i64;
+    let due = db::scheduled(&a.db(), Some(now))?;
+    for r in due {
+        let result = match serde_json::from_value::<Draft>(r.draft) {
+            Ok(d) => deliver(&s, a, &d, r.draft_id.as_deref()).await,
+            Err(e) => Err(e.into()),
+        };
+        match result {
+            Ok(()) => {
+                db::reschedule(&a.db(), r.id, None)?;
+                let _ = app.emit("scheduled-sent", ());
+            }
+            Err(e) if gmail::is_not_found(&e) => db::reschedule(&a.db(), r.id, None)?,
+            Err(e) => return Err(e),
+        }
+        let _ = app.emit(CHANGED, ());
+    }
     Ok(())
 }
 
@@ -963,6 +1070,9 @@ pub fn run() {
             suggest_contacts,
             save_draft,
             delete_draft,
+            schedule_send,
+            scheduled,
+            reschedule,
             attachment_data,
             open_attachment,
             set_settings,

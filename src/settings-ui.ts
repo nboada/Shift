@@ -212,11 +212,11 @@ const render: Record<string, () => string> = {
       row("Only from people", toggle("notifications.onlyPeople", true), "Skip newsletters and automated mail.")),
 
   scheduling: () =>
-    soon("snooze and send later.") +
-    group("Quick times", row("Later today", select("scheduling.laterTodayHours", [[1, "In 1 hour"], [2, "In 2 hours"], [3, "In 3 hours"], [4, "In 4 hours"]], true)) +
-      row("Mornings start at", `<input type="time" data-path="scheduling.morning" value="${esc(settings.scheduling.morning)}" disabled />`, "Used for Tomorrow, This weekend and Next week.") +
-      row("This weekend", segmented("scheduling.weekendDay", [["saturday", "Saturday"], ["sunday", "Sunday"]], true)) +
-      row("Next week", segmented("scheduling.nextWeekDay", [["monday", "Monday"], ["sunday", "Sunday"]], true))),
+    group("Send later", row("Later today", select("scheduling.laterTodayHours", [[1, "In 1 hour"], [2, "In 2 hours"], [3, "In 3 hours"], [4, "In 4 hours"]])) +
+      row("Mornings start at", `<input type="time" data-path="scheduling.morning" value="${esc(settings.scheduling.morning)}" />`, "Used for Tomorrow, This weekend and Next week.") +
+      row("This weekend", segmented("scheduling.weekendDay", [["saturday", "Saturday"], ["sunday", "Sunday"]])) +
+      row("Next week", segmented("scheduling.nextWeekDay", [["monday", "Monday"], ["sunday", "Sunday"]]))) +
+    `<p class="hint">Scheduled emails wait in Gmail Drafts and are sent by Shift, so it needs to be open at the send time. If it isn't, they go out the next time it opens.</p>`,
 
   inbox: () =>
     group("Layout", row("Inbox view", segmented("inbox.view", [["smart", "Smart Inbox", "stack"], ["list", "Plain list", "list"]]), "Smart Inbox groups mail into sections; plain list is newest first.")) +
