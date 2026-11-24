@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.2.7"
+version = "0.2.8"
 description = "Shift, a Gmail client for macOS"
 authors = ["Nicolas Boada"]
 edition = "2024"
