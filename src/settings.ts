@@ -124,7 +124,11 @@ export function flushSettings() {
   clearTimeout(saveTimer);
   if (!dirty) return saving;
   dirty = false;
-  saving = saving.then(() => invoke<void>("set_settings", { value: settings })).catch(saveError);
+  saving = saving.then(() => invoke<void>("set_settings", { value: settings })).catch((err) => {
+    // Still unsaved: the next change or the flush before quitting tries again.
+    dirty = true;
+    saveError(err);
+  });
   return saving;
 }
 

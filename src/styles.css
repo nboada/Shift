@@ -877,6 +877,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .later-chips button { padding: 4px 7px; border-radius: 6px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .later-chips button:hover { background: var(--hover); color: var(--text); }
 .later-chips button.on { background: color-mix(in srgb, var(--accent), transparent 86%); color: var(--accent); font-weight: 600; }
+.later-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
 .later-foot { display: flex; align-items: center; gap: 8px; }
 .later-summary { flex: 1; color: var(--muted); font-size: 12.5px; }
 .field-row {
@@ -1127,6 +1128,26 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .threads li.swipe-armed[data-swipe="spam"] { background: #6b7079; }
 
 /* toast with an action (Undo send) */
+/* Where a hovered link in an email goes, like a browser's status bar. */
+.link-status {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  z-index: 50;
+  max-width: min(640px, calc(100vw - 16px));
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+.link-status[hidden] { display: none; }
 .toast:popover-open { display: flex; align-items: center; gap: 12px; }
 .toast button { padding: 2px 8px; border-radius: 5px; color: inherit; font-weight: 600; background: rgb(127 127 127 / 0.25); }
 
@@ -1250,6 +1271,9 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .sig-preview span { display: block; padding: 5px 10px; font-size: 11px; font-weight: 600; color: var(--muted); background: var(--search); }
 .sig-preview iframe, .compose-signature iframe { display: block; width: 100%; height: 60px; border: 0; background: #fff; }
 .compose-signature iframe { pointer-events: none; }
+.compose-quote { margin: 0 0 0 0.8ex; padding-left: 1ex; border-left: 1px solid var(--line); }
+.compose-quote iframe { display: block; width: 100%; height: 80px; border: 0; background: #fff; pointer-events: none; }
+.compose-quote.ProseMirror-selectednode { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 button.secondary { padding: 6px 12px; border: 1px solid var(--card-line); background: var(--bg); font-weight: 500; }
 button.secondary:hover:not(:disabled) { background: var(--hover); }

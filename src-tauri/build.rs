@@ -50,7 +50,7 @@ fn main() {
         "delete_draft",
         "schedule_send",
         "scheduled",
-        "scheduled_files",
+        "take_scheduled",
         "reschedule",
         "attachment_data",
         "open_attachment",

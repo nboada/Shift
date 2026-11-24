@@ -469,10 +469,13 @@ impl Gmail<'_> {
                 }
                 for b in stored {
                     let id = b.attachment_id.clone().unwrap_or_default();
-                    let v: Value = self
-                        .get(&format!("/messages/{}/attachments/{id}", m.id), &[])
-                        .await?;
-                    b.data = v["data"].as_str().map(String::from);
+                    // A 404 here means the message went after the thread was read, not the thread: its body stays
+                    // empty rather than the caller dropping the whole conversation.
+                    match self.get::<Value>(&format!("/messages/{}/attachments/{id}", m.id), &[]).await {
+                        Ok(v) => b.data = v["data"].as_str().map(String::from),
+                        Err(e) if is_not_found(&e) => {}
+                        Err(e) => return Err(e),
+                    }
                 }
             }
             return Ok(t);

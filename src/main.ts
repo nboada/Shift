@@ -12,7 +12,7 @@ import {
 } from "./settings";
 import { closeSettings, initSettings, openSettings, settingsOpen } from "./settings-ui";
 import { arrange } from "./sidebar";
-import { docToText, emailHtml, textToHtml } from "./compose";
+import { blockText, docToText, emailHtml, textToHtml } from "./compose";
 import { createEditor, foldReplyQuote } from "./editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
 import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
@@ -346,7 +346,7 @@ function decodeEntities(s: string) {
 }
 
 type Scheduled = {
-  id: number; account: string; draft_id: string | null; send_at: number;
+  id: number; account: string; draft_id: string | null; send_at: number; sending: boolean; error: string | null;
   draft: { to: string }; ui: { fields: Fields; opts: ComposeOptions };
 };
 /** Rows of the Scheduled view by list id; they are emails waiting in this Mac, not Gmail threads. */
@@ -367,7 +367,8 @@ async function loadThreads() {
       scheduledRows.set(id, r);
       return {
         id, account: r.account, subject: r.ui.fields.subject ?? "", sender: `To: ${r.draft.to}`,
-        snippet: `Sends ${formatWhen(new Date(r.send_at))}`, date: r.send_at, count: 1,
+        snippet: r.sending ? "Sending…" : r.error ? `Couldn't send yet, trying again: ${r.error}` : `Sends ${formatWhen(new Date(r.send_at))}`,
+        date: r.send_at, count: 1,
         unread: false, starred: false, primary: true, labels: "",
       };
     });
@@ -475,6 +476,10 @@ window.addEventListener("message", (e) => {
   if (d.type === "height" && typeof d.height === "number") {
     frame.style.height = `${d.height}px`;
     frame.classList.remove("loading");
+  } else if (d.type === "hover" && typeof d.url === "string") {
+    const status = $("#link-status");
+    status.textContent = d.url.replace(/^mailto:/i, "");
+    status.hidden = !d.url;
   } else if (d.type === "link" && typeof d.url === "string" && /^(https?|mailto):/i.test(d.url)) {
     openUrl(d.url);
   } else if (d.type === "key" && typeof d.key === "string") {
@@ -581,6 +586,7 @@ function scrollToLatest() {
 }
 
 async function openThread(id: string) {
+  $("#link-status").hidden = true;
   if (mailbox === "SCHEDULED") return editScheduled(id);
   if (mailbox === "DRAFT" && (await openDraft(id))) return;
   picked.clear();
@@ -676,8 +682,14 @@ function attachmentStrip(m: Message, account: string) {
 
 /** Swaps `cid:` image sources for the attachment's bytes once the email has loaded (email-frame.js does the swap). */
 function showInlineImages(frame: HTMLIFrameElement, m: Message, account: string) {
-  const html = m.html?.toLowerCase() ?? "";
-  const inline = m.attachments.filter((a) => a.content_id && html.includes(`cid:${a.content_id.toLowerCase()}`));
+  const refs = new Set([...(m.html ?? "").matchAll(/cid:([^"'\s)>]+)/gi)].map(([, ref]) => {
+    try {
+      return decodeURIComponent(ref).toLowerCase();
+    } catch {
+      return ref.toLowerCase();
+    }
+  }));
+  const inline = m.attachments.filter((a) => a.content_id && refs.has(a.content_id.toLowerCase()));
   if (!inline.length) return;
   frame.addEventListener("load", () => {
     for (const a of inline) {
@@ -1241,7 +1253,7 @@ let draftTimer = 0;
 let draftQueue: Promise<unknown> = Promise.resolve();
 
 const subjectInput = composeForm.elements.namedItem("subject") as HTMLInputElement;
-const editor = createEditor($("#compose-body"), $("#format-bar"), () => markTouched(), () => signatureFor(compose?.account).html);
+const editor = createEditor($("#compose-body"), $("#format-bar"), () => markTouched(), () => signatureFor(compose?.account).html, renderQuote);
 const suggestContacts = (q: string) => invoke<string[]>("suggest_contacts", { query: q }).catch(() => [] as string[]);
 const rcpt = {
   to: new Recipients($("#rcpt-to"), suggestContacts, () => markTouched()),
@@ -1318,6 +1330,17 @@ function currentDraft(state: ComposeState): Record<string, unknown> {
  * Saves are queued, so a slow save can't race the next one into creating a duplicate draft. Resolves to whether this
  * save reached Gmail.
  */
+/** The composer's fields as typed, for reopening it later. */
+const currentFields = (): Fields =>
+  ({ to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() });
+
+/** Schedules an edited scheduled email again for the time it had (`resumeAt`). */
+const resumeSchedule = (state: ComposeState, payload: unknown, fields: Fields) =>
+  invoke("schedule_send", {
+    account: state.account, draft: payload, draftId: state.draftId, sendAt: state.resumeAt,
+    ui: { fields, opts: { title: state.title, context: state.context } },
+  });
+
 function saveDraft(state = compose, payload = state && currentDraft(state)): Promise<boolean> {
   clearTimeout(draftTimer);
   if (!state || !payload) return draftQueue.then(() => true);
@@ -1354,7 +1377,7 @@ async function closeComposer(discard = false) {
   if (!state) return;
   const keep = !discard && hasContent();
   const payload = keep ? currentDraft(state) : null;
-  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
+  const fields = currentFields();
   compose = null;
   detachComposer();
   if (discard) {
@@ -1364,10 +1387,7 @@ async function closeComposer(discard = false) {
     if (await saveDraft(state, payload)) {
       if (!state.resumeAt) return toast("Draft saved");
       if (state.resumeAt <= Date.now()) return toast("Its send time passed while you edited, so it's in Drafts");
-      return invoke("schedule_send", {
-        account: state.account, draft: payload, draftId: state.draftId, sendAt: state.resumeAt,
-        ui: { fields, opts: { title: state.title, context: state.context } },
-      }).then(
+      return resumeSchedule(state, payload, fields).then(
         () => toast(`Still scheduled for ${formatWhen(new Date(state.resumeAt!))}`),
         (err) => toast(`Couldn't schedule it again, so it's in Drafts: ${err}`),
       );
@@ -1447,8 +1467,26 @@ function swapSignature(from: string, to: string) {
 }
 
 /** The original message for a reply or forward: its HTML where there is some, quoted under a header line. */
-const quoted = (m: Message, header: string) =>
-  `<p></p>${header}<blockquote>${m.html ?? textToHtml(m.text ?? "")}</blockquote>`;
+// shortcut: styles in the original's <head> and inline (cid:) images are left out of the quote; carry them as inline
+// MIME parts with their Content-IDs, and scope the styles, if forwards need them.
+/** The quoted email for a reply or forward, whole: cleaned of anything active, its inline (cid:) images dropped since
+ *  they don't travel with the reply, and a text version for the plain-text part. */
+function quoted(m: Message, header: string) {
+  const body = m.html ? new DOMParser().parseFromString(cleanEmail(m.html).html, "text/html").body : null;
+  body?.querySelectorAll('img[src^="cid:" i]').forEach((img) => img.remove());
+  const html = body ? body.innerHTML : textToHtml(m.text ?? "");
+  const text = m.text ?? (body ? blockText(body) : "");
+  return `<p></p>${header}<div data-quote="${esc(html)}" data-text="${esc(text)}"></div>`;
+}
+
+/** The composer's preview of a quoted email: sandboxed with no scripts, remote images only when they're allowed. */
+function renderQuote(frame: HTMLIFrameElement, html: string) {
+  const images = settings.appearance.loadRemoteImages ? "https: http: data:" : "data:";
+  frame.setAttribute("sandbox", "allow-same-origin");
+  frame.onload = () => (frame.style.height = `${frame.contentDocument?.documentElement.scrollHeight ?? 80}px`);
+  frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${images}">` +
+    EMAIL_CSS + cleanEmail(html).html;
+}
 
 /** Replies to or forwards `last`: the newest message, or the one whose own buttons were clicked. */
 function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
@@ -1458,7 +1496,6 @@ function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
   const notMe = (a: string) => !accounts.includes(bareEmail(a));
   const when = new Date(last.date).toLocaleString();
   if (kind === "forward") {
-    // shortcut: the editor keeps just its own formatting (no images, tables or styles) from the forwarded body.
     const header = textToHtml(
       `---------- Forwarded message ----------\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}`,
     );
@@ -1521,7 +1558,7 @@ composeForm.addEventListener("submit", async (e) => {
   await filesReady(state);
   if (compose !== state) return void submitting.delete(state);
   const draft = currentDraft(state);
-  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
+  const fields = currentFields();
   // Let any pending save finish first, so it can't recreate the draft after it's been sent.
   clearTimeout(draftTimer);
   await draftQueue;
@@ -1652,7 +1689,7 @@ async function scheduleSend(at: Date) {
   await filesReady(state);
   if (compose !== state) return void submitting.delete(state);
   const draft = currentDraft(state);
-  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
+  const fields = currentFields();
   // Saved to Gmail Drafts first, so the email is safe there (and visible on other devices) until it goes out.
   await saveDraft(state, draft);
   try {
@@ -1683,6 +1720,8 @@ $("#send-later").addEventListener("click", async () => {
         text: "Pick Date & Time…",
         action: () => openLater(times.find((t) => t.id === "tomorrow")!.at),
       },
+      { item: "Separator" as const },
+      { text: "Sent from this Mac while Shift is running", enabled: false },
     ],
   });
   menu.popup();
@@ -1770,8 +1809,14 @@ $("#ai-write").addEventListener("click", async () => {
 async function editScheduled(id: string) {
   const r = scheduledRows.get(id);
   if (!r) return;
-  const attachments = await invoke<OutFile[] | null>("scheduled_files", { account: r.account, id: r.id });
-  await invoke("reschedule", { account: r.account, id: r.id, sendAt: null });
+  // One step in the backend, so it can't be sent between reading it and taking it off the schedule.
+  let attachments: OutFile[] | null;
+  try {
+    attachments = await invoke<OutFile[] | null>("take_scheduled", { account: r.account, id: r.id });
+  } catch (err) {
+    refresh();
+    return toast(String(err));
+  }
   await openComposer(r.ui.fields, {
     ...r.ui.opts, account: r.account, draftId: r.draft_id, attachments: attachments ?? [], touched: true, inline: false,
     resumeAt: r.send_at,
@@ -2629,7 +2674,14 @@ listen<string>("app-toast", (e) => toast(e.payload));
 /** Saves an open draft before Shift quits or restarts, so the last few seconds of typing aren't lost. */
 const saveBeforeQuit = async () => {
   await flushSettings();
-  if (compose && hasContent()) await saveDraft();
+  const state = compose;
+  if (!state || !hasContent()) return;
+  const payload = currentDraft(state);
+  const fields = currentFields();
+  // A scheduled email open for editing goes back on its schedule, as closing the composer would.
+  if ((await saveDraft(state, payload)) && state.resumeAt && state.resumeAt > Date.now()) {
+    await resumeSchedule(state, payload, fields).catch(() => {});
+  }
 };
 onSaveError((err) => toast(`Couldn't save your settings: ${err}`));
 // ⌘Q: the backend waits (up to 5 s) for this before quitting.
