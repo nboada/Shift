@@ -83,6 +83,8 @@
         <header>
           <strong id="compose-title">New Email</strong>
           <span id="draft-status" class="draft-status" aria-live="polite"></span>
+          <button type="button" class="icon" id="compose-attach" data-tip="Attach files"><i class="ph ph-paperclip"></i></button>
+          <input type="file" id="compose-file" multiple hidden />
           <button type="button" class="icon" id="compose-discard" data-tip="Discard draft"><i class="ph ph-trash"></i></button>
           <button type="button" class="icon" id="compose-close" data-tip="Close and keep draft (Esc)"><i class="ph ph-x"></i></button>
         </header>
@@ -105,6 +107,7 @@
         </div>
         <label class="field-row subject-row"><span class="field-label">Subject</span><input name="subject" autocomplete="off" /></label>
         <textarea name="body" aria-label="Message"></textarea>
+        <div id="compose-files" class="attachments compose-files" hidden></div>
         <div id="compose-signature" class="compose-signature" hidden>
           <iframe sandbox="allow-same-origin" title="Signature"></iframe>
         </div>

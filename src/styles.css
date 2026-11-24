@@ -535,6 +535,28 @@ body.resizing iframe { pointer-events: none; }
 .message iframe { display: block; width: 100%; border: 0; background: #fff; }
 .message .text { padding: 4px 16px 16px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; }
 
+/* attachments: a strip of file chips under a message, and in the composer */
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px 14px; border-top: 1px solid var(--line); }
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid var(--card-line);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 13px;
+}
+.attachment-open { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 5px 10px; border-radius: 8px; }
+.attachment-open:hover { background: var(--hover); }
+.attachment-open i { font-size: 18px; color: var(--muted); flex: none; }
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; font-weight: 500; }
+.attachment-size { color: var(--muted); font-size: 12px; flex: none; }
+.attachment-remove { display: grid; place-items: center; width: 22px; height: 22px; margin-right: 4px; border-radius: 50%; font-size: 10px; color: var(--muted); }
+.attachment-remove:hover { background: var(--hover); color: var(--text); }
+.compose-files { flex: none; padding: 8px 16px; }
+.compose-files .attachment-open:hover { background: none; }
+.compose-form.dropping { box-shadow: inset 0 0 0 2px var(--accent); }
+
 /* composer: a window for new emails, a card under the thread for replies */
 .composer {
   width: min(760px, calc(100vw - 32px));

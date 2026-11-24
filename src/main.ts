@@ -10,6 +10,7 @@ import { withHtmlSignature } from "./compose";
 import { ask, askOpen } from "./dialog";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
+import { type Attachment, type OutFile, attachmentButton, checkSize, fileIcon, listedAttachments, readFile } from "./attachments";
 
 type Label = { id: string; name: string; kind: string; unread: number };
 type Thread = {
@@ -20,7 +21,7 @@ type Thread = {
 };
 type Message = {
   id: string; sender: string; recipients: string; cc: string; date: number; subject: string;
-  message_id: string; refs: string; html: string | null; text: string | null;
+  message_id: string; refs: string; html: string | null; text: string | null; attachments: Attachment[];
 };
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
@@ -325,11 +326,13 @@ async function openThread(id: string) {
         <div class="meta"><strong>${esc(name)}</strong><span>To: ${esc(m.recipients)}${m.cc ? `, Cc: ${esc(m.cc)}` : ""}</span></div>
         <time>${new Date(m.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time>
       </header>`;
+    const account = thread?.account ?? defaultAccount();
     if (m.html) {
       const frame = document.createElement("iframe");
       el.append(frame);
       reader.append(el);
       mountEmail(frame, m.html);
+      showInlineImages(frame, m, account);
     } else {
       const text = document.createElement("div");
       text.className = "text";
@@ -337,6 +340,7 @@ async function openThread(id: string) {
       el.append(text);
       reader.append(el);
     }
+    el.insertAdjacentHTML("beforeend", attachmentStrip(m, account));
   }
   reader.scrollTop = 0;
   if (thread?.unread && settings.general.markReadOnOpen) {
@@ -344,6 +348,43 @@ async function openThread(id: string) {
     modify(id, [], ["UNREAD"]);
   }
 }
+
+// ---- Attachments in the reader
+
+function attachmentStrip(m: Message, account: string) {
+  const files = listedAttachments(m.attachments, m.html);
+  if (!files.length) return "";
+  return `<div class="attachments message-files">${files
+    .map((a) => attachmentButton(fileIcon(a.mime, a.filename), a.filename || "attachment", a.size, { account, message: m.id, idx: a.idx }))
+    .join("")}</div>`;
+}
+
+/** Swaps `cid:` image sources for the attachment's bytes once the email has loaded. */
+function showInlineImages(frame: HTMLIFrameElement, m: Message, account: string) {
+  const inline = m.attachments.filter((a) => a.content_id);
+  if (!inline.length) return;
+  frame.addEventListener("load", () => {
+    for (const img of frame.contentDocument!.querySelectorAll<HTMLImageElement>('img[src^="cid:" i]')) {
+      const a = inline.find((a) => a.content_id === decodeURIComponent(img.getAttribute("src")!.slice(4)));
+      if (!a) continue;
+      invoke<string>("attachment_data", { account, message: m.id, idx: a.idx })
+        .then((data) => (img.src = `data:${a.mime};base64,${data}`))
+        .catch(() => {});
+    }
+  }, { once: true });
+}
+
+reader.addEventListener("click", async (e) => {
+  const el = (e.target as Element).closest<HTMLElement>(".message-files .attachment");
+  if (!el) return;
+  const { account, message, idx } = el.dataset;
+  try {
+    const path = await invoke<string>("open_attachment", { account, message, idx: Number(idx) });
+    toast(`Saved to ${path.split("/").slice(-2).join("/")}`);
+  } catch (err) {
+    toast(String(err));
+  }
+});
 
 function clearReader() {
   if (compose?.inline) closeComposer();
@@ -536,6 +577,7 @@ type ComposeOptions = {
   touched?: boolean;
   /** Which account sends it. Replies use the thread's account. */
   account?: string;
+  attachments?: OutFile[];
 };
 type ComposeState = Required<ComposeOptions>;
 
@@ -589,13 +631,13 @@ subjectInput.addEventListener("input", markTouched);
 bodyInput.addEventListener("input", markTouched);
 
 const hasContent = () =>
-  !!compose?.touched && !!(bodyInput.value.trim() || subjectInput.value.trim() || rcpt.to.count || rcpt.cc.count || rcpt.bcc.count);
+  !!compose?.touched && !!(compose.attachments.length || bodyInput.value.trim() || subjectInput.value.trim() || rcpt.to.count || rcpt.cc.count || rcpt.bcc.count);
 
 /** The message as the backend expects it, with an HTML signature merged in when one is set. */
 function currentDraft(state: ComposeState): Record<string, unknown> {
   const draft: Record<string, unknown> = {
     to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: bodyInput.value,
-    from_name: accountSettings(state.account).name, ...(state.context ?? {}),
+    from_name: accountSettings(state.account).name, ...(state.context ?? {}), attachments: state.attachments,
   };
   if (htmlSignature()) {
     const sigHtml = settings.composer.signatureHtml;
@@ -653,7 +695,9 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
   compose = {
     title: opts.title ?? "New Email", context: opts.context ?? null, quoteMarker: opts.quoteMarker ?? null,
     inline, draftId: opts.draftId ?? null, touched: !!opts.touched, account: opts.account ?? defaultAccount(),
+    attachments: opts.attachments ?? [],
   };
+  renderComposeFiles();
   renderFromRow();
   rcpt.to.set(fields.to ?? "");
   rcpt.cc.set(fields.cc ?? "");
@@ -700,15 +744,15 @@ function reply(kind: "reply" | "all" | "forward") {
   const notMe = (a: string) => !accounts.includes(bareEmail(a));
   const when = new Date(last.date).toLocaleString();
   if (kind === "forward") {
-    // shortcut: forwards the text only; attachments aren't synced yet.
     const marker = "---------- Forwarded message ----------";
-    return openComposer(
+    const opened = openComposer(
       {
         subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`,
         body: `${signature()}\n\n${marker}\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}\n\n${last.text ?? ""}`,
       },
       { title: "Forward", quoteMarker: marker, inline: true, account },
     );
+    return opened.then(() => forwardAttachments(last, account));
   }
   const mine = !notMe(last.sender);
   const primary = mine ? splitAddresses(last.recipients) : [last.sender];
@@ -779,6 +823,78 @@ composeForm.addEventListener("submit", async (e) => {
   } finally {
     button.disabled = false;
   }
+});
+
+// ---- Composer attachments: the paperclip, drag and drop, and removable chips.
+
+const composeFiles = $("#compose-files");
+const fileInput = $<HTMLInputElement>("#compose-file");
+
+function renderComposeFiles() {
+  const files = compose?.attachments ?? [];
+  composeFiles.hidden = !files.length;
+  composeFiles.innerHTML = files.map((f, i) => attachmentButton(fileIcon(f.mime, f.name), f.name, f.size, { i }, true)).join("");
+}
+
+async function addComposeFiles(list: Iterable<File>) {
+  const state = compose;
+  if (!state) return;
+  for (const file of list) {
+    const tooBig = checkSize(state.attachments, file.size);
+    if (tooBig) {
+      $("#compose-error").textContent = tooBig;
+      break;
+    }
+    const f = await readFile(file).catch(() => null);
+    if (compose !== state) return;
+    if (!f) continue;
+    state.attachments.push(f);
+    renderComposeFiles();
+    markTouched();
+  }
+}
+
+/** Adds the forwarded message's files (including inline images) to the composer as they download. */
+async function forwardAttachments(m: Message, account: string) {
+  const state = compose;
+  for (const a of m.attachments) {
+    const name = a.filename || "attachment";
+    const data = await invoke<string>("attachment_data", { account, message: m.id, idx: a.idx }).catch(() => null);
+    if (compose !== state || !state) return;
+    if (data === null) {
+      toast(`Couldn't attach ${name}`);
+      continue;
+    }
+    state.attachments.push({ name, mime: a.mime, data, size: a.size });
+    renderComposeFiles();
+  }
+}
+
+$("#compose-attach").addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  addComposeFiles([...(fileInput.files ?? [])]);
+  fileInput.value = "";
+});
+composeFiles.addEventListener("click", (e) => {
+  const el = (e.target as Element).closest<HTMLElement>(".attachment-remove");
+  if (!el || !compose) return;
+  compose.attachments.splice(Number(el.closest<HTMLElement>(".attachment")!.dataset.i), 1);
+  renderComposeFiles();
+  markTouched();
+});
+composeForm.addEventListener("dragover", (e) => {
+  if (!e.dataTransfer?.types.includes("Files")) return;
+  e.preventDefault();
+  composeForm.classList.add("dropping");
+});
+composeForm.addEventListener("dragleave", (e) => {
+  if (!composeForm.contains(e.relatedTarget as Node)) composeForm.classList.remove("dropping");
+});
+composeForm.addEventListener("drop", (e) => {
+  composeForm.classList.remove("dropping");
+  if (!e.dataTransfer?.files.length) return;
+  e.preventDefault();
+  addComposeFiles([...e.dataTransfer.files]);
 });
 
 $("#compose-close").addEventListener("click", () => closeComposer());
