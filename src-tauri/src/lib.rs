@@ -24,6 +24,8 @@ struct Account {
     syncing: tokio::sync::Mutex<()>,
     /// Held while due scheduled emails go out, so overlapping syncs can't send the same one twice.
     sending: tokio::sync::Mutex<()>,
+    /// Held while auto-label runs, which happens beside the sync rather than inside it.
+    labeling: tokio::sync::Mutex<()>,
 }
 
 impl Account {
@@ -34,6 +36,7 @@ impl Account {
             token: Default::default(),
             syncing: Default::default(),
             sending: Default::default(),
+            labeling: Default::default(),
         })
     }
 
@@ -194,9 +197,9 @@ async fn fetch_threads(
         .map_or(Ok(()), |(_, e)| Err(e))
 }
 
-/// Fetches bodies for the newest inbox threads so opening them doesn't wait on the network.
-async fn prefetch_bodies(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
-    let ids = db::missing_bodies(&a.db(), "INBOX", PREFETCH_PER_TICK)?;
+/// Fetches bodies for the newest inbox threads so opening them doesn't wait on the network, within `budget` units.
+async fn prefetch_bodies(app: &AppHandle, a: &Account, g: &Gmail<'_>, budget: i64) -> anyhow::Result<()> {
+    let ids = db::missing_bodies(&a.db(), "INBOX", (budget / FULL_COST).max(0) as usize)?;
     let jobs = ids.into_iter().map(|id| (id, true)).collect();
     fetch(app, a, g, jobs)
         .await
@@ -205,10 +208,15 @@ async fn prefetch_bodies(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow:
         .map_or(Ok(()), |(_, e)| Err(e))
 }
 
-// Gmail allows each account about 6,000 quota units a minute; a thread costs 40 (metadata) to 120 (full).
-// At the default 30 s tick these stay well under it, leaving room for history, search and what the user does.
-const BACKFILL_PER_TICK: usize = 50;
-const PREFETCH_PER_TICK: usize = 10;
+// Gmail allows each account 6,000 quota units a minute; threads.get costs 40 for metadata and 120 with bodies.
+// Background fetching takes at most 60% of that, so history, search, sends and the user's own actions have room.
+const METADATA_COST: i64 = 40;
+const FULL_COST: i64 = 120;
+
+/// Quota units one sync tick may spend on background fetching, scaled to how often ticks run.
+fn tick_budget(interval_secs: u64) -> i64 {
+    6000 * 6 / 10 * interval_secs as i64 / 60
+}
 
 /// Fetches threads 4 at a time; returns the ones that failed, with why.
 async fn fetch(
@@ -223,6 +231,8 @@ async fn fetch(
     let (mut done, mut failed) = (0, Vec::new());
     while let Some((res, id, full)) = stream.next().await {
         let r = match res {
+            // Gmail doesn't have this thread's queued changes yet; its copy would undo them on screen.
+            Ok(_) if db::has_pending(&a.db(), &id) => Ok(()),
             Ok(t) => db::upsert_thread(&mut a.db(), &t, full),
             Err(e) if gmail::is_not_found(&e) => db::delete_thread(&a.db(), &id),
             Err(e) => Err(e),
@@ -344,17 +354,95 @@ fn notify_new_mail(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
 
 /// Fetches the next batch of queued threads. Failures go to the back of the queue so one bad thread can't block it.
 /// Returns how many it took off the queue's front.
-async fn backfill(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<usize> {
+/// Scrolling to the end of a list: fetches the next older page of that mailbox from Gmail for each account, beyond
+/// what the first sync listed. Returns how many threads it added and whether Gmail has more.
+#[tauri::command]
+async fn load_more(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    accounts: Option<Vec<String>>,
+    label: Option<String>,
+) -> R<(usize, bool)> {
+    if s.demo {
+        return Ok((0, false));
+    }
+    let (mut added, mut more) = (0, false);
+    for a in s.scope(accounts.as_deref())? {
+        // The mailbox as Gmail sees it: Archive is a search, a merged label is this account's label of that name.
+        let (q, label) = match label.as_deref() {
+            None => ("", None),
+            Some("ARCHIVE") => ("-in:inbox -in:drafts -in:spam -in:trash", None),
+            Some("SCHEDULED") => continue,
+            Some(l) => match resolve_label(&a.db(), l)? {
+                Some(id) => ("", Some(id)),
+                None => continue,
+            },
+        };
+        let key = format!("more:{}", label.as_deref().unwrap_or(if q.is_empty() { "ALL" } else { "ARCHIVE" }));
+        let mut page = match db::get_meta(&a.db(), &key)? {
+            Some(t) if t == "done" => continue,
+            Some(t) => t,
+            None => String::new(),
+        };
+        let token = a.access_token(&s.http).await?;
+        let g = Gmail { http: &s.http, token: &token };
+        // Pages already cached are skipped (up to 5, at 10 units each) until one brings threads we don't have.
+        let mut fresh = Vec::new();
+        for _ in 0..5 {
+            let (ids, next) = g.thread_page(q, label.as_deref(), &page).await?;
+            fresh.extend(ids.into_iter().filter(|id| !db::has_thread(&a.db(), id).unwrap_or(true)));
+            page = next.clone().unwrap_or_default();
+            db::set_meta(&a.db(), &key, next.as_deref().unwrap_or("done"))?;
+            if next.is_none() || !fresh.is_empty() {
+                break;
+            }
+        }
+        more |= !page.is_empty();
+        added += fresh.len();
+        let failed = fetch(&app, &a, &g, fresh.into_iter().map(|id| (id, false)).collect()).await;
+        if let Some((_, e)) = failed.into_iter().next() {
+            return Err(e.into());
+        }
+    }
+    let _ = app.emit(CHANGED, ());
+    Ok((added, more))
+}
+
+/// Adds threads to the end of the backfill queue, skipping ones already in it.
+fn enqueue(a: &Account, ids: Vec<String>) -> anyhow::Result<()> {
+    let c = a.db();
+    let mut queue: Vec<String> = db::get_meta(&c, "backfill")?
+        .map(|j| serde_json::from_str(&j))
+        .transpose()?
+        .unwrap_or_default();
+    for id in ids {
+        if !queue.contains(&id) {
+            queue.push(id);
+        }
+    }
+    db::set_meta(&c, "backfill", &serde_json::to_string(&queue)?)?;
+    Ok(())
+}
+
+/// Returns how many it took and the quota units that cost; at least one thread a tick, so the queue always moves.
+async fn backfill(app: &AppHandle, a: &Account, g: &Gmail<'_>, budget: i64) -> anyhow::Result<(usize, i64)> {
     let queue: Vec<String> = match db::get_meta(&a.db(), "backfill")? {
         Some(json) => serde_json::from_str(&json)?,
-        None => return Ok(0),
+        None => return Ok((0, 0)),
     };
-    let take = queue.len().min(BACKFILL_PER_TICK);
-    let (batch, rest) = queue.split_at(take);
-    let jobs = batch
-        .iter()
-        .map(|id| (id.clone(), db::is_full(&a.db(), id)))
-        .collect();
+    let mut jobs: Vec<(String, bool)> = Vec::new();
+    let mut spent = 0;
+    for id in &queue {
+        let full = db::is_full(&a.db(), id);
+        let cost = if full { FULL_COST } else { METADATA_COST };
+        if !jobs.is_empty() && spent + cost > budget {
+            break;
+        }
+        spent += cost;
+        jobs.push((id.clone(), full));
+    }
+    let take = jobs.len();
+    let rest = &queue[take..];
     let failed = fetch(app, a, g, jobs).await;
     let mut next: Vec<String> = rest.to_vec();
     next.extend(failed.into_iter().map(|(id, _)| id));
@@ -364,7 +452,7 @@ async fn backfill(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result
     } else {
         db::set_meta(&c, "backfill", &serde_json::to_string(&next)?)?;
     }
-    Ok(take)
+    Ok((take, spent))
 }
 
 async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
@@ -377,15 +465,24 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
         http: &s.http,
         token: &token,
     };
+    replay_pending(app, a, &g).await?;
     let labels = g.labels().await?;
     db::replace_labels(&mut a.db(), &labels)?;
     let history = db::get_meta(&a.db(), "history_id")?;
     let mut changed = false;
+    let mut budget = tick_budget(settings::sync_seconds(&s.dir));
     match history {
         None => full_sync(a, &g).await?,
         Some(h) => match g.history(&h).await {
-            Ok((ids, new_id)) => {
+            Ok((mut ids, new_id)) => {
                 changed = !ids.is_empty();
+                // A burst (a day offline, a bulk action elsewhere) is fetched over several ticks: what doesn't fit
+                // this tick's budget joins the backfill queue, which already persists and retries.
+                let fits = (budget / METADATA_COST).max(1) as usize;
+                if ids.len() > fits {
+                    enqueue(a, ids.split_off(fits))?;
+                }
+                budget -= ids.len() as i64 * METADATA_COST;
                 fetch_threads(app, a, &g, ids).await?;
                 db::set_meta(&a.db(), "history_id", &new_id)?;
                 if changed {
@@ -393,9 +490,7 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
                     if let Err(e) = notify_new_mail(app, a) {
                         eprintln!("{} notification: {e:#}", a.email);
                     }
-                    if let Err(e) = auto_label(app, a, &g).await {
-                        let _ = app.emit("sync-error", format!("{}: AI labelling: {e:#}", a.email));
-                    }
+                    spawn_auto_label(app, &a.email);
                 }
             }
             // Expired cursor (Gmail keeps about a week): start over, keeping the cache until threads are refetched.
@@ -403,14 +498,23 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
             Err(e) => return Err(e),
         },
     }
-    let filled = backfill(app, a, &g).await?;
+    let (filled, spent) = backfill(app, a, &g, budget).await?;
     // Every tick used to repaint the whole UI; now only when something came in.
     if changed || filled > 0 {
         let _ = app.emit(CHANGED, ());
     }
     // Bodies wait until the mailbox is listed, so the two don't compete for quota.
     if filled == 0 {
-        prefetch_bodies(app, a, &g).await?;
+        prefetch_bodies(app, a, &g, budget - spent).await?;
+    }
+    // After this tick's fetches, so new mail isn't counted twice.
+    // The cache only holds recent mail: note how many unread Inbox threads Gmail has beyond it (1 quota unit).
+    if let Ok(n) = g.unread_threads("INBOX").await {
+        let c = a.db();
+        // `labels` already adds the last extra; take it off to get what's cached.
+        let cached = db::labels(&c)?.into_iter().find(|l| l.id == "INBOX").map_or(0, |l| l.unread);
+        let extra: i64 = db::get_meta(&c, "inbox_unread_extra")?.and_then(|v| v.parse().ok()).unwrap_or(0);
+        db::set_meta(&c, "inbox_unread_extra", &(n - (cached - extra)).max(0).to_string())?;
     }
     Ok(())
 }
@@ -635,7 +739,24 @@ async fn ai_draft_reply(
 
 /// Files new Inbox mail into the labels the user described in Settings → AI. Runs after a sync that brought new
 /// mail; only mail newer than the `ai_labeled_at` watermark, so turning it on doesn't relabel the backlog.
-async fn auto_label(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
+/// Runs auto-label for `account` in its own task: the AI call can take minutes (300 s timeout), and inside the sync
+/// it held up new mail for that account. One run at a time per account; a skipped run is caught by the next one.
+fn spawn_auto_label(app: &AppHandle, account: &str) {
+    let (app, account) = (app.clone(), account.to_string());
+    tauri::async_runtime::spawn(async move {
+        let Ok(a) = app.state::<State>().account(&account) else {
+            return;
+        };
+        let Ok(_running) = a.labeling.try_lock() else {
+            return;
+        };
+        if let Err(e) = auto_label(&app, &a).await {
+            let _ = app.emit("sync-error", format!("{}: AI labelling: {e:#}", a.email));
+        }
+    });
+}
+
+async fn auto_label(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
     let s = app.state::<State>();
     if settings::ai_label_rules(&s.dir).is_none() {
         return Ok(());
@@ -649,11 +770,18 @@ async fn auto_label(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Resu
         // Read or not: opening an email from its notification before this runs shouldn't keep it unlabelled.
         db::inbox_mail(&c, since, false)?
     };
-    let Some(latest) = mail.iter().map(|m| m.date).max() else {
+    if mail.is_empty() {
         return Ok(());
-    };
-    apply_label_rules(app, a, g, &mail).await?;
-    db::set_meta(&a.db(), "ai_labeled_at", &latest.to_string())?;
+    }
+    let token = a.access_token(&s.http).await?;
+    let g = Gmail { http: &s.http, token: &token };
+    // Oldest first, 40 at a time (one AI request each); the watermark moves past a batch only once it's done, so a
+    // burst of mail is labelled in full and a failure retries from the batch that failed.
+    for batch in mail.chunks(40) {
+        apply_label_rules(app, a, &g, batch).await?;
+        let done = batch.iter().map(|m| m.date).max().unwrap_or_default();
+        db::set_meta(&a.db(), "ai_labeled_at", &done.to_string())?;
+    }
     Ok(())
 }
 
@@ -1336,30 +1464,69 @@ async fn modify(
     if s.demo {
         return Ok(());
     }
-    let token = a.access_token(&s.http).await?;
-    let g = Gmail {
-        http: &s.http,
-        token: &token,
+    // Behind an earlier change still waiting for Gmail, this one waits too, so they arrive in order.
+    if db::has_pending(&a.db(), &id) {
+        db::add_pending(&a.db(), &id, &add, &remove, trash)?;
+        return Ok(());
+    }
+    let remote = match a.access_token(&s.http).await {
+        Ok(token) => apply_remote(&Gmail { http: &s.http, token: &token }, &id, &add, &remove, trash).await,
+        Err(e) => Err(e),
     };
-    // Gmail moves threads in and out of Trash only through trash/untrash, not by label changes.
-    let remote = if trash {
-        g.trash(&id).await
+    match remote {
+        Ok(()) => Ok(()),
+        // Offline or Gmail struggling: keep the change and let the sync loop send it (`replay_pending`).
+        Err(e) if gmail::is_transient(&e) => {
+            db::add_pending(&a.db(), &id, &add, &remove, trash)?;
+            Ok(())
+        }
+        // Gmail refused it: put the thread back as Gmail has it.
+        Err(e) => {
+            if let Ok(token) = a.access_token(&s.http).await {
+                refetch(&app, &a, &Gmail { http: &s.http, token: &token }, &id).await;
+            }
+            Err(e.into())
+        }
+    }
+}
+
+/// Sends one label change to Gmail. Gmail moves threads in and out of Trash only through trash/untrash.
+async fn apply_remote(g: &Gmail<'_>, id: &str, add: &[String], remove: &[String], trash: bool) -> anyhow::Result<()> {
+    if trash {
+        g.trash(id).await
     } else if remove.iter().any(|l| l == "TRASH") {
         let rest: Vec<String> = remove.iter().filter(|l| *l != "TRASH").cloned().collect();
-        match g.untrash(&id).await {
-            Ok(()) => g.modify(&id, &add, &rest).await,
-            Err(e) => Err(e),
-        }
+        g.untrash(id).await?;
+        g.modify(id, add, &rest).await
     } else {
-        g.modify(&id, &add, &remove).await
-    };
-    if let Err(e) = remote {
-        let full = db::is_full(&a.db(), &id);
-        if let Ok(t) = g.thread(&id, full).await {
-            let _ = db::upsert_thread(&mut a.db(), &t, full);
-            let _ = app.emit(CHANGED, ());
+        g.modify(id, add, remove).await
+    }
+}
+
+/// Replaces the cached thread with Gmail's copy, undoing a local change Gmail didn't take.
+async fn refetch(app: &AppHandle, a: &Account, g: &Gmail<'_>, id: &str) {
+    let full = db::is_full(&a.db(), id);
+    if let Ok(t) = g.thread(id, full).await {
+        let _ = db::upsert_thread(&mut a.db(), &t, full);
+        let _ = app.emit(CHANGED, ());
+    }
+}
+
+/// Sends changes made while Gmail couldn't be reached, oldest first. Stops at the first one that still can't get
+/// through (the rest stay queued, in order); one Gmail refuses is dropped and its thread re-fetched.
+async fn replay_pending(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
+    let ops = db::pending_ops(&a.db())?;
+    for op in ops {
+        match apply_remote(g, &op.thread, &op.add, &op.remove, op.trash).await {
+            Ok(()) => db::done_pending(&a.db(), op.seq)?,
+            Err(e) if gmail::is_transient(&e) => return Err(e),
+            Err(_) => {
+                db::done_pending(&a.db(), op.seq)?;
+                if !db::has_pending(&a.db(), &op.thread) {
+                    refetch(app, a, g, &op.thread).await;
+                }
+            }
         }
-        return Err(e.into());
     }
     Ok(())
 }
@@ -2144,6 +2311,7 @@ pub fn run() {
             set_open_at_login,
             ai_label_inbox,
             find_draft,
+            load_more,
             quit_now,
             test_notification,
             empty_mailbox,
