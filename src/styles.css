@@ -413,6 +413,10 @@ button.primary:disabled { opacity: 0.6; }
   border-radius: 10px;
   box-shadow: var(--shadow);
 }
+.menu:popover-open { animation: menu-in 0.18s cubic-bezier(0.32, 0.72, 0, 1); }
+@keyframes menu-in { from { opacity: 0; transform: scale(0.95); } }
+@media (prefers-reduced-motion: reduce) { .menu:popover-open { animation-name: fade-in; } }
+@keyframes fade-in { from { opacity: 0; } }
 .menu h4 { margin: 4px 8px 6px; font-size: 11px; font-weight: 600; color: var(--muted); }
 .menu button {
   display: flex;
