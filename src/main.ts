@@ -5,8 +5,9 @@ import { SEND, bindingsFrom, comboOf, formatCombo, keysFor } from "./keys";
 import {
   ACCOUNT_COLOR_ORDER, accountSettings, applyVisualSettings, loadSettings, onSettingsChange, setAccountSetting, setSetting, settings, stepZoom,
 } from "./settings";
-import { closeSettings, initSettings, openSettings, renderSignaturePreview, settingsOpen } from "./settings-ui";
-import { withHtmlSignature } from "./compose";
+import { closeSettings, initSettings, openSettings, settingsOpen } from "./settings-ui";
+import { docToText, emailHtml, textToHtml } from "./compose";
+import { createEditor } from "./editor";
 import { ask, askOpen } from "./dialog";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
@@ -570,8 +571,6 @@ type Fields = { to?: string; cc?: string; bcc?: string; subject?: string; body?:
 type ComposeOptions = {
   title?: string;
   context?: ReplyContext | null;
-  /** Where the quoted message starts in the body, so an HTML signature can go above it. */
-  quoteMarker?: string | null;
   inline?: boolean;
   draftId?: string | null;
   touched?: boolean;
@@ -586,7 +585,7 @@ let draftTimer = 0;
 let draftQueue: Promise<unknown> = Promise.resolve();
 
 const subjectInput = composeForm.elements.namedItem("subject") as HTMLInputElement;
-const bodyInput = composeForm.elements.namedItem("body") as HTMLTextAreaElement;
+const editor = createEditor($("#compose-body"), $("#format-bar"), () => markTouched());
 const suggestContacts = (q: string) => invoke<string[]>("suggest_contacts", { query: q }).catch(() => [] as string[]);
 const rcpt = {
   to: new Recipients($("#rcpt-to"), suggestContacts, () => markTouched()),
@@ -628,24 +627,19 @@ function markTouched() {
   draftTimer = window.setTimeout(() => saveDraft(), 1500);
 }
 subjectInput.addEventListener("input", markTouched);
-bodyInput.addEventListener("input", markTouched);
 
 const hasContent = () =>
-  !!compose?.touched && !!(compose.attachments.length || bodyInput.value.trim() || subjectInput.value.trim() || rcpt.to.count || rcpt.cc.count || rcpt.bcc.count);
+  !!compose?.touched && !!(compose.attachments.length || editor.getText().trim() || subjectInput.value.trim() || rcpt.to.count || rcpt.cc.count || rcpt.bcc.count);
 
-/** The message as the backend expects it, with an HTML signature merged in when one is set. */
+/** The message as the backend expects it: HTML from the editor plus a plain-text version. */
 function currentDraft(state: ComposeState): Record<string, unknown> {
-  const draft: Record<string, unknown> = {
-    to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: bodyInput.value,
+  const sigHtml = settings.composer.signatureHtml;
+  const sigText = new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
+  return {
+    to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value,
+    body: docToText(editor.state.doc, sigText), html: emailHtml(editor.getHTML(), sigHtml),
     from_name: accountSettings(state.account).name, ...(state.context ?? {}), attachments: state.attachments,
   };
-  if (htmlSignature()) {
-    const sigHtml = settings.composer.signatureHtml;
-    const sigText = new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
-    const { text, html } = withHtmlSignature(bodyInput.value, state.quoteMarker, sigHtml, sigText);
-    Object.assign(draft, { body: text, html });
-  }
-  return draft;
 }
 
 /** Saves are queued, so a slow save can't race the next one into creating a duplicate draft. */
@@ -693,7 +687,7 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
   if (compose) await closeComposer();
   const inline = !!opts.inline && !!selected && (!opts.context || opts.context.thread_id === selected);
   compose = {
-    title: opts.title ?? "New Email", context: opts.context ?? null, quoteMarker: opts.quoteMarker ?? null,
+    title: opts.title ?? "New Email", context: opts.context ?? null,
     inline, draftId: opts.draftId ?? null, touched: !!opts.touched, account: opts.account ?? defaultAccount(),
     attachments: opts.attachments ?? [],
   };
@@ -704,14 +698,10 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
   rcpt.bcc.set(fields.bcc ?? "");
   showCcRows(!!fields.cc, !!fields.bcc);
   subjectInput.value = fields.subject ?? "";
-  bodyInput.value = fields.body ?? "";
+  editor.commands.setContent(fields.body ?? "", { emitUpdate: false });
   $("#compose-title").textContent = compose.title;
   $("#compose-error").textContent = "";
   draftStatus(compose.draftId ? "Saved" : "");
-  // HTML signatures can't live in a plain textarea, so they show as a preview and are added on send.
-  const sig = $("#compose-signature");
-  sig.hidden = !htmlSignature();
-  if (!sig.hidden) renderSignaturePreview(sig.querySelector("iframe"));
   if (inline) {
     const host = document.createElement("section");
     host.className = "message compose-inline";
@@ -723,18 +713,26 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     composer.showModal();
   }
   if (fields.to || opts.context) {
-    bodyInput.focus();
-    bodyInput.setSelectionRange(0, 0);
-    bodyInput.scrollTop = 0;
+    editor.commands.focus("start");
+    $("#compose-body").scrollTop = 0;
   } else rcpt.to.focus();
 }
 
 /** Splits an address header on commas that aren't inside a quoted display name. */
 const splitAddresses = (list: string) => list.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((a) => a.trim()).filter(Boolean);
 
-/** Signature block ("-- " separator, the email convention) or nothing. */
+/** An empty line to write on, then the signature ("-- " separator for text, the email convention) if one is set. */
 const signature = () =>
-  settings.composer.signatureMode === "text" && settings.composer.signature.trim() ? `\n\n-- \n${settings.composer.signature.trim()}` : "";
+  "<p></p>" +
+  (htmlSignature()
+    ? "<p></p><div data-signature></div>"
+    : settings.composer.signatureMode === "text" && settings.composer.signature.trim()
+      ? `<p></p>${textToHtml(`-- \n${settings.composer.signature.trim()}`)}`
+      : "");
+
+/** The original message for a reply or forward: its HTML where there is some, quoted under a header line. */
+const quoted = (m: Message, header: string) =>
+  `<p></p>${header}<blockquote>${m.html ?? textToHtml(m.text ?? "")}</blockquote>`;
 
 function reply(kind: "reply" | "all" | "forward") {
   const last = messages.at(-1);
@@ -744,13 +742,13 @@ function reply(kind: "reply" | "all" | "forward") {
   const notMe = (a: string) => !accounts.includes(bareEmail(a));
   const when = new Date(last.date).toLocaleString();
   if (kind === "forward") {
-    const marker = "---------- Forwarded message ----------";
+    // shortcut: the editor keeps just its own formatting (no images, tables or styles) from the forwarded body.
+    const header = textToHtml(
+      `---------- Forwarded message ----------\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}`,
+    );
     const opened = openComposer(
-      {
-        subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`,
-        body: `${signature()}\n\n${marker}\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}\n\n${last.text ?? ""}`,
-      },
-      { title: "Forward", quoteMarker: marker, inline: true, account },
+      { subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`, body: signature() + quoted(last, header) },
+      { title: "Forward", inline: true, account },
     );
     return opened.then(() => forwardAttachments(last, account));
   }
@@ -758,19 +756,17 @@ function reply(kind: "reply" | "all" | "forward") {
   const primary = mine ? splitAddresses(last.recipients) : [last.sender];
   const others = kind === "all" ? [...splitAddresses(last.recipients), ...splitAddresses(last.cc)] : [];
   const cc = [...new Set(others.filter((a) => notMe(a) && !primary.some((p) => bareEmail(p) === bareEmail(a))))];
-  const marker = `On ${when}, ${displayName(last.sender)} wrote:`;
-  const quoted = (last.text ?? "").split("\n").map((l) => `> ${l}`).join("\n");
+  const header = textToHtml(`On ${when}, ${displayName(last.sender)} wrote:`);
   return openComposer(
     {
       to: primary.join(", "),
       cc: cc.join(", "),
       subject: /^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`,
-      body: signature() + (settings.composer.quoteOriginal ? `\n\n${marker}\n${quoted}` : ""),
+      body: signature() + (settings.composer.quoteOriginal ? quoted(last, header) : ""),
     },
     {
       title: kind === "all" ? "Reply all" : "Reply",
       context: { thread_id: selected, in_reply_to: last.message_id, references: last.refs },
-      quoteMarker: marker,
       inline: true,
       account,
     },
@@ -787,7 +783,7 @@ composeForm.addEventListener("submit", async (e) => {
   const bad = all.find((a) => !isValidAddress(a));
   if (bad) return error(`Check this address: ${bad}`);
   const draft = currentDraft(state);
-  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: bodyInput.value };
+  const fields: Fields = { to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() };
   // Let any pending save finish first, so it can't recreate the draft after it's been sent.
   clearTimeout(draftTimer);
   await draftQueue;
@@ -1345,7 +1341,7 @@ document.addEventListener("keydown", (e) => {
     action = action === "reply" ? "replyAll" : "reply";
   }
   // In the search field only ⌘ shortcuts act, so typing (and Backspace) stays text editing.
-  if ((e.target as Element).closest("input, textarea")) {
+  if ((e.target as Element).closest("input, textarea, [contenteditable]")) {
     if (e.key === "Escape") (e.target as HTMLElement).blur();
     if (!combo.includes("cmd+")) return;
   }

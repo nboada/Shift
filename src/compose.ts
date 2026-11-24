@@ -1,38 +1,94 @@
+import { Node } from "@tiptap/core";
+import type { Node as PMNode } from "@tiptap/pm/model";
+import { Placeholder } from "@tiptap/extensions";
+import StarterKit from "@tiptap/starter-kit";
+
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-/** Plain composer text as HTML: escaped, line breaks kept, quoted ("> ") lines as a blockquote. */
-export function textToHtml(text: string) {
-  const out: string[] = [];
-  let quote: string[] = [];
-  const flush = () => {
-    if (quote.length) out.push(`<blockquote style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">${quote.join("<br>")}</blockquote>`);
-    quote = [];
+/** Plain text as editor paragraphs, one per line. */
+export const textToHtml = (text: string) => text.split("\n").map((l) => `<p>${escapeHtml(l)}</p>`).join("");
+
+/**
+ * The HTML signature as one block in the editor. It holds no markup of its own: the editor shows a sandboxed preview
+ * and `emailHtml` swaps the placeholder for the signature at save/send time, so its HTML never runs in the app.
+ */
+export const Signature = Node.create({
+  name: "signature",
+  group: "block",
+  atom: true,
+  selectable: true,
+  parseHTML: () => [{ tag: "div[data-signature]" }],
+  renderHTML: () => ["div", { "data-signature": "" }],
+});
+
+export const extensions = [
+  StarterKit.configure({ heading: false, codeBlock: false, code: false, link: { openOnClick: false, autolink: true } }),
+  Placeholder.configure({ placeholder: "Write your message…" }),
+  Signature,
+];
+
+const QUOTE_STYLE = "margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex";
+
+/** Editor HTML as sent: email-safe paragraph spacing, Gmail's quote style, and the real HTML signature. */
+export const emailHtml = (html: string, sigHtml: string) =>
+  html
+    .replace(/<p><\/p>/g, "<p><br></p>")
+    .replace(/<p>/g, '<p style="margin:0">')
+    .replace(/<blockquote>/g, `<blockquote style="${QUOTE_STYLE}">`)
+    .replace(/<div data-signature="[^"]*"><\/div>/g, () => `<div class="signature">${sigHtml}</div>`);
+
+/** Plain-text version of the editor document: "> " quotes, list markers, link URLs and the "-- " signature kept. */
+export function docToText(doc: PMNode, sigText = ""): string {
+  const inline = (n: PMNode) => {
+    let s = "";
+    let href: string | null = null;
+    let linked = "";
+    const endLink = () => {
+      if (href && href !== linked && href !== `mailto:${linked}`) s += ` <${href}>`;
+      href = null;
+      linked = "";
+    };
+    n.forEach((c) => {
+      const h = c.marks.find((m) => m.type.name === "link")?.attrs.href ?? null;
+      if (h !== href) endLink();
+      href = h;
+      if (c.isText) {
+        s += c.text;
+        if (h) linked += c.text;
+      } else if (c.type.name === "hardBreak") s += "\n";
+    });
+    endLink();
+    return s;
   };
-  for (const line of text.split("\n")) {
-    if (line.startsWith(">")) quote.push(escapeHtml(line.replace(/^> ?/, "")));
-    else {
-      flush();
-      out.push(escapeHtml(line));
+  const lines = (n: PMNode): string[] => {
+    const kids = () => {
+      const out: string[] = [];
+      n.forEach((c) => out.push(...lines(c)));
+      return out;
+    };
+    switch (n.type.name) {
+      case "paragraph":
+        return inline(n).split("\n");
+      case "blockquote":
+        return kids().map((l) => (l ? `> ${l}` : ">"));
+      case "bulletList":
+      case "orderedList": {
+        const out: string[] = [];
+        let i = n.attrs.start ?? 1;
+        n.forEach((item) => {
+          const mark = n.type.name === "bulletList" ? "- " : `${i++}. `;
+          lines(item).forEach((l, j) => out.push((j ? " ".repeat(mark.length) : mark) + l));
+        });
+        return out;
+      }
+      case "signature":
+        return ["-- ", ...sigText.trim().split("\n")];
+      case "horizontalRule":
+        return ["---"];
+      default:
+        return kids();
     }
-  }
-  flush();
-  return out.join("<br>").replace(/<br>(<blockquote)/g, "$1").replace(/(<\/blockquote>)<br>/g, "$1");
-}
-
-/** Splits the body where the quoted reply / forwarded message starts, so the signature can sit above it. */
-export function splitAtQuote(body: string, marker: string | null): [string, string] {
-  const i = marker ? body.lastIndexOf(marker) : -1;
-  return i < 0 ? [body.trimEnd(), ""] : [body.slice(0, i).trimEnd(), body.slice(i)];
-}
-
-/** Text and HTML versions of an email with an HTML signature between what was written and the quote. */
-export function withHtmlSignature(body: string, marker: string | null, sigHtml: string, sigText: string) {
-  const [written, quote] = splitAtQuote(body, marker);
-  const text = `${written}\n\n-- \n${sigText.trim()}${quote ? `\n\n${quote}` : ""}`;
-  const html =
-    `<div dir="ltr">${textToHtml(written)}<br><br><div class="signature">${sigHtml}</div>` +
-    (quote ? `<br><div class="quote">${textToHtml(quote)}</div>` : "") +
-    "</div>";
-  return { text, html };
+  };
+  return lines(doc).join("\n").trimEnd();
 }

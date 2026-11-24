@@ -106,10 +106,18 @@
           <div class="rcpt" id="rcpt-bcc"><input autocomplete="off" spellcheck="false" aria-label="Bcc" /></div>
         </div>
         <label class="field-row subject-row"><span class="field-label">Subject</span><input name="subject" autocomplete="off" /></label>
-        <textarea name="body" aria-label="Message"></textarea>
+        <div id="compose-body" class="compose-body"></div>
         <div id="compose-files" class="attachments compose-files" hidden></div>
-        <div id="compose-signature" class="compose-signature" hidden>
-          <iframe sandbox="allow-same-origin" title="Signature"></iframe>
+        <div id="format-bar" class="format-bar" role="toolbar" aria-label="Formatting" hidden>
+          <button type="button" data-cmd="bold" data-tip="Bold (⌘B)"><i class="ph ph-text-b"></i></button>
+          <button type="button" data-cmd="italic" data-tip="Italic (⌘I)"><i class="ph ph-text-italic"></i></button>
+          <button type="button" data-cmd="underline" data-tip="Underline (⌘U)"><i class="ph ph-text-underline"></i></button>
+          <button type="button" data-cmd="link" data-tip="Link (⌘K)"><i class="ph ph-link"></i></button>
+          <span class="format-sep"></span>
+          <button type="button" data-cmd="bulletList" data-tip="Bulleted list"><i class="ph ph-list-bullets"></i></button>
+          <button type="button" data-cmd="orderedList" data-tip="Numbered list"><i class="ph ph-list-numbers"></i></button>
+          <button type="button" data-cmd="blockquote" data-tip="Quote"><i class="ph ph-quotes"></i></button>
+          <input type="text" autocomplete="off" spellcheck="false" placeholder="Paste or type a link, then Return" aria-label="Link" />
         </div>
         <footer>
           <span id="compose-error" class="error"></span>
