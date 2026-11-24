@@ -64,3 +64,4 @@ test("a quoted email keeps its own HTML when sent, and quotes its text", () => {
   const raw = emailHtml(`<div data-quote="<p>Hi &amp; bye</p>" data-text="Hi"></div>`, "");
   expect(raw).toBe('<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex"><p>Hi & bye</p></blockquote>');
 });
+

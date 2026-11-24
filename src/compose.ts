@@ -22,6 +22,15 @@ export const Signature = Node.create({
   renderHTML: () => ["div", { "data-signature": "" }],
 });
 
+/** An element's text with a line break after each block (paragraph, row, list item…), which textContent drops. */
+export function blockText(el: Element) {
+  const copy = el.cloneNode(true) as Element;
+  copy.querySelectorAll("br").forEach((br) => br.replaceWith("\n"));
+  copy.querySelectorAll("td, th").forEach((c) => c.append(" "));
+  copy.querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote, pre, table").forEach((b) => b.append("\n"));
+  return (copy.textContent ?? "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /**
  * The email being replied to or forwarded, kept whole (images, tables, its own styles) instead of reduced to the
  * editor's formatting. One block, like the signature: the editor shows a sandboxed preview and `emailHtml` puts the
@@ -34,7 +43,7 @@ export const Quote = Node.create({
   selectable: true,
   addAttributes: () => ({
     html: { default: "", parseHTML: (el) => el.getAttribute("data-quote") ?? el.innerHTML, renderHTML: (a) => ({ "data-quote": a.html }) },
-    text: { default: "", parseHTML: (el) => el.getAttribute("data-text") ?? el.textContent ?? "", renderHTML: (a) => ({ "data-text": a.text }) },
+    text: { default: "", parseHTML: (el) => el.getAttribute("data-text") ?? blockText(el), renderHTML: (a) => ({ "data-text": a.text }) },
   }),
   parseHTML: () => [{ tag: "div[data-quote]" }, { tag: "blockquote.gmail_quote", priority: 60 }],
   renderHTML: ({ HTMLAttributes }) => ["div", HTMLAttributes],

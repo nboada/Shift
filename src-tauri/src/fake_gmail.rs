@@ -122,14 +122,19 @@ mod tests {
             let fake = start(move |r, _| {
                 if r.path.contains("/attachments/B1") {
                     ok(serde_json::json!({ "data": html }))
+                } else if r.path.contains("/attachments/B2") {
+                    // That message was deleted after the thread was read.
+                    (404, r#"{"error":{"code":404}}"#.into())
                 } else {
                     ok(serde_json::json!({ "id": "t1", "messages": [{ "id": "m1", "payload": {
-                        "mimeType": "text/html", "body": { "attachmentId": "B1", "size": 90000 } } }] }))
+                        "mimeType": "text/html", "body": { "attachmentId": "B1", "size": 90000 } } },
+                        { "id": "m2", "payload": { "mimeType": "text/html", "body": { "attachmentId": "B2", "size": 90000 } } }] }))
                 }
             });
             let http = reqwest::Client::new();
             let t = Gmail { http: &http, token: "t" }.thread("t1", true).await.unwrap();
             assert_eq!(t.messages[0].body("text/html").as_deref(), Some("<p>long newsletter</p>"));
+            assert_eq!(t.messages[1].body("text/html"), None, "a body that's gone doesn't fail the whole thread");
             let paths: Vec<String> = fake.requests().into_iter().map(|r| r.path).collect();
             assert!(paths[0].starts_with("/gmail/v1/users/me/threads/t1?format=full"), "{paths:?}");
             assert_eq!(paths[1], "/gmail/v1/users/me/messages/m1/attachments/B1");
