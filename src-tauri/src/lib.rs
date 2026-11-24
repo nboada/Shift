@@ -70,6 +70,8 @@ struct State {
     demo: bool,
     /// App data directory (accounts/, settings.json).
     dir: PathBuf,
+    /// Account databases that couldn't be opened at launch (see `load_accounts`).
+    broken: Vec<String>,
 }
 
 impl State {
@@ -135,21 +137,33 @@ fn db_path(dir: &Path, email: &str) -> PathBuf {
     dir.join("accounts").join(format!("{safe}.sqlite3"))
 }
 
-/// Opens every account database in accounts/, oldest first. Files without an account email are skipped.
-fn load_accounts(dir: &Path) -> anyhow::Result<Vec<Arc<Account>>> {
+/// Opens every account database in accounts/, oldest first. Files without an account email are skipped. One that
+/// can't be opened is renamed `.broken` (kept, not deleted) and named in the second list, so the other accounts
+/// still open; signing in again downloads that account's mail afresh.
+fn load_accounts(dir: &Path) -> anyhow::Result<(Vec<Arc<Account>>, Vec<String>)> {
     let mut found = Vec::new();
+    let mut broken = Vec::new();
     for entry in std::fs::read_dir(dir.join("accounts"))? {
         let path = entry?.path();
         if path.extension().is_some_and(|e| e == "sqlite3") {
-            let conn = db::open(&path)?;
             let added = std::fs::metadata(&path).and_then(|m| m.created()).ok();
-            if let Some(email) = db::get_meta(&conn, "email")? {
-                found.push((added, Account::new(email, conn)));
+            let opened = db::open(&path).and_then(|conn| Ok((db::get_meta(&conn, "email")?, conn)));
+            match opened {
+                Ok((Some(email), conn)) => found.push((added, Account::new(email, conn))),
+                Ok((None, _)) => {}
+                Err(e) => {
+                    eprintln!("Couldn't open {}: {e:#}", path.display());
+                    for suffix in ["", "-wal", "-shm"] {
+                        let from = format!("{}{suffix}", path.display());
+                        let _ = std::fs::rename(&from, format!("{from}.broken"));
+                    }
+                    broken.push(path.file_stem().unwrap_or_default().to_string_lossy().into_owned());
+                }
             }
         }
     }
     found.sort_by_key(|(added, _)| *added);
-    Ok(found.into_iter().map(|(_, a)| a).collect())
+    Ok((found.into_iter().map(|(_, a)| a).collect(), broken))
 }
 
 /// The single-account version kept one mail.sqlite3 and one Keychain token; move both to the per-account layout.
@@ -1058,12 +1072,14 @@ fn spawn_sync(app: &AppHandle) {
 #[derive(Serialize)]
 struct Status {
     accounts: Vec<String>,
+    broken: Vec<String>,
 }
 
 #[tauri::command]
 fn status(s: tauri::State<State>) -> Status {
     Status {
         accounts: s.all().iter().map(|a| a.email.clone()).collect(),
+        broken: s.broken.clone(),
     }
 }
 
@@ -2237,23 +2253,27 @@ pub fn run() {
                 let _ = item.enable();
             }
             let demo = std::env::var_os("SHIFT_DEMO").is_some();
-            let accounts = if demo {
+            let (accounts, broken) = if demo {
                 // Two in-memory demo accounts, fresh every launch.
                 let mut you = db::open(Path::new(":memory:"))?;
                 demo::seed(&mut you)?;
                 let mut work = db::open(Path::new(":memory:"))?;
                 demo::seed_work(&mut work)?;
-                vec![
+                let accounts = vec![
                     Account::new(demo::EMAIL.into(), you),
                     Account::new(demo::WORK_EMAIL.into(), work),
-                ]
+                ];
+                (accounts, Vec::new())
             } else {
                 std::fs::create_dir_all(dir.join("accounts"))?;
-                migrate_single_account(&dir)?;
+                if let Err(e) = migrate_single_account(&dir) {
+                    eprintln!("Couldn't move the old single-account database: {e:#}");
+                }
                 load_accounts(&dir)?
             };
             app.manage(State {
                 demo,
+                broken,
                 dir: dir.clone(),
                 accounts: Mutex::new(accounts),
                 // No overall deadline: a big attachment or send on a slow link would be cut off mid-body. These only
@@ -2432,7 +2452,8 @@ mod tests {
         drop(old);
         migrate_single_account(&dir).unwrap();
         assert!(!dir.join("mail.sqlite3").exists());
-        let accounts = load_accounts(&dir).unwrap();
+        std::fs::write(dir.join("accounts").join("bad@x.com.sqlite3"), b"not a database").unwrap();
+        let (accounts, broken) = load_accounts(&dir).unwrap();
         assert_eq!(
             accounts
                 .iter()
@@ -2440,6 +2461,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["me@x.com"]
         );
+        assert_eq!(broken, ["bad@x.com"]);
+        assert!(dir.join("accounts").join("bad@x.com.sqlite3.broken").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

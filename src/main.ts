@@ -7,7 +7,8 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SEND, bindingsFrom, comboOf, formatCombo, keysFor } from "./keys";
 import {
-  ACCOUNT_COLOR_ORDER, accountSettings, applyVisualSettings, loadSettings, onSettingsChange, setAccountSetting, setSetting, settings, signatureFor, stepZoom,
+  ACCOUNT_COLOR_ORDER, accountSettings, applyVisualSettings, flushSettings, loadSettings, onSaveError, onSettingsChange, setAccountSetting, setSetting, settings,
+  signatureFor, stepZoom,
 } from "./settings";
 import { closeSettings, initSettings, openSettings, settingsOpen } from "./settings-ui";
 import { arrange } from "./sidebar";
@@ -204,7 +205,7 @@ async function renderMailboxes() {
 
 function listTitle() {
   if (search) return `Search: ${search}`;
-  return SYSTEM.find(([id]) => id === mailbox)?.[1] ?? document.querySelector(`[data-mailbox="${mailbox}"] span:not(.label-dot)`)?.textContent ?? "";
+  return SYSTEM.find(([id]) => id === mailbox)?.[1] ?? document.querySelector(`[data-mailbox="${CSS.escape(mailbox ?? "")}"] span:not(.label-dot)`)?.textContent ?? "";
 }
 
 const PERSONAL_DOMAINS = new Set([
@@ -762,9 +763,11 @@ function undoable(t: Thread, add: string[], remove: string[], trash = false) {
   return undoableAll([t], add, remove, trash);
 }
 function undoableAll(list: Thread[], add: string[], remove: string[], trash = false) {
-  undoStack.push(list.map((t) => ({ t, add, remove })));
+  // Only labels the thread has are removed, so ⌘Z after deleting from Sent doesn't put it in the Inbox.
+  const changes = list.map((t) => ({ t, add, remove: remove.filter((l) => t.labels.split(" ").includes(l)) }));
+  undoStack.push(changes);
   if (undoStack.length > 50) undoStack.shift();
-  return Promise.all(list.map((t) => modify(t, add, remove, trash)));
+  return Promise.all(changes.map((c) => modify(c.t, c.add, c.remove, trash)));
 }
 function undo() {
   const last = undoStack.pop();
@@ -1231,6 +1234,8 @@ type ComposeOptions = {
   /** Which account sends it. Replies use the thread's account. */
   account?: string;
   attachments?: OutFile[];
+  /** A scheduled email being edited: its send time, which closing the composer keeps. */
+  resumeAt?: number | null;
 };
 type ComposeState = Required<ComposeOptions>;
 
@@ -1359,7 +1364,17 @@ async function closeComposer(discard = false) {
     await draftQueue;
     if (state.draftId) invoke("delete_draft", { account: state.account, draftId: state.draftId }).catch(() => {});
   } else if (keep) {
-    if (await saveDraft(state, payload)) return toast("Draft saved");
+    if (await saveDraft(state, payload)) {
+      if (!state.resumeAt) return toast("Draft saved");
+      if (state.resumeAt <= Date.now()) return toast("Its send time passed while you edited, so it's in Drafts");
+      return invoke("schedule_send", {
+        account: state.account, draft: payload, draftId: state.draftId, sendAt: state.resumeAt,
+        ui: { fields, opts: { title: state.title, context: state.context } },
+      }).then(
+        () => toast(`Still scheduled for ${formatWhen(new Date(state.resumeAt!))}`),
+        (err) => toast(`Couldn't schedule it again, so it's in Drafts: ${err}`),
+      );
+    }
     // Not in Gmail: bring it back rather than lose it, unless another email was opened meanwhile.
     if (compose) return toast("Couldn't save a draft to Gmail; it wasn't kept");
     await openComposer(fields, { ...state, touched: true });
@@ -1377,7 +1392,7 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
   compose = {
     title: opts.title ?? "New Email", context: opts.context ?? null,
     inline, draftId: opts.draftId ?? null, touched: !!opts.touched, account: opts.account ?? defaultAccount(),
-    attachments: opts.attachments ?? [],
+    attachments: opts.attachments ?? [], resumeAt: opts.resumeAt ?? null,
   };
   renderComposeFiles();
   renderFromRow();
@@ -1653,7 +1668,7 @@ async function scheduleSend(at: Date) {
     closeLater();
     toastAction(`Scheduled for ${formatWhen(at)}`, "Undo", () => {
       invoke("reschedule", { account: state.account, id, sendAt: null })
-        .then(() => openComposer(fields, { ...state, touched: true }));
+        .then(() => openComposer(fields, { ...state, touched: true, resumeAt: null }));
     }, 6000);
   } catch (err) {
     submitting.delete(state);
@@ -1754,15 +1769,16 @@ $("#ai-write").addEventListener("click", async () => {
   (await Menu.new({ items })).popup();
 });
 
-/** Opening a scheduled email cancels its schedule; send or schedule it again, or close to keep it as a draft. */
+/** Opening a scheduled email pauses it while it's edited; closing the composer schedules it again for the same time. */
 async function editScheduled(id: string) {
   const r = scheduledRows.get(id);
   if (!r) return;
   await invoke("reschedule", { account: r.account, id: r.id, sendAt: null });
   await openComposer(r.ui.fields, {
     ...r.ui.opts, account: r.account, draftId: r.draft_id, attachments: r.draft.attachments ?? [], touched: true, inline: false,
+    resumeAt: r.send_at,
   });
-  toast("Not scheduled while you edit");
+  toast("Paused while you edit. Closing keeps it scheduled.");
 }
 
 function scheduledAction(action: string, id: string) {
@@ -2160,9 +2176,13 @@ $("#sync-btn").addEventListener("click", () => invoke("sync_now"));
 $("#view-btn").addEventListener("click", () => setSetting("inbox.view", settings.inbox.view === "smart" ? "list" : "smart"));
 
 async function signOut(account: string) {
+  const waiting = (await invoke<unknown[]>("scheduled", { accounts: [account] })).length;
+  const unsent = waiting
+    ? ` ${waiting} scheduled ${waiting === 1 ? "email" : "emails"} won't be sent; ${waiting === 1 ? "it stays" : "they stay"} in Gmail's Drafts.`
+    : "";
   const yes = await ask({
     title: `Sign out of ${account}?`,
-    message: "Mail stored on this Mac for this account will be removed. Your Gmail isn't affected.",
+    message: `Mail stored on this Mac for this account will be removed. Your Gmail isn't affected.${unsent}`,
     confirm: "Sign out",
     danger: true,
   });
@@ -2610,17 +2630,35 @@ listen<{ account?: string; thread?: string }>("open-from-notification", async ({
 listen<string>("app-toast", (e) => toast(e.payload));
 /** Saves an open draft before Shift quits or restarts, so the last few seconds of typing aren't lost. */
 const saveBeforeQuit = async () => {
+  await flushSettings();
   if (compose && hasContent()) await saveDraft();
 };
+onSaveError((err) => toast(`Couldn't save your settings: ${err}`));
 // ⌘Q: the backend waits (up to 5 s) for this before quitting.
 listen("before-quit", () => void saveBeforeQuit().finally(() => invoke("quit_now")));
 listen<string>("update-ready", (e) =>
   toastAction(`Shift ${e.payload} is ready`, "Restart", () => void saveBeforeQuit().finally(() => invoke("restart_app")), 10 * 60_000));
-listen<string>("sync-error", (e) => toast(`Sync failed: ${e.payload}`));
+// Shown once per distinct error every 10 minutes (sync retries every tick), and never over an Undo or Restart toast.
+const syncErrorShown = new Map<string, number>();
+listen<string>("sync-error", (e) => {
+  const now = Date.now();
+  if (now - (syncErrorShown.get(e.payload) ?? 0) < 10 * 60_000) return;
+  const t = $("#toast");
+  if (t.matches(":popover-open") && t.querySelector("button")) return;
+  syncErrorShown.set(e.payload, now);
+  toast(`Sync failed: ${e.payload}`);
+});
 
 loadSettings()
-  .then(() => invoke<{ accounts: string[] }>("status"))
+  .then(() => invoke<{ accounts: string[]; broken: string[] }>("status"))
   .then((s) => {
     if (s.accounts.length) start(s.accounts);
     else $("#signin").hidden = false;
+    if (s.broken.length) {
+      void ask({
+        title: "Some mail couldn't be opened",
+        message: `The mail Shift stored for ${s.broken.join(", ")} is damaged, so that account was left out. Add it again in Settings → Accounts to download its mail afresh. Your Gmail isn't affected.`,
+        confirm: "OK",
+      });
+    }
   });
