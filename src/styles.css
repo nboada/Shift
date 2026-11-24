@@ -427,7 +427,8 @@ button.primary:disabled { opacity: 0.6; }
 .menu button:disabled { opacity: 0.45; }
 .menu button span:not(.account-dot, .label-dot) { flex: 1; }
 .menu kbd { font: inherit; font-size: 11px; color: var(--muted); }
-/* Label colours line up with the 16px icons of the other rows. */
+/* Label colours and account dots line up with the 16px icons of the other rows. */
+.menu button .account-dot { margin: 0 4px; }
 .menu .label-dot { width: 12px; height: 12px; margin: 0 2px; border-radius: 4px; }
 .menu .menu-check { visibility: hidden; color: var(--accent); }
 .menu [aria-checked="true"] .menu-check { visibility: visible; }
