@@ -1627,19 +1627,6 @@ function openAccountMenu() {
   menuAnchor = btn;
 }
 
-/** Hides the mailboxes column; remembered per device. */
-function setSidebar(hidden: boolean) {
-  app.dataset.sidebar = hidden ? "hidden" : "";
-  closeMenu();
-  const btn = $("#sidebar-toggle");
-  btn.dataset.tip = hidden ? "Show sidebar" : "Hide sidebar";
-  btn.setAttribute("aria-label", btn.dataset.tip);
-  btn.setAttribute("aria-expanded", String(!hidden));
-  try { localStorage.setItem("sidebar-hidden", hidden ? "1" : ""); } catch {}
-}
-$("#sidebar-toggle").addEventListener("click", () => setSidebar(app.dataset.sidebar !== "hidden"));
-try { setSidebar(localStorage.getItem("sidebar-hidden") === "1"); } catch {}
-
 $("#account-btn").addEventListener("click", () => (menuAnchor === $("#account-btn") && !menu.hidden ? closeMenu() : openAccountMenu()));
 
 onSettingsChange((path) => {
