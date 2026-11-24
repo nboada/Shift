@@ -1,0 +1,13 @@
+// Site for shift.talkk.com.au: an Astro site built to dist/, plus a Worker for early access sign-ups and the download.
+// Deploy: cd site && bunx wrangler deploy (runs the Astro build first; the roadmap build needs GitHub access via gh or GITHUB_TOKEN)
+{
+  "name": "shift-site",
+  "account_id": "d2b1aef41d96a70b1eea2166fe0e0bdc",
+  "compatibility_date": "2026-11-01",
+  "main": "src/worker.js",
+  "build": { "command": "bun run build" },
+  "assets": { "directory": "./dist", "binding": "ASSETS" },
+  "routes": [{ "pattern": "shift.talkk.com.au", "custom_domain": true }],
+  "kv_namespaces": [{ "binding": "EARLY_ACCESS", "id": "34cca6bcbe1b4672bc1afeed625cb9d3" }],
+  "r2_buckets": [{ "binding": "DOWNLOADS", "bucket_name": "shift-downloads" }]
+}

@@ -1,0 +1,31 @@
+---
+import Base from "../layouts/Base.astro";
+import { getCollection, render } from "astro:content";
+
+const releases = (await getCollection("changelog")).sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+const entries = await Promise.all(releases.map(async (r) => ({ ...r, Content: (await render(r)).Content })));
+const day = new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "long", year: "numeric" });
+---
+<Base title="Changelog · Shift" description="Every release of Shift, the fast Gmail app for Mac, and what changed in it." path="/changelog">
+  <main id="main" class="wrap page">
+    <header class="page-head">
+      <h1>Changelog</h1>
+      <p>What changed in each version of Shift. Shift updates itself, so you'll get these as they're released.</p>
+    </header>
+
+    <ol class="releases">
+      {entries.map((r) => (
+        <li class="release" id={`v${r.data.version}`}>
+          <div class="release-meta">
+            <span class="version">{r.data.version}</span>
+            <time datetime={r.data.date.toISOString().slice(0, 10)}>{day.format(r.data.date)}</time>
+          </div>
+          <div class="release-body">
+            <h2>{r.data.title}</h2>
+            <r.Content />
+          </div>
+        </li>
+      ))}
+    </ol>
+  </main>
+</Base>
