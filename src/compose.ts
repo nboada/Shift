@@ -24,7 +24,8 @@ export const Signature = Node.create({
 
 export const extensions = [
   StarterKit.configure({ heading: false, codeBlock: false, code: false, link: { openOnClick: false, autolink: true } }),
-  Placeholder.configure({ placeholder: "Write your message…" }),
+  // Not only the line with the cursor: the stylesheet shows it on the first line while that line is empty, signature below or not.
+  Placeholder.configure({ placeholder: "Write your message…", showOnlyCurrent: false }),
   Signature,
 ];
 

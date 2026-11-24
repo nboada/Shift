@@ -29,20 +29,21 @@ export const ACTIONS: [string, string][] = [
   ["zoomIn", "Zoom in"],
   ["zoomOut", "Zoom out"],
   ["zoomReset", "Actual size"],
+  ["undo", "Undo archive, delete or move"],
 ];
 
 /** Spark-style single keys plus Apple Mail's ⌘ shortcuts, so habits from either app work. */
 export const DEFAULT_KEYS: Record<string, string[]> = {
   compose: ["c", "cmd+n"],
   search: ["/", "cmd+f"],
-  sync: ["cmd+shift+n"],
+  sync: ["cmd+r"],
   next: ["j", "ArrowDown", "ArrowRight"],
   prev: ["k", "ArrowUp", "ArrowLeft"],
   archive: ["e", "ctrl+cmd+a"],
   trash: ["Backspace", "Delete", "#"],
   unread: ["u", "cmd+shift+u"],
   star: ["d", "cmd+shift+l"],
-  reply: ["r", "cmd+r"],
+  reply: ["r"],
   replyAll: ["shift+r", "a", "cmd+shift+r"],
   forward: ["f", "cmd+shift+f"],
   label: ["l"],
@@ -53,6 +54,7 @@ export const DEFAULT_KEYS: Record<string, string[]> = {
   zoomIn: ["cmd+=", "cmd++"],
   zoomOut: ["cmd+-"],
   zoomReset: ["cmd+0"],
+  undo: ["cmd+z"],
 };
 
 /** Send from the composer: ⌘↩ (Spark, most apps) or ⇧⌘D (Apple Mail). */

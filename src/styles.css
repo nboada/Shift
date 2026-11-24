@@ -145,7 +145,12 @@ button.primary {
   background: var(--accent);
   color: var(--accent-text);
   font-weight: 600;
+  transition: background-color 0.15s, transform 0.1s;
 }
+button.primary i { transition: transform 0.2s ease; }
+button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent), #fff 10%); }
+button.primary:hover:not(:disabled) .ph-paper-plane-right { transform: translateX(2px); }
+button.primary:active:not(:disabled) { transform: scale(0.98); background: color-mix(in srgb, var(--accent), #000 8%); }
 button.primary:disabled { opacity: 0.6; }
 
 .error { color: var(--danger); min-height: 1em; margin: 0; }
@@ -176,6 +181,8 @@ button.primary:disabled { opacity: 0.6; }
 .sidebar-top { display: none; }
 
 .sidebar {
+  -webkit-user-select: none;
+  user-select: none;
   display: flex;
   flex-direction: column;
   background: var(--sidebar);
@@ -185,6 +192,11 @@ button.primary:disabled { opacity: 0.6; }
 }
 .sidebar-top { height: 44px; flex: none; }
 
+.compose-row { display: flex; gap: 6px; margin: 0 12px 10px; }
+.compose-row .compose { flex: 1; margin: 0; }
+.compose-row .icon { width: 36px; height: auto; }
+#sync-btn.spinning i { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .compose {
   display: flex;
   align-items: center;
@@ -193,11 +205,16 @@ button.primary:disabled { opacity: 0.6; }
   margin: 0 12px 10px;
   padding: 8px 10px;
   font-weight: 600;
-  color: var(--sidebar-strong);
-  background: var(--sidebar-fill);
+  color: #fff;
+  background: var(--accent);
   border-radius: 9px;
+  transition: background-color 0.15s, transform 0.1s;
 }
-.compose:hover { background: var(--sidebar-selected); }
+.compose i { transition: transform 0.2s ease; }
+.compose:hover { background: color-mix(in srgb, var(--accent), #fff 10%); }
+.compose:hover i { transform: rotate(-12deg) translateY(-1px); }
+.compose:active { transform: scale(0.98); background: color-mix(in srgb, var(--accent), #000 8%); }
+.compose:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .mailboxes { flex: 1; overflow-y: auto; padding: 0 8px; }
 .mailboxes h3 {
@@ -216,9 +233,9 @@ button.primary:disabled { opacity: 0.6; }
   font-size: 13.5px;
   text-decoration: none;
 }
-.mailboxes a + a { margin-top: 1px; }
+.mailboxes a + a { margin-top: 3px; }
 .mailboxes a i { font-size: 17px; }
-.mailboxes a span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mailboxes a span:not(.label-dot) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mailboxes a small { color: var(--sidebar-badge); font-weight: 600; }
 .mailboxes a:hover { background: var(--sidebar-hover); }
 .mailboxes a.active { background: var(--sidebar-selected); color: var(--sidebar-strong); font-weight: 600; box-shadow: var(--pane-shadow); }
@@ -337,8 +354,9 @@ button.primary:disabled { opacity: 0.6; }
   min-width: 0;
   min-height: 0;
   background: var(--pane);
-  border-right: 1px solid var(--line);
   border-radius: 14px 0 0 14px;
+  /* Above the reader, so its edge shadow hides the reader's and the divider is a single line. */
+  z-index: 1;
   box-shadow: var(--pane-shadow);
 }
 
@@ -395,6 +413,10 @@ button.primary:disabled { opacity: 0.6; }
   border-radius: 12px;
 }
 .threads li[data-id] { margin-top: 3px; }
+.threads li[data-id] { position: relative; }
+/* Quick delete on hover; inherits the row's hover/selected background so it covers the snippet beneath. */
+.threads .row-trash { position: absolute; right: 8px; bottom: 8px; display: none; background: inherit; }
+.threads li[data-id]:hover .row-trash { display: inline-grid; }
 .threads li[data-id]:hover { background: var(--hover); }
 .threads li.selected { box-shadow: var(--pane-shadow); }
 .threads li.selected { background: var(--selected); }
@@ -408,7 +430,6 @@ button.primary:disabled { opacity: 0.6; }
 .avatar-ring[class*="acct-"] { box-shadow: inset 0 0 0 2px var(--acct); }
 .threads .avatar { width: 27px; height: 27px; font-size: 10px; }
 .threads .avatar-ring[class*="acct-"] .avatar { width: 24px; height: 24px; font-size: 9px; }
-.threads .avatar img { padding: 2px; }
 .threads .from { grid-column: 3; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .threads .from em {
   display: inline-block;
@@ -468,6 +489,7 @@ body.resizing iframe { pointer-events: none; }
 .reader-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--reader); border-radius: 0 14px 14px 0; box-shadow: var(--pane-shadow); overflow: hidden; }
 .app:not([data-open]) .reader-pane .toolbar { border-bottom-color: transparent; }
 .reader { flex: 1; overflow-y: auto; padding: 20px 28px 40px; user-select: text; }
+.reader > .message { scroll-margin-top: 12px; }
 .reader .placeholder { height: 100%; display: grid; place-items: center; color: var(--muted); font-size: 15px; }
 .reader .empty-reader { place-content: center; gap: 14px; color: var(--muted); }
 /* Shift's caret logo, faded like Spark's empty state. */
@@ -484,6 +506,27 @@ body.resizing iframe { pointer-events: none; }
   overflow: hidden;
 }
 .message header { display: flex; gap: 10px; padding: 12px 14px; align-items: flex-start; }
+.message > header[role="button"] { cursor: pointer; transition: background-color 0.15s; }
+.message > header[role="button"]:hover { background: var(--hover); }
+.message:has(> header[role="button"]) { transition: border-color 0.15s; }
+.message.collapsed:hover { border-color: color-mix(in srgb, var(--card-line), var(--text) 18%); }
+/* Shown on hover: down to open a collapsed email, flipped up to close an open one. */
+.toggle-caret { align-self: center; color: var(--muted); font-size: 14px; opacity: 0; transition: opacity 0.15s, transform 0.32s cubic-bezier(0.32, 0.72, 0, 1); }
+.message > header:hover .toggle-caret, .message > header:focus-visible .toggle-caret { opacity: 1; }
+.message:not(.collapsed):not(.closing) .toggle-caret { transform: rotate(180deg); }
+.message > header:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: inherit; }
+.message .meta .preview { display: none; }
+.message.collapsed > :not(header) { display: none; }
+.message.collapsed .meta .to { display: none; }
+.message.collapsed .meta .preview { display: block; }
+/* The card already clips its content (overflow: hidden), so the height animation needs nothing else. */
+.message.closing > :not(header) { opacity: 0; transition: opacity 0.2s ease; }
+.images-bar { display: flex; align-items: center; gap: 8px; margin: 0 14px 6px; padding: 7px 10px; border-radius: 8px; background: var(--hover); color: var(--muted); font-size: 12.5px; }
+.images-bar i { font-size: 16px; }
+.images-bar span { flex: 1; }
+.images-bar button { padding: 3px 9px; border-radius: 6px; color: var(--accent); font-weight: 600; }
+.images-bar button:hover { background: color-mix(in srgb, var(--accent), transparent 88%); }
+.message-actions { display: flex; justify-content: flex-end; gap: 2px; padding: 0 10px 8px; }
 .avatar {
   position: relative;
   flex: none;
@@ -502,8 +545,7 @@ body.resizing iframe { pointer-events: none; }
   inset: 0;
   width: 100%;
   height: 100%;
-  padding: 3px;
-  object-fit: contain;
+  object-fit: cover;
   background: #fff;
 }
 /* Logo avatars: white base so the initials colour can't fringe the edge, ring drawn above the image. */
@@ -590,7 +632,7 @@ body.resizing iframe { pointer-events: none; }
   border-top: 1px solid var(--line);
   flex: none;
 }
-.field-label { width: 56px; flex: none; color: var(--muted); }
+.field-label { flex: none; color: var(--muted); }
 .field-row > input, .rcpt input {
   flex: 1;
   min-width: 0;
@@ -733,6 +775,8 @@ body.resizing iframe { pointer-events: none; }
 .ask::backdrop { background: rgb(0 0 0 / 0.2); }
 .ask h3 { margin: 0 0 6px; font-size: 15px; }
 .ask p { margin: 0 0 18px; color: var(--muted); line-height: 1.45; }
+.ask input { width: 100%; margin: -8px 0 18px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; }
+.ask input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .ask footer { display: flex; justify-content: flex-end; gap: 8px; }
 .ask .primary.danger { background: var(--danger); }
 .ask button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -780,6 +824,22 @@ body.resizing iframe { pointer-events: none; }
 :root[data-avatars="false"] .threads .subject, :root[data-avatars="false"] .threads .snippet { grid-column: 2 / 4; }
 :root[data-snippet="0"] .threads .snippet { display: none; }
 :root[data-snippet="1"] .threads .snippet { -webkit-line-clamp: 1; }
+/* Wide list (like Spark): list and reader share one full-width column, one email per line. */
+:root[data-layout="wide"] .app { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); }
+:root[data-layout="wide"] .list-pane, :root[data-layout="wide"] .reader-pane { grid-area: 2 / 2; border-radius: 14px; }
+:root[data-layout="wide"] .app[data-view="reader"] .list-pane,
+:root[data-layout="wide"] .app:not([data-view="reader"]) .reader-pane { display: none; }
+:root[data-layout="wide"] .resizer { display: none; }
+:root[data-layout="wide"] .reader-pane .back { display: inline-grid; }
+/* Spark proportions: ~40px rows, wide sender column, 14px subject and snippet, small light date. */
+:root[data-layout="wide"] .threads li[data-id] { display: flex; align-items: center; gap: 12px; padding: 5px 14px 5px 6px; margin-top: 1px; border-radius: 10px; }
+:root[data-layout="wide"] .threads .avatar-ring { flex: none; width: 30px; height: 30px; }
+:root[data-layout="wide"] .threads .from { flex: 0 0 300px; }
+:root[data-layout="wide"] .threads .subject { order: 1; flex: 0 1 auto; max-width: 50%; font-size: 14px; font-weight: 500; }
+:root[data-layout="wide"] .threads li.unread .subject { font-weight: 650; }
+:root[data-layout="wide"] .threads .snippet { order: 2; flex: 1; min-width: 0; display: block; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
+:root[data-layout="wide"] .threads .date { order: 3; flex: none; margin-left: 12px; font-size: 11.5px; font-weight: 500; }
+:root[data-layout="wide"] .threads .row-trash { top: 50%; bottom: auto; transform: translateY(-50%); }
 :root[data-reduce-motion="true"] *, :root[data-reduce-motion="true"] *::before { transition: none !important; animation: none !important; }
 
 /* swipes: the row slides and tints with the colour of the action it will run */
@@ -921,6 +981,10 @@ body.resizing iframe { pointer-events: none; }
 button.secondary { padding: 6px 12px; border: 1px solid var(--card-line); background: var(--bg); font-weight: 500; }
 button.secondary:hover:not(:disabled) { background: var(--hover); }
 button.secondary:disabled { opacity: 0.5; }
+.empty-btn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; color: var(--muted); font-size: 12.5px; font-weight: 500; transition: background-color 0.12s, color 0.12s; }
+.empty-btn i { font-size: 15px; }
+.empty-btn:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger), transparent 90%); }
+.empty-btn:disabled { opacity: 0.45; }
 
 .segmented {
   position: relative;

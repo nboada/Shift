@@ -7,7 +7,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
+// Full access: permanently deleting mail (Empty Trash/Spam) is refused under gmail.modify.
+const SCOPE: &str = "https://mail.google.com/";
 const KEYCHAIN_SERVICE: &str = "com.nicboada.mail";
 /// Single-account builds stored one token under this name; it moves to the per-account name on first launch.
 const LEGACY_KEYCHAIN_USER: &str = "google-refresh-token";

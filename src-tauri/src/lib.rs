@@ -21,6 +21,8 @@ struct Account {
     db: Mutex<Connection>,
     token: tokio::sync::Mutex<Option<auth::Token>>,
     syncing: tokio::sync::Mutex<()>,
+    /// Held while due scheduled emails go out, so overlapping syncs can't send the same one twice.
+    sending: tokio::sync::Mutex<()>,
 }
 
 impl Account {
@@ -30,6 +32,7 @@ impl Account {
             db: Mutex::new(conn),
             token: Default::default(),
             syncing: Default::default(),
+            sending: Default::default(),
         })
     }
 
@@ -174,25 +177,40 @@ async fn fetch_threads(
             (id, full)
         })
         .collect();
-    fetch(app, a, g, jobs).await
+    fetch(app, a, g, jobs)
+        .await
+        .into_iter()
+        .next()
+        .map_or(Ok(()), |(_, e)| Err(e))
 }
 
 /// Fetches bodies for the newest inbox threads so opening them doesn't wait on the network.
 async fn prefetch_bodies(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
-    let ids = db::missing_bodies(&a.db(), "INBOX", 25)?;
-    fetch(app, a, g, ids.into_iter().map(|id| (id, true)).collect()).await
+    let ids = db::missing_bodies(&a.db(), "INBOX", PREFETCH_PER_TICK)?;
+    let jobs = ids.into_iter().map(|id| (id, true)).collect();
+    fetch(app, a, g, jobs)
+        .await
+        .into_iter()
+        .next()
+        .map_or(Ok(()), |(_, e)| Err(e))
 }
 
+// Gmail allows each account about 6,000 quota units a minute; a thread costs 40 (metadata) to 120 (full).
+// At the default 30 s tick these stay well under it, leaving room for history, search and what the user does.
+const BACKFILL_PER_TICK: usize = 50;
+const PREFETCH_PER_TICK: usize = 10;
+
+/// Fetches threads 4 at a time; returns the ones that failed, with why.
 async fn fetch(
     app: &AppHandle,
     a: &Account,
     g: &Gmail<'_>,
     jobs: Vec<(String, bool)>,
-) -> anyhow::Result<()> {
+) -> Vec<(String, anyhow::Error)> {
     let mut stream = futures::stream::iter(jobs)
         .map(|(id, full)| async move { (g.thread(&id, full).await, id, full) })
         .buffer_unordered(4);
-    let (mut done, mut failed) = (0, None);
+    let (mut done, mut failed) = (0, Vec::new());
     while let Some((res, id, full)) = stream.next().await {
         let r = match res {
             Ok(t) => db::upsert_thread(&mut a.db(), &t, full),
@@ -201,29 +219,125 @@ async fn fetch(
         };
         if let Err(e) = r {
             eprintln!("{} thread {id}: {e:#}", a.email);
-            failed.get_or_insert(e);
+            failed.push((id, e));
         }
         done += 1;
         if done % 25 == 0 {
             let _ = app.emit(CHANGED, ());
         }
     }
-    failed.map_or(Ok(()), Err)
+    failed
 }
 
-async fn full_sync(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
+/// Starts a (re)sync from scratch without fetching anything yet: lists the mailbox, queues the threads in the
+/// `backfill` meta row and saves the history cursor, which `backfill` and the next ticks then work through.
+/// Saving the cursor up front is safe: whatever changes after it comes back through history, and queued threads
+/// are fetched in their current state. A failed thread just stays queued instead of restarting everything.
+async fn full_sync(a: &Account, g: &Gmail<'_>) -> anyhow::Result<()> {
     let (_, history_id) = g.profile().await?;
-    // Inbox first so the default view fills before the rest of the mailbox.
     let mut ids = g.thread_ids("", Some("INBOX"), 100).await?;
     for id in g.thread_ids("", None, 500).await? {
         if !ids.contains(&id) {
             ids.push(id);
         }
     }
-    fetch_threads(app, a, g, ids).await?;
-    // Saved last: history from before the fetch replays anything that changed during it.
-    db::set_meta(&a.db(), "history_id", &history_id)?;
+    // Inbox first so the default view fills first; within that, threads not cached yet before refreshing cached ones.
+    let c = a.db();
+    let (mut queue, cached): (Vec<String>, Vec<String>) = ids
+        .into_iter()
+        .partition(|id| !db::has_thread(&c, id).unwrap_or(false));
+    queue.extend(cached);
+    db::set_meta(&c, "backfill", &serde_json::to_string(&queue)?)?;
+    db::set_meta(&c, "history_id", &history_id)?;
+    // Mail already there is not new: only what arrives from now on is announced.
+    db::set_meta(&c, "notified_at", &now_ms().to_string())?;
     Ok(())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+/// Shows a notification for Inbox mail that arrived since the last one (the `notified_at` watermark).
+fn notify_new_mail(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
+    use tauri_plugin_notification::NotificationExt;
+    let s = app.state::<State>();
+    let cfg = settings::notifications(&s.dir);
+    let mail = {
+        let c = a.db();
+        // Accounts synced before notifications existed start their watermark now rather than announcing their backlog.
+        let Some(since) = db::get_meta(&c, "notified_at")?.and_then(|v| v.parse().ok()) else {
+            db::set_meta(&c, "notified_at", &now_ms().to_string())?;
+            return Ok(());
+        };
+        let mail = db::new_mail(&c, since)?;
+        // Advanced past filtered-out mail too, so turning "only people" off later doesn't replay it.
+        if let Some(latest) = mail.iter().map(|m| m.date).max() {
+            db::set_meta(&c, "notified_at", &latest.to_string())?;
+        }
+        mail
+    };
+    let mail: Vec<_> = mail
+        .into_iter()
+        .filter(|m| m.primary || !cfg.only_people)
+        .collect();
+    if !cfg.enabled || mail.is_empty() {
+        return Ok(());
+    }
+    let name = |sender: &str| {
+        let n = sender
+            .split('<')
+            .next()
+            .unwrap_or(sender)
+            .trim()
+            .trim_matches('"');
+        if n.is_empty() {
+            sender.to_string()
+        } else {
+            n.to_string()
+        }
+    };
+    let (title, body) = match mail.as_slice() {
+        [one] => (name(&one.sender), one.subject.clone()),
+        many => {
+            let mut senders: Vec<String> = many.iter().map(|m| name(&m.sender)).collect();
+            senders.dedup();
+            (format!("{} new emails", many.len()), senders.join(", "))
+        }
+    };
+    let mut n = app.notification().builder().title(title).body(body);
+    if cfg.sound {
+        n = n.sound("default");
+    }
+    n.show()?;
+    Ok(())
+}
+
+/// Fetches the next batch of queued threads. Failures go to the back of the queue so one bad thread can't block it.
+/// Returns how many it took off the queue's front.
+async fn backfill(app: &AppHandle, a: &Account, g: &Gmail<'_>) -> anyhow::Result<usize> {
+    let queue: Vec<String> = match db::get_meta(&a.db(), "backfill")? {
+        Some(json) => serde_json::from_str(&json)?,
+        None => return Ok(0),
+    };
+    let take = queue.len().min(BACKFILL_PER_TICK);
+    let (batch, rest) = queue.split_at(take);
+    let jobs = batch
+        .iter()
+        .map(|id| (id.clone(), db::is_full(&a.db(), id)))
+        .collect();
+    let failed = fetch(app, a, g, jobs).await;
+    let mut next: Vec<String> = rest.to_vec();
+    next.extend(failed.into_iter().map(|(id, _)| id));
+    let c = a.db();
+    if next.is_empty() {
+        db::delete_meta(&c, "backfill")?;
+    } else {
+        db::set_meta(&c, "backfill", &serde_json::to_string(&next)?)?;
+    }
+    Ok(take)
 }
 
 async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
@@ -239,23 +353,47 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
     let labels = g.labels().await?;
     db::replace_labels(&mut a.db(), &labels)?;
     let history = db::get_meta(&a.db(), "history_id")?;
+    let mut changed = false;
     match history {
-        None => full_sync(app, a, &g).await?,
+        None => full_sync(a, &g).await?,
         Some(h) => match g.history(&h).await {
             Ok((ids, new_id)) => {
+                changed = !ids.is_empty();
                 fetch_threads(app, a, &g, ids).await?;
                 db::set_meta(&a.db(), "history_id", &new_id)?;
+                if changed {
+                    // A failed notification mustn't fail the sync.
+                    if let Err(e) = notify_new_mail(app, a) {
+                        eprintln!("{} notification: {e:#}", a.email);
+                    }
+                }
             }
-            Err(e) if gmail::is_not_found(&e) => full_sync(app, a, &g).await?,
+            // Expired cursor (Gmail keeps about a week): start over, keeping the cache until threads are refetched.
+            Err(e) if gmail::is_not_found(&e) => full_sync(a, &g).await?,
             Err(e) => return Err(e),
         },
     }
-    let _ = app.emit(CHANGED, ());
-    prefetch_bodies(app, a, &g).await
+    let filled = backfill(app, a, &g).await?;
+    // Every tick used to repaint the whole UI; now only when something came in.
+    if changed || filled > 0 {
+        let _ = app.emit(CHANGED, ());
+    }
+    // Bodies wait until the mailbox is listed, so the two don't compete for quota.
+    if filled == 0 {
+        prefetch_bodies(app, a, &g).await?;
+    }
+    Ok(())
+}
+
+/// Brackets a sync with `syncing` events so the UI can show progress.
+async fn sync(app: &AppHandle) {
+    let _ = app.emit("syncing", true);
+    sync_all(app).await;
+    let _ = app.emit("syncing", false);
 }
 
 /// Syncs every account; one failing account (e.g. signed out elsewhere) doesn't stop the others.
-async fn sync(app: &AppHandle) {
+async fn sync_all(app: &AppHandle) {
     let s = app.state::<State>();
     for a in s.all() {
         if let Err(e) = send_due(app, &a).await {
@@ -268,11 +406,14 @@ async fn sync(app: &AppHandle) {
     if s.demo {
         return;
     }
-    for a in s.all() {
-        if let Err(e) = sync_account(app, &a).await {
+    // In parallel: Gmail's quota is per account, and one slow account mustn't hold the others back.
+    let accounts = s.all();
+    futures::future::join_all(accounts.iter().map(|a| async move {
+        if let Err(e) = sync_account(app, a).await {
             let _ = app.emit("sync-error", format!("{}: {e:#}", a.email));
         }
-    }
+    }))
+    .await;
 }
 
 fn spawn_sync(app: &AppHandle) {
@@ -349,8 +490,8 @@ fn sync_now(app: AppHandle) {
     spawn_sync(&app);
 }
 
-/// Labels for one account. Several accounts show only Gmail's system mailboxes, with counts added up,
-/// because label ids are per account.
+/// Labels for one account. Several accounts add up counts per system mailbox, and merge user labels by
+/// name under the id `name:<name>` (label ids are per account), which `threads` resolves in each account.
 #[tauri::command]
 fn labels(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db::LabelRow>> {
     let accounts = s.scope(accounts.as_deref())?;
@@ -359,12 +500,15 @@ fn labels(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db::La
     }
     let mut merged: Vec<db::LabelRow> = Vec::new();
     for a in accounts {
-        for l in db::labels(&a.db())?
-            .into_iter()
-            .filter(|l| l.kind == "system")
-        {
+        for mut l in db::labels(&a.db())? {
+            if l.kind == "user" {
+                l.id = format!("name:{}", l.name);
+            }
             match merged.iter_mut().find(|m| m.id == l.id) {
-                Some(m) => m.unread += l.unread,
+                Some(m) => {
+                    m.unread += l.unread;
+                    m.color = m.color.take().or(l.color);
+                }
                 None => merged.push(l),
             }
         }
@@ -395,9 +539,227 @@ fn threads(
     label: Option<String>,
     accounts: Option<Vec<String>>,
 ) -> R<Vec<db::ThreadRow>> {
-    Ok(merged_threads(&s, accounts.as_deref(), |c| {
-        db::threads(c, label.as_deref())
+    Ok(merged_threads(&s, accounts.as_deref(), |c| match &label {
+        None => db::threads(c, None),
+        Some(l) => match resolve_label(c, l)? {
+            Some(id) => db::threads(c, Some(&id)),
+            None => Ok(Vec::new()),
+        },
     })?)
+}
+
+/// This account's id for `label`: a merged `name:<name>` label is its label of that name, `None` when it has none.
+fn resolve_label(c: &Connection, label: &str) -> anyhow::Result<Option<String>> {
+    match label.strip_prefix("name:") {
+        Some(name) => db::label_id(c, name),
+        None => Ok(Some(label.into())),
+    }
+}
+
+/// Marks every thread in a mailbox read (`label` None: All Mail). Local first, then one Gmail batch call per
+/// account; if Gmail fails, the changed threads are re-fetched to undo the local change.
+#[tauri::command]
+async fn mark_all_read(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    label: Option<String>,
+    accounts: Option<Vec<String>>,
+) -> R<()> {
+    let mut changed = Vec::new();
+    for a in s.scope(accounts.as_deref())? {
+        let id = match &label {
+            None => None,
+            Some(l) => match resolve_label(&a.db(), l)? {
+                Some(id) => Some(id),
+                None => continue,
+            },
+        };
+        let ids = db::mark_read(&mut a.db(), id.as_deref())?;
+        changed.push((a, id, ids));
+    }
+    let _ = app.emit(CHANGED, ());
+    if s.demo {
+        return Ok(());
+    }
+    for (a, id, ids) in changed {
+        if ids.is_empty() {
+            continue;
+        }
+        let token = a.access_token(&s.http).await?;
+        let g = Gmail {
+            http: &s.http,
+            token: &token,
+        };
+        // Archive isn't a Gmail label; it's what the local `threads("ARCHIVE")` lists.
+        let (q, labels) = match id.as_deref() {
+            None => ("", vec!["UNREAD"]),
+            Some("ARCHIVE") => ("-in:inbox -in:drafts -in:trash -in:spam", vec!["UNREAD"]),
+            Some(l) => ("", vec![l, "UNREAD"]),
+        };
+        let remote = async {
+            let msgs = g.message_ids(q, &labels).await?;
+            g.batch_modify(&msgs, &[], &["UNREAD"]).await
+        }
+        .await;
+        if let Err(e) = remote {
+            let _ = fetch_threads(&app, &a, &g, ids).await;
+            let _ = app.emit(CHANGED, ());
+            return Err(e.into());
+        }
+    }
+    Ok(())
+}
+
+/// Permanently deletes everything in Trash or Spam. Local first; if Gmail fails, the threads are fetched back.
+#[tauri::command]
+async fn empty_mailbox(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    label: String,
+    accounts: Option<Vec<String>>,
+) -> R<()> {
+    if label != "TRASH" && label != "SPAM" {
+        return Err(anyhow::anyhow!("Only Trash and Spam can be emptied").into());
+    }
+    let mut removed = Vec::new();
+    for a in s.scope(accounts.as_deref())? {
+        let ids: Vec<String> = db::thread_ids(&a.db(), &label)?;
+        for id in &ids {
+            db::delete_thread(&a.db(), id)?;
+        }
+        removed.push((a, ids));
+    }
+    let _ = app.emit(CHANGED, ());
+    if s.demo {
+        return Ok(());
+    }
+    for (a, ids) in removed {
+        let token = a.access_token(&s.http).await?;
+        let g = Gmail {
+            http: &s.http,
+            token: &token,
+        };
+        let remote = async {
+            let msgs = g.message_ids("", &[&label]).await?;
+            g.batch_delete(&msgs).await
+        }
+        .await;
+        if let Err(e) = remote {
+            let _ = fetch_threads(&app, &a, &g, ids).await;
+            let _ = app.emit(CHANGED, ());
+            if gmail::is_scope_error(&e) {
+                return Err(anyhow::anyhow!(
+                    "{} needs to sign in again to allow permanent deletion: Settings → Accounts → Add account, then pick {} again.",
+                    a.email,
+                    a.email
+                )
+                .into());
+            }
+            return Err(e.into());
+        }
+    }
+    Ok(())
+}
+
+enum LabelEdit<'a> {
+    Rename(&'a str),
+    Color { background: &'a str, text: &'a str },
+    Delete,
+}
+
+/// Renames, recolours or deletes a user label in Gmail, then in the cache, in every account in scope that has it.
+async fn edit_label(
+    app: &AppHandle,
+    s: &State,
+    accounts: Option<&[String]>,
+    label: &str,
+    edit: LabelEdit<'_>,
+) -> anyhow::Result<()> {
+    for a in s.scope(accounts)? {
+        let Some(id) = resolve_label(&a.db(), label)? else {
+            continue;
+        };
+        if !s.demo {
+            let token = a.access_token(&s.http).await?;
+            let g = Gmail {
+                http: &s.http,
+                token: &token,
+            };
+            match edit {
+                LabelEdit::Rename(name) => {
+                    g.patch_label(&id, &serde_json::json!({ "name": name }))
+                        .await?
+                }
+                LabelEdit::Color { background, text } => {
+                    let color = serde_json::json!({ "color": { "backgroundColor": background, "textColor": text } });
+                    g.patch_label(&id, &color).await?
+                }
+                LabelEdit::Delete => g.delete_label(&id).await?,
+            }
+        }
+        match edit {
+            LabelEdit::Rename(name) => db::rename_label(&a.db(), &id, name)?,
+            LabelEdit::Color { background, .. } => db::set_label_color(&a.db(), &id, background)?,
+            LabelEdit::Delete => db::delete_label(&a.db(), &id)?,
+        }
+    }
+    let _ = app.emit(CHANGED, ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn rename_label(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    label: String,
+    name: String,
+    accounts: Option<Vec<String>>,
+) -> R<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(anyhow::anyhow!("A label needs a name").into());
+    }
+    Ok(edit_label(
+        &app,
+        &s,
+        accounts.as_deref(),
+        &label,
+        LabelEdit::Rename(name),
+    )
+    .await?)
+}
+
+#[tauri::command]
+async fn set_label_color(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    label: String,
+    background: String,
+    text: String,
+    accounts: Option<Vec<String>>,
+) -> R<()> {
+    // Also what the frontend's stylesheet trusts, so nothing but a hex colour reaches it.
+    let hex = |c: &str| {
+        c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|ch| ch.is_ascii_hexdigit())
+    };
+    if !hex(&background) || !hex(&text) {
+        return Err(anyhow::anyhow!("Not a colour: {background}").into());
+    }
+    let edit = LabelEdit::Color {
+        background: &background,
+        text: &text,
+    };
+    Ok(edit_label(&app, &s, accounts.as_deref(), &label, edit).await?)
+}
+
+#[tauri::command]
+async fn delete_label(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    label: String,
+    accounts: Option<Vec<String>>,
+) -> R<()> {
+    Ok(edit_label(&app, &s, accounts.as_deref(), &label, LabelEdit::Delete).await?)
 }
 
 #[tauri::command]
@@ -439,8 +801,15 @@ async fn modify(
         http: &s.http,
         token: &token,
     };
+    // Gmail moves threads in and out of Trash only through trash/untrash, not by label changes.
     let remote = if trash {
         g.trash(&id).await
+    } else if remove.iter().any(|l| l == "TRASH") {
+        let rest: Vec<String> = remove.iter().filter(|l| *l != "TRASH").cloned().collect();
+        match g.untrash(&id).await {
+            Ok(()) => g.modify(&id, &add, &rest).await,
+            Err(e) => Err(e),
+        }
     } else {
         g.modify(&id, &add, &remove).await
     };
@@ -735,6 +1104,10 @@ fn reschedule(
 /// Sends what's due. A draft deleted or sent elsewhere (404) is dropped; other failures retry on the next tick.
 // shortcut: only sends while Shift is running; a server-side sender would be needed to send with the Mac off.
 async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
+    // Another sync is already sending; it re-reads the due rows itself, so nothing is skipped.
+    let Ok(_sending) = a.sending.try_lock() else {
+        return Ok(());
+    };
     let s = app.state::<State>();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -1015,6 +1388,7 @@ fn delete_ai_key(provider: String) -> R<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -1060,6 +1434,11 @@ pub fn run() {
             sync_now,
             labels,
             threads,
+            mark_all_read,
+            empty_mailbox,
+            rename_label,
+            set_label_color,
+            delete_label,
             thread,
             modify,
             search,

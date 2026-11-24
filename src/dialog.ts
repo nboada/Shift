@@ -6,6 +6,25 @@ const dialog = document.getElementById("ask") as HTMLDialogElement;
 
 export const askOpen = () => dialog.open;
 
+const input = dialog.querySelector("input")!;
+input.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  dialog.querySelector<HTMLButtonElement>("[data-ok]")!.click();
+});
+
+/** `ask` with a text field; resolves the trimmed text, or null when cancelled or left empty. */
+export async function askText(opts: Ask & { value: string }): Promise<string | null> {
+  input.hidden = false;
+  input.value = opts.value;
+  const answer = ask(opts);
+  input.focus();
+  input.select();
+  const ok = await answer;
+  input.hidden = true;
+  return ok ? input.value.trim() || null : null;
+}
+
 /** Resolves true when confirmed; Escape, Cancel or clicking outside resolve false. */
 export function ask({ title, message, confirm, cancel = "Cancel", danger = false }: Ask): Promise<boolean> {
   dialog.querySelector("h3")!.textContent = title;

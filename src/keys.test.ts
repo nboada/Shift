@@ -8,7 +8,8 @@ test("default combos match the binding table", () => {
   const b = bindingsFrom({});
   expect(b[key("r")]).toBe("reply");
   expect(b[key("R", { shiftKey: true })]).toBe("replyAll");
-  expect(b[key("r", { metaKey: true })]).toBe("reply");
+  expect(b[key("r", { metaKey: true })]).toBe("sync");
+  expect(b[key("z", { metaKey: true })]).toBe("undo");
   expect(b[key("R", { metaKey: true, shiftKey: true })]).toBe("replyAll");
   expect(b[key("#", { shiftKey: true })]).toBe("trash");
   expect(b[key("!", { shiftKey: true })]).toBe("spam");

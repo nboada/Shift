@@ -4,7 +4,7 @@ A fast Gmail client: Rust core (Tauri 2) with a web UI. Mail is cached in local 
 
 ## Setup
 
-1. Google Cloud Console: create a project, enable the **Gmail API**, set up the OAuth consent screen (add your account as a test user), then create an OAuth client of type **Desktop app**.
+1. Google Cloud Console: create a project, enable the **Gmail API**, set up the OAuth consent screen (add your account as a test user, and the `https://mail.google.com/` scope, which Empty Trash/Spam needs to delete mail permanently), then create an OAuth client of type **Desktop app**.
 2. Put the client credentials in `.env.local` (git-ignored) as `GOOGLE_CLIENT_ID=` and `GOOGLE_CLIENT_SECRET=`, then run:
 
 ```sh
@@ -47,13 +47,13 @@ Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every acti
 | New email | `C`, `⌘N` |
 | Send (composer) | `⌘↩`, `⇧⌘D` |
 | Search | `/`, `⌘F` |
-| Check for mail | `⇧⌘N` |
+| Check for mail | `⌘R` |
 | Next / previous email | `J` `K`, `↓` `↑`, `→` `←` |
 | Archive | `E`, `⌃⌘A` |
 | Delete | `⌫`, `Delete`, `#` |
 | Mark read / unread | `U`, `⇧⌘U` |
 | Pin | `D`, `⇧⌘L` |
-| Reply | `R`, `⌘R` |
+| Reply | `R` |
 | Reply all | `⇧R`, `A`, `⇧⌘R` |
 | Forward | `F`, `⇧⌘F` |
 | Label | `L` |
@@ -62,6 +62,7 @@ Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every acti
 | Command palette | `⌘K` |
 | Settings | `⌘,` |
 | Zoom in / out / actual size | `⌘+` `⌘−` `⌘0` |
+| Undo archive, delete, spam or move | `⌘Z` |
 | Close menu / back | `Esc` |
 
 ## Layout

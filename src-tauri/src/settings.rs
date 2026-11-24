@@ -36,6 +36,22 @@ pub fn sync_seconds(dir: &Path) -> u64 {
         .clamp(15, 3600)
 }
 
+pub struct Notifications {
+    pub enabled: bool,
+    pub sound: bool,
+    pub only_people: bool,
+}
+
+/// `notifications.*`, with the UI's defaults (src/settings.ts) when unset.
+pub fn notifications(dir: &Path) -> Notifications {
+    let v = &load(dir)["notifications"];
+    Notifications {
+        enabled: v["enabled"].as_bool().unwrap_or(true),
+        sound: v["sound"].as_bool().unwrap_or(true),
+        only_people: v["onlyPeople"].as_bool().unwrap_or(false),
+    }
+}
+
 fn ai_entry(provider: &str) -> Result<keyring::Entry> {
     // Provider ids come from the UI; keep them to a safe charset before naming a Keychain item.
     if provider.is_empty()
