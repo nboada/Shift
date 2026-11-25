@@ -26,6 +26,7 @@ import { blockText, docToText, emailHtml, textToHtml } from "./compose";
 import { createEditor, foldReplyQuote } from "./editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
 import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
+import { addImapAccount } from "./imap-signin";
 import { FOLD_CSS } from "./quote";
 import DOMPurify from "dompurify";
 import { Recipients, isValidAddress, splitList } from "./recipients";
@@ -105,7 +106,15 @@ const SYSTEM: [string | null, string, string][] = [
   ["TRASH", "Trash", "trash"],
 ];
 
-/** Signed-in Google accounts, oldest first. */
+/** Accounts signed in with a password over IMAP rather than with Google. */
+let imapAccounts = new Set<string>();
+type Status = { accounts: string[]; imap: string[]; broken: string[] };
+async function loadStatus(): Promise<Status> {
+  const s = await invoke<Status>("status");
+  imapAccounts = new Set(s.imap);
+  return s;
+}
+/** Signed-in accounts, oldest first. */
 let accounts: string[] = [];
 /** Which accounts the sidebar and list show; null is "All accounts". */
 let scope: string[] | null = null;
@@ -1455,7 +1464,7 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
     if (id === NEW_LABEL) {
       void askText({
         title: "New label",
-        message: "Created in Gmail and added to this email.",
+        message: `Created ${inMail()} and added to this email.`,
         confirm: "Create",
         value: "",
       }).then(async (name) => {
@@ -1534,7 +1543,7 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
       const box = a.querySelector("span")?.textContent ?? "this mailbox";
       void ask({
         title: `Mark all of ${box} as read?`,
-        message: `Every unread email in ${box}${inAccounts()} is marked read in Gmail, including older ones not shown here.`,
+        message: `Every unread email in ${box}${inAccounts()} is marked read ${inMail()}, including older ones not shown here.`,
         confirm: "Mark as read",
       }).then((yes) => void (yes && labelAction(invoke("mark_all_read", { label: id, accounts: scope }))));
       return;
@@ -1576,7 +1585,7 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
     if (pick === "rename") {
       void askText({
         title: "Rename label",
-        message: "The label is renamed in Gmail too.",
+        message: `The label is renamed ${inMail()} too.`,
         confirm: "Rename",
         value: label.name,
       }).then((name) => {
@@ -1591,7 +1600,7 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
     if (pick === "delete") {
       void ask({
         title: `Delete “${label.name}”?`,
-        message: `The label is removed in Gmail${inAccounts()}. Its emails keep their other labels and stay in All Mail.`,
+        message: `The label is removed ${inMail()}${inAccounts()}. Its emails keep their other labels and stay in All Mail.`,
         confirm: "Delete",
         danger: true,
       }).then(
@@ -1667,6 +1676,11 @@ function saveSidebarOrder() {
 }
 
 /** " in both accounts" / " in all 3 accounts" when an action reaches every account in the unified view, else "". */
+/** Where a change lands: "in Gmail", or "on your mail server" once an IMAP account is in view. */
+function inMail() {
+  return (scope ?? accounts).some((a) => imapAccounts.has(a)) ? "on your mail server" : "in Gmail";
+}
+
 function inAccounts() {
   const n = (scope ?? accounts.filter((x) => accountSettings(x).unified !== false)).length;
   return n < 2 ? "" : n === 2 ? " in both accounts" : ` in all ${n} accounts`;
@@ -1676,7 +1690,7 @@ async function emptyMailbox(id: string) {
   const name = id === "TRASH" ? "Trash" : "Spam";
   const yes = await ask({
     title: `Empty ${name}?`,
-    message: `Everything in ${name}${inAccounts()} is deleted for good, in Gmail too. This can't be undone.`,
+    message: `Everything in ${name}${inAccounts()} is deleted for good, ${inMail()} too. This can't be undone.`,
     confirm: `Empty ${name}`,
     danger: true,
   });
@@ -2003,10 +2017,10 @@ async function closeComposer(discard = false) {
       );
     }
     // Not in Gmail: bring it back rather than lose it, unless another email was opened meanwhile.
-    if (compose) return toast("Couldn't save a draft to Gmail; it wasn't kept", { kind: "error" });
+    if (compose) return toast(`Couldn't save a draft ${inMail()}; it wasn't kept`, { kind: "error" });
     await openComposer(fields, { ...state, touched: true });
     $("#compose-error").textContent =
-      "Couldn't save this draft to Gmail, so it's still open. Check your connection and close it again.";
+      `Couldn't save this draft ${inMail()}, so it's still open. Check your connection and close it again.`;
   }
 }
 
@@ -2664,7 +2678,7 @@ async function openDraft(id: string): Promise<boolean> {
     const found = await lookup;
     if (!found) {
       if (compose === state)
-        $("#compose-error").textContent = "Couldn't find this draft in Gmail; saving makes a new one.";
+        $("#compose-error").textContent = `Couldn't find this draft ${inMail()}; saving makes a new one.`;
       return;
     }
     const [draftId, , bcc] = found;
@@ -2798,7 +2812,7 @@ async function newLabel() {
     list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} accounts`;
   const picked = await askTextAndColor({
     title: "New label",
-    message: accounts.length > 1 ? `Created in Gmail for ${where}.` : "Created in Gmail.",
+    message: accounts.length > 1 ? `Created ${inMail()} for ${where}.` : `Created ${inMail()}.`,
     confirm: "Create",
     value: "",
     colors: LABEL_COLORS.map(([colorName, bg]) => [
@@ -3048,7 +3062,7 @@ document.querySelectorAll<HTMLFormElement>(".search").forEach((form) =>
     try {
       threads = await invoke<Thread[]>("search_local", { query: value, accounts: scope });
       renderThreads();
-      $("#list-title").textContent = `Searching Gmail for “${value}”…`;
+      $("#list-title").textContent = `Searching ${inMail() === "in Gmail" ? "Gmail" : "your mail"} for “${value}”…`;
       await loadThreads();
     } catch (err) {
       // Offline or Gmail error: keep the local results that are already showing.
@@ -3067,17 +3081,17 @@ $("#view-btn").addEventListener("click", () =>
 async function signOut(account: string) {
   const waiting = (await invoke<unknown[]>("scheduled", { accounts: [account] })).length;
   const unsent = waiting
-    ? ` ${waiting} scheduled ${waiting === 1 ? "email" : "emails"} won't be sent; ${waiting === 1 ? "it stays" : "they stay"} in Gmail's Drafts.`
+    ? ` ${waiting} scheduled ${waiting === 1 ? "email" : "emails"} won't be sent; ${waiting === 1 ? "it stays" : "they stay"} in ${imapAccounts.has(account) ? "Drafts" : "Gmail's Drafts"}.`
     : "";
   const yes = await ask({
     title: `Sign out of ${account}?`,
-    message: `Mail stored on this Mac for this account will be removed. Your Gmail isn't affected.${unsent}`,
+    message: `Mail stored on this Mac for this account will be removed. ${imapAccounts.has(account) ? "The mail on your server" : "Your Gmail"} isn't affected.${unsent}`,
     confirm: "Sign out",
     danger: true,
   });
   if (!yes) return;
   await invoke("sign_out", { account });
-  const left = (await invoke<{ accounts: string[] }>("status")).accounts;
+  const left = (await loadStatus()).accounts;
   if (!left.length) return location.reload();
   accounts = left;
   scope = scope?.filter((a) => a !== account) ?? null;
@@ -3091,13 +3105,25 @@ $("#settings-btn").addEventListener("click", () => openSettings());
 async function addAccount() {
   try {
     await invoke<string>("add_account");
-    start((await invoke<{ accounts: string[] }>("status")).accounts);
+    start((await loadStatus()).accounts);
   } catch (e) {
     toast(String(e), { kind: "error" });
   }
 }
 
-initSettings({ accounts: () => accounts, onAddAccount: addAccount, onSignOut: signOut });
+/** Email and password sign-in for an account that isn't Gmail. */
+async function addOtherAccount() {
+  if (await addImapAccount()) start((await loadStatus()).accounts);
+}
+
+initSettings({
+  accounts: () => accounts,
+  isImap: (a) => imapAccounts.has(a),
+  onAddAccount: addAccount,
+  onAddImap: addOtherAccount,
+  onSignOut: signOut,
+});
+$("#signin-other").addEventListener("click", () => void addOtherAccount());
 initOnboarding();
 initCleanup({ scope: () => scope, toast });
 $("#cleanup-btn").addEventListener("click", () => void openCleanup());
@@ -3108,7 +3134,7 @@ $("#signin-btn").addEventListener("click", async () => {
   $("#signin-error").textContent = "Finish signing in in your browser…";
   try {
     await invoke<string>("add_account");
-    start((await invoke<{ accounts: string[] }>("status")).accounts);
+    start((await loadStatus()).accounts);
   } catch (e) {
     $("#signin-error").textContent = String(e);
   } finally {
@@ -3210,6 +3236,7 @@ function paletteCommands(): Command[] {
     ...go,
     ...switchTo,
     { label: "Add a Google account", icon: "user-plus", group: "Accounts", run: () => addAccount() },
+    { label: "Add another email account", icon: "user-plus", group: "Accounts", run: () => void addOtherAccount() },
     ...sections.map(
       ([id, name, icon]): Command => ({
         label: `Settings: ${name}`,
@@ -3669,14 +3696,14 @@ listen<string>("sync-error", (e) => {
 });
 
 loadSettings()
-  .then(() => invoke<{ accounts: string[]; broken: string[] }>("status"))
+  .then(loadStatus)
   .then((s) => {
     if (s.accounts.length) start(s.accounts);
     else $("#signin").hidden = false;
     if (s.broken.length) {
       void ask({
         title: "Some mail couldn't be opened",
-        message: `The mail Shift stored for ${s.broken.join(", ")} is damaged, so that account was left out. Add it again in Settings → Accounts to download its mail afresh. Your Gmail isn't affected.`,
+        message: `The mail Shift stored for ${s.broken.join(", ")} is damaged, so that account was left out. Add it again in Settings → Accounts to download its mail afresh. The mail itself isn't affected.`,
         confirm: "OK",
       });
     }

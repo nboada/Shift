@@ -38,6 +38,14 @@ CREATE TABLE IF NOT EXISTS ai_labels (
   thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, label_id TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (thread_id, label_id)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS rsvps (uid TEXT PRIMARY KEY, sequence INTEGER NOT NULL, status TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS imap_folders (name TEXT PRIMARY KEY, label TEXT NOT NULL, validity INTEGER NOT NULL, next INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS imap_messages (
+  id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, msgid TEXT NOT NULL, refs TEXT NOT NULL, date INTEGER NOT NULL, raw BLOB NOT NULL);
+CREATE INDEX IF NOT EXISTS imap_messages_thread ON imap_messages(thread_id);
+CREATE INDEX IF NOT EXISTS imap_messages_msgid ON imap_messages(msgid);
+CREATE TABLE IF NOT EXISTS imap_uids (
+  folder TEXT NOT NULL, uid INTEGER NOT NULL, id TEXT NOT NULL, flags TEXT NOT NULL, PRIMARY KEY (folder, uid)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS imap_uids_id ON imap_uids(id);
 ";
 
 /// Schema version, kept in `PRAGMA user_version`. Bump it and add an `if version < N` step to `open` for each change.
@@ -339,7 +347,7 @@ pub fn set_meta(conn: &Connection, k: &str, v: &str) -> Result<()> {
 }
 
 pub fn wipe(conn: &Connection) -> Result<()> {
-    conn.execute_batch("DELETE FROM messages; DELETE FROM thread_labels; DELETE FROM threads; DELETE FROM labels; DELETE FROM meta; DELETE FROM ai_labels;")?;
+    conn.execute_batch("DELETE FROM messages; DELETE FROM thread_labels; DELETE FROM threads; DELETE FROM labels; DELETE FROM meta; DELETE FROM ai_labels; DELETE FROM imap_uids; DELETE FROM imap_messages; DELETE FROM imap_folders;")?;
     Ok(())
 }
 

@@ -74,6 +74,11 @@ pub async fn revoke(http: &reqwest::Client, email: &str) {
     }
 }
 
+/// An IMAP account's password, kept in the same Keychain item a Google account keeps its refresh token in.
+pub fn password(email: &str) -> Result<String> {
+    Ok(keychain(email)?.get_password()?)
+}
+
 pub fn forget(email: &str) {
     if let Ok(e) = keychain(email) {
         let _ = e.delete_credential();
