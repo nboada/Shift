@@ -672,18 +672,40 @@ body.resizing iframe { pointer-events: none; }
 .images-bar button { padding: 3px 9px; border-radius: 6px; color: var(--accent); font-weight: 600; }
 .images-bar button:hover { background: color-mix(in srgb, var(--accent), transparent 88%); }
 .message-actions { display: flex; justify-content: flex-end; gap: 2px; padding: 0 10px 8px; }
-.invite { display: flex; align-items: center; gap: 12px; margin: 0 14px 10px; padding: 10px 12px; border: 1px solid var(--card-line); border-radius: 10px; background: var(--hover); }
-.invite > i { align-self: flex-start; margin-top: 1px; font-size: 20px; color: var(--accent); }
-.invite.cancelled > i { color: var(--muted); }
-.invite.cancelled strong { text-decoration: line-through; color: var(--muted); }
-.invite-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; color: var(--muted); }
-.invite-info strong { font-size: 13.5px; color: var(--text); }
-.invite-note { font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
-.invite-answers { display: flex; flex: none; padding: 2px; gap: 2px; border-radius: 8px; background: var(--search); }
-.invite-answers button { padding: 4px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
-.invite-answers button:hover:not(:disabled) { color: var(--text); }
-.invite-answers button[aria-pressed="true"] { background: var(--card); color: var(--accent); box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
-@media (max-width: 560px) { .invite { flex-wrap: wrap; } .invite-answers { margin-left: 32px; } }
+.invite { display: flex; align-items: center; gap: 14px; margin: 0 14px 12px; padding: 12px 14px 12px 12px; border: 1px solid color-mix(in srgb, var(--accent), transparent 84%); border-radius: 12px; background: color-mix(in srgb, var(--accent), transparent 95%); }
+.invite-tile { flex: none; display: flex; flex-direction: column; width: 48px; border-radius: 10px; background: var(--card); box-shadow: 0 0 0 1px var(--card-line), 0 1px 2px rgb(0 0 0 / 0.06); text-align: center; overflow: hidden; }
+.invite-tile span { padding-top: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--danger); }
+.invite-tile strong { padding-bottom: 6px; font-size: 21px; font-weight: 600; line-height: 1.15; color: var(--text); }
+.invite-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.invite-title { font-size: 14.5px; font-weight: 600; color: var(--text); }
+.invite-when { font-size: 13px; color: var(--text); }
+.invite-length { margin-left: 8px; padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, var(--text), transparent 93%); font-size: 11.5px; color: var(--muted); }
+.invite-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12.5px; color: var(--muted); }
+.invite-meta span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.invite-meta i { font-size: 14px; }
+.invite.cancelled { border-color: var(--card-line); background: var(--hover); }
+.invite.cancelled .invite-tile span { color: var(--muted); }
+.invite.cancelled .invite-title { text-decoration: line-through; color: var(--muted); }
+.invite-note { flex: none; padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--text), transparent 92%); font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.invite-note[data-status="ACCEPTED"] { background: color-mix(in srgb, var(--success), transparent 86%); color: color-mix(in srgb, var(--success), var(--text) 30%); }
+.invite-note[data-status="DECLINED"] { background: color-mix(in srgb, var(--danger), transparent 88%); color: color-mix(in srgb, var(--danger), var(--text) 20%); }
+.invite-rsvp { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.invite-ask { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.invite-answers { display: flex; gap: 6px; }
+.invite-answers button { --tone: var(--accent); display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px 5px 9px; border: 1px solid var(--card-line); border-radius: 8px; background: var(--card); font-size: 12.5px; font-weight: 600; color: var(--text); transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.1s; }
+.invite-answers button i { font-size: 14px; color: var(--muted); transition: color 0.15s; }
+.invite-answers [data-rsvp="ACCEPTED"] { --tone: var(--success); }
+.invite-answers [data-rsvp="TENTATIVE"] { --tone: var(--pin); }
+.invite-answers [data-rsvp="DECLINED"] { --tone: var(--danger); }
+.invite-answers button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--tone), transparent 50%); }
+.invite-answers button:hover:not(:disabled) i { color: var(--tone); }
+.invite-answers button:active:not(:disabled) { transform: scale(0.97); }
+.invite-answers button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--tone), transparent 40%); background: color-mix(in srgb, var(--tone), transparent 86%); color: color-mix(in srgb, var(--tone), var(--text) 30%); }
+.invite-answers button[aria-pressed="true"] i { color: var(--tone); }
+.invite-answers button:disabled:not([aria-pressed="true"]) { opacity: 0.6; }
+.invite-answers button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 620px) { .invite { flex-wrap: wrap; } .invite-rsvp { flex-basis: 100%; align-items: flex-start; padding-left: 62px; } }
+@media (prefers-reduced-motion: reduce) { .invite-answers button, .invite-answers button i { transition: none; } }
 .avatar {
   position: relative;
   flex: none;
