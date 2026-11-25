@@ -72,6 +72,7 @@ dependencies = [
  "getrandom 0.4.3",
  "jiff 1.0.2",
  "keyring",
+ "keyring-core",
  "mail-builder",
  "mail-parser",
  "mail-send",
