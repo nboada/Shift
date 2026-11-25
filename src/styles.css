@@ -1152,7 +1152,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .ask .ask-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .ask footer { display: flex; justify-content: flex-end; gap: 8px; }
 .ask .ask-alt { margin-right: auto; height: auto; font-size: inherit; }
-.ask .primary.danger { background: var(--danger); }
+.ask .primary.danger { background: #e5484d; }
 .imap-signin { width: min(420px, calc(100vw - 32px)); }
 .imap-signin label { display: grid; gap: 4px; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
 .imap-signin input { width: 100%; margin: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; font-size: 13.5px; }
@@ -1165,8 +1165,8 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .link-btn { margin-top: 14px; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
 .link-btn:hover { color: var(--text); }
 /* Without these the generic primary hover and press would turn a red confirm button orange. */
-.ask .primary.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger), #fff 10%); }
-.ask .primary.danger:active:not(:disabled) { background: color-mix(in srgb, var(--danger), #000 8%); }
+.ask .primary.danger:hover:not(:disabled) { background: color-mix(in srgb, #e5484d, #fff 10%); }
+.ask .primary.danger:active:not(:disabled) { background: color-mix(in srgb, #e5484d, #000 8%); }
 .ask button:focus-visible { outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--text), transparent 86%); }
 
 .toast {
