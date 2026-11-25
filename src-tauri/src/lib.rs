@@ -5,6 +5,7 @@ mod demo;
 #[cfg(test)]
 mod fake_gmail;
 mod gmail;
+mod imap;
 mod invite;
 mod settings;
 
@@ -22,9 +23,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
-/// One signed-in Google account: its own local mail database, access token and sync lock.
+/// One signed-in account: its own local mail database, access token and sync lock.
 struct Account {
     email: String,
+    /// Server settings for an IMAP account; `None` for Google accounts.
+    imap: Option<imap::Config>,
     db: Mutex<Connection>,
     token: tokio::sync::Mutex<Option<auth::Token>>,
     syncing: tokio::sync::Mutex<()>,
@@ -39,8 +42,13 @@ struct Account {
 
 impl Account {
     fn new(email: String, conn: Connection) -> Arc<Self> {
+        let imap = db::get_meta(&conn, "imap")
+            .ok()
+            .flatten()
+            .and_then(|j| serde_json::from_str(&j).ok());
         Arc::new(Self {
             email,
+            imap,
             db: Mutex::new(conn),
             token: Default::default(),
             syncing: Default::default(),
@@ -57,6 +65,9 @@ impl Account {
     }
 
     async fn access_token(&self, http: &reqwest::Client) -> anyhow::Result<String> {
+        if self.imap.is_some() {
+            anyhow::bail!("This isn't available for {} yet", self.email);
+        }
         let mut t = self.token.lock().await;
         if let Some(fresh) = t
             .as_ref()
@@ -441,6 +452,9 @@ async fn load_more(
                 .as_deref()
                 .unwrap_or(if q.is_empty() { "ALL" } else { "ARCHIVE" })
         );
+        if a.imap.is_some() {
+            continue;
+        }
         let mut page = match db::get_meta(&a.db(), &key)? {
             Some(t) if t == "done" => continue,
             Some(t) => t,
@@ -544,6 +558,9 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
     let Ok(_running) = a.syncing.try_lock() else {
         return Ok(());
     };
+    if let Some(cfg) = &a.imap {
+        return sync_imap(app, a, cfg).await;
+    }
     let token = a.access_token(&s.http).await?;
     let g = Gmail {
         http: &s.http,
@@ -625,6 +642,22 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
             "inbox_unread_extra",
             &(n - (cached - extra)).max(0).to_string(),
         )?;
+    }
+    Ok(())
+}
+
+async fn sync_imap(app: &AppHandle, a: &Account, cfg: &imap::Config) -> anyhow::Result<()> {
+    // The first sync lists mail that was already there: only what arrives after it is announced.
+    if db::get_meta(&a.db(), "notified_at")?.is_none() {
+        db::set_meta(&a.db(), "notified_at", &now_ms().to_string())?;
+    }
+    let password = auth::password(&a.email)?;
+    if imap::sync(a, cfg, &password).await? {
+        let _ = app.emit(CHANGED, ());
+        if let Err(e) = notify_new_mail(app, a) {
+            eprintln!("{} notification: {e:#}", a.email);
+        }
+        spawn_auto_label(app, &a.email);
     }
     Ok(())
 }
@@ -948,15 +981,10 @@ async fn auto_label(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
     if mail.is_empty() {
         return Ok(());
     }
-    let token = a.access_token(&s.http).await?;
-    let g = Gmail {
-        http: &s.http,
-        token: &token,
-    };
     // Oldest first, 40 at a time (one AI request each); the watermark moves past a batch only once it's done, so a
     // burst of mail is labelled in full and a failure retries from the batch that failed.
     for batch in mail.chunks(40) {
-        apply_label_rules(app, a, &g, batch).await?;
+        apply_label_rules(app, a, batch).await?;
         let done = batch.iter().map(|m| m.date).max().unwrap_or_default();
         db::set_meta(&a.db(), "ai_labeled_at", &done.to_string())?;
     }
@@ -968,7 +996,6 @@ async fn auto_label(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
 async fn apply_label_rules(
     app: &AppHandle,
     a: &Account,
-    g: &Gmail<'_>,
     mail: &[db::NewMail],
 ) -> anyhow::Result<usize> {
     let s = app.state::<State>();
@@ -1044,7 +1071,8 @@ async fn apply_label_rules(
         for l in &add {
             db::add_ai_label(&a.db(), thread, l, at)?;
         }
-        g.modify(thread, &add, &[]).await?;
+        // shortcut: one request per conversation (one IMAP sign-in each), batch them if labelling 40 feels slow.
+        push_change(app, &s, a, thread, &add, &[], false).await?;
         labelled += 1;
     }
     if labelled > 0 {
@@ -1075,12 +1103,7 @@ async fn ai_label_inbox(
         let mut mail = db::inbox_mail(&a.db(), 0, false)?;
         // Newest 40: inbox_mail lists oldest first.
         let mail = mail.split_off(mail.len().saturating_sub(40));
-        let token = a.access_token(&s.http).await?;
-        let g = Gmail {
-            http: &s.http,
-            token: &token,
-        };
-        labelled += apply_label_rules(&app, &a, &g, &mail).await?;
+        labelled += apply_label_rules(&app, &a, &mail).await?;
     }
     Ok(labelled)
 }
@@ -1105,13 +1128,7 @@ async fn ai_undo_labels(
     db::forget_ai_labels(&a.db(), &id)?;
     let _ = app.emit(CHANGED, ());
     if !s.demo && !labels.is_empty() {
-        let token = a.access_token(&s.http).await?;
-        Gmail {
-            http: &s.http,
-            token: &token,
-        }
-        .modify(&id, &[], &labels)
-        .await?;
+        push_change(&app, &s, &a, &id, &[], &labels, false).await?;
     }
     Ok(())
 }
@@ -1248,6 +1265,8 @@ fn spawn_sync(app: &AppHandle) {
 #[derive(Serialize)]
 struct Status {
     accounts: Vec<String>,
+    /// The accounts that are IMAP rather than Gmail.
+    imap: Vec<String>,
     broken: Vec<String>,
 }
 
@@ -1255,6 +1274,12 @@ struct Status {
 fn status(s: tauri::State<State>) -> Status {
     Status {
         accounts: s.all().iter().map(|a| a.email.clone()).collect(),
+        imap: s
+            .all()
+            .iter()
+            .filter(|a| a.imap.is_some())
+            .map(|a| a.email.clone())
+            .collect(),
         broken: s.broken.clone(),
     }
 }
@@ -1291,6 +1316,44 @@ async fn add_account(app: AppHandle, s: tauri::State<'_, State>) -> R<String> {
     Ok(email)
 }
 
+/// Server settings to prefill the IMAP sign-in form with.
+#[tauri::command]
+async fn guess_imap(email: String) -> R<imap::Config> {
+    Ok(imap::guess(email.trim()).await?)
+}
+
+/// Signs in to an IMAP + SMTP account with a password; returns its address.
+#[tauri::command]
+async fn add_imap_account(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    email: String,
+    password: String,
+    config: imap::Config,
+) -> R<String> {
+    let email = email.trim().to_lowercase();
+    imap::check(&config, &password).await?;
+    if s.account(&email).is_ok_and(|a| a.imap.is_none()) {
+        return Err(anyhow::anyhow!("{email} is already signed in with Google").into());
+    }
+    auth::store_refresh(&email, &password)?;
+    let conn = db::open(&db_path(&s.dir, &email))?;
+    db::set_meta(&conn, "email", &email)?;
+    db::set_meta(&conn, "imap", &serde_json::to_string(&config)?)?;
+    let a = Account::new(email.clone(), conn);
+    {
+        let mut accounts = s
+            .accounts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Signing in again (a new password or server) replaces the account's settings.
+        accounts.retain(|x| !x.email.eq_ignore_ascii_case(&email));
+        accounts.push(a);
+    }
+    spawn_sync(&app);
+    Ok(email)
+}
+
 /// Removes one account from this Mac: its Keychain login and its local mail. Gmail itself is untouched.
 #[tauri::command]
 async fn sign_out(s: tauri::State<'_, State>, account: String) -> R<()> {
@@ -1299,7 +1362,7 @@ async fn sign_out(s: tauri::State<'_, State>, account: String) -> R<()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .retain(|x| !Arc::ptr_eq(x, &a));
-    if !s.demo {
+    if !s.demo && a.imap.is_none() {
         auth::revoke(&s.http, &a.email).await;
     }
     auth::forget(&a.email);
@@ -1416,6 +1479,18 @@ async fn mark_all_read(
         if ids.is_empty() {
             continue;
         }
+        if let Some(cfg) = &a.imap {
+            let remote = async {
+                let mut session = imap_session(&a, cfg).await?;
+                imap::mark_read(&mut session, &a, id.as_deref()).await
+            }
+            .await;
+            if let Err(e) = remote {
+                refresh_imap(&app, &a, &ids);
+                return Err(e.into());
+            }
+            continue;
+        }
         let token = a.access_token(&s.http).await?;
         let g = Gmail {
             http: &s.http,
@@ -1464,6 +1539,18 @@ async fn empty_mailbox(
         return Ok(());
     }
     for (a, ids) in removed {
+        if let Some(cfg) = &a.imap {
+            let remote = async {
+                let mut session = imap_session(&a, cfg).await?;
+                imap::empty(&mut session, &a, &label).await
+            }
+            .await;
+            if let Err(e) = remote {
+                refresh_imap(&app, &a, &ids);
+                return Err(e.into());
+            }
+            continue;
+        }
         let token = a.access_token(&s.http).await?;
         let g = Gmail {
             http: &s.http,
@@ -1506,6 +1593,21 @@ async fn delete_forever(
     }
     let _ = app.emit(CHANGED, ());
     if s.demo {
+        return Ok(());
+    }
+    if let Some(cfg) = &a.imap {
+        let remote = async {
+            let mut session = imap_session(&a, cfg).await?;
+            for id in &ids {
+                imap::delete_trashed(&mut session, &a, id).await?;
+            }
+            anyhow::Ok(())
+        }
+        .await;
+        if let Err(e) = remote {
+            refresh_imap(&app, &a, &ids);
+            return Err(e.into());
+        }
         return Ok(());
     }
     let token = a.access_token(&s.http).await?;
@@ -1565,7 +1667,20 @@ async fn edit_label(
         let Some(id) = resolve_label(&a.db(), label)? else {
             continue;
         };
-        if !s.demo {
+        if let (false, Some(cfg)) = (s.demo, &a.imap) {
+            // Colours stay on this Mac: IMAP folders have none.
+            if !matches!(edit, LabelEdit::Color { .. }) {
+                let mut session = imap_session(&a, cfg).await?;
+                match edit {
+                    LabelEdit::Rename(name) => {
+                        imap::rename_folder(&mut session, &a, &id, name).await?
+                    }
+                    LabelEdit::Delete => imap::delete_folder(&mut session, &a, &id).await?,
+                    LabelEdit::Color { .. } => {}
+                }
+                let _ = session.logout().await;
+            }
+        } else if !s.demo {
             let token = a.access_token(&s.http).await?;
             let g = Gmail {
                 http: &s.http,
@@ -1609,6 +1724,16 @@ async fn create_label(
     let mut label = if s.demo {
         gmail::Label {
             id: format!("Label_demo_{}", now_ms()),
+            name: name.into(),
+            kind: "user".into(),
+            color: None,
+        }
+    } else if let Some(cfg) = &a.imap {
+        let mut session = imap_session(&a, cfg).await?;
+        let id = imap::create_folder(&mut session, &a, name).await?;
+        let _ = session.logout().await;
+        gmail::Label {
+            id,
             name: name.into(),
             kind: "user".into(),
             color: None,
@@ -1739,6 +1864,9 @@ async fn push_change(
     let Some(seq) = queue_change(a, id, add, remove, trash)? else {
         return Ok(());
     };
+    if let Some(cfg) = &a.imap {
+        return push_imap(app, a, cfg, &[(seq, id.to_string())], add, remove, trash).await;
+    }
     let token = match a.access_token(&s.http).await {
         Ok(t) => t,
         Err(e) if gmail::is_transient(&e) => return Ok(()),
@@ -1756,6 +1884,67 @@ async fn push_change(
         return Err(e);
     }
     Ok(())
+}
+
+async fn imap_session(a: &Account, cfg: &imap::Config) -> anyhow::Result<imap::Session> {
+    imap::connect(cfg, &auth::password(&a.email)?).await
+}
+
+/// `push_change` for an IMAP account: queued changes (`seq`, thread) made on one connection. One the server can't
+/// be reached for stays queued for the sync; one it refuses is dropped and its conversation shown as the server has it.
+async fn push_imap(
+    app: &AppHandle,
+    a: &Account,
+    cfg: &imap::Config,
+    jobs: &[(i64, String)],
+    add: &[String],
+    remove: &[String],
+    trash: bool,
+) -> anyhow::Result<()> {
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    let mut failed = None;
+    match imap_session(a, cfg).await {
+        Ok(mut session) => {
+            for (seq, id) in jobs {
+                match imap::apply(&mut session, a, id, add, remove, trash).await {
+                    // The conversation as the server now has it: moved copies, their new folders.
+                    Ok(()) => {
+                        db::done_pending(&a.db(), *seq)?;
+                        imap::refresh_thread(&mut a.db(), id)?;
+                    }
+                    Err(e) if imap::is_transient(&e) => break,
+                    Err(e) => {
+                        db::done_pending(&a.db(), *seq)?;
+                        imap::refresh_thread(&mut a.db(), id)?;
+                        failed.get_or_insert(e);
+                    }
+                }
+            }
+            let _ = session.logout().await;
+        }
+        Err(e) if imap::is_transient(&e) => {}
+        Err(e) => {
+            for (seq, id) in jobs {
+                db::done_pending(&a.db(), *seq)?;
+                imap::refresh_thread(&mut a.db(), id)?;
+            }
+            failed = Some(e);
+        }
+    }
+    if failed.is_some() {
+        let _ = app.emit(CHANGED, ());
+    }
+    failed.map_or(Ok(()), Err)
+}
+
+/// Undoes local changes the server refused: each conversation rebuilt as the server last had it.
+fn refresh_imap(app: &AppHandle, a: &Account, ids: &[String]) {
+    for id in ids {
+        let _ = imap::refresh_thread(&mut a.db(), id);
+    }
+    let _ = app.emit(CHANGED, ());
 }
 
 /// Puts a change in `pending_ops` before Gmail is asked, so quitting mid-request leaves it for the next sync instead
@@ -1819,6 +2008,15 @@ async fn modify_many(
     let _ = app.emit(CHANGED, ());
     if s.demo {
         return Ok(());
+    }
+    if let Some(cfg) = &a.imap {
+        let mut jobs = Vec::new();
+        for id in ids {
+            if let Some(seq) = queue_change(&a, &id, &add, &remove, trash)? {
+                jobs.push((seq, id));
+            }
+        }
+        return Ok(push_imap(&app, &a, cfg, &jobs, &add, &remove, trash).await?);
     }
     let (waiting, now): (Vec<String>, Vec<String>) =
         ids.into_iter().partition(|id| db::has_pending(&a.db(), id));
@@ -1936,6 +2134,13 @@ async fn search(
     }
     let mut rows = Vec::new();
     for a in s.scope(accounts.as_deref())? {
+        // shortcut: IMAP accounts search the mail on this Mac only, add IMAP SEARCH if older mail needs finding.
+        if a.imap.is_some() {
+            let mut found = db::search_local(&a.db(), &query)?;
+            found.iter_mut().for_each(|t| t.account = a.email.clone());
+            rows.extend(found);
+            continue;
+        }
         let token = a.access_token(&s.http).await?;
         let g = Gmail {
             http: &s.http,
@@ -2151,6 +2356,9 @@ async fn deliver(
         // shortcut: demo sends are accepted but not added to the mailbox; add a local Sent copy if testing threading.
         return Ok(());
     }
+    if let Some(cfg) = &a.imap {
+        return deliver_imap(a, cfg, draft, draft_id).await;
+    }
     let raw = build_message(a.email.clone(), draft)?;
     let token = a.access_token(&s.http).await?;
     let g = Gmail {
@@ -2161,6 +2369,38 @@ async fn deliver(
         Some(id) => g.send_draft(id, &raw, draft.thread_id.as_deref()).await,
         None => g.send(&raw, draft.thread_id.as_deref()).await,
     }
+}
+
+/// Sends over SMTP, then files a copy in Sent (IMAP servers don't) and deletes the draft it came from.
+async fn deliver_imap(
+    a: &Account,
+    cfg: &imap::Config,
+    draft: &Draft,
+    draft_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let raw = build_message(a.email.clone(), draft)?;
+    let to: Vec<String> = [&draft.to, &draft.cc, &draft.bcc]
+        .into_iter()
+        .flat_map(|list| parse_addresses(list))
+        .map(|(_, address)| address)
+        .collect();
+    let password = auth::password(&a.email)?;
+    imap::send(cfg, &password, &a.email, &to, &imap::without_bcc(&raw)).await?;
+    // The email is out: a failure filing it mustn't report the send as failed, which would invite sending it again.
+    let filed = async {
+        let mut s = imap::connect(cfg, &password).await?;
+        imap::append(&mut s, a, "SENT", "(\\Seen)", &raw).await?;
+        if let Some(id) = draft_id.filter(|id| !id.is_empty()) {
+            imap::remove_by_msgid(&mut s, a, "DRAFT", id).await?;
+        }
+        let _ = s.logout().await;
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(e) = filed {
+        eprintln!("{}: sent, but couldn't file it in Sent: {e:#}", a.email);
+    }
+    Ok(())
 }
 
 /// Answers the invite in `message` (`ACCEPTED`, `TENTATIVE` or `DECLINED`) with an email to its organizer, which
@@ -2261,6 +2501,9 @@ async fn find_draft(
     if s.demo {
         let last = db::messages(&a.db(), &thread)?.pop();
         return Ok(last.map(|m| (thread, m.id, String::new())));
+    }
+    if a.imap.is_some() {
+        return Ok(imap::draft_in(&a.db(), &thread)?);
     }
     let token = a.access_token(&s.http).await?;
     let g = Gmail {
@@ -2397,6 +2640,18 @@ async fn save_draft(
     }
     let a = s.account(&account)?;
     let raw = build_message(a.email.clone(), &draft)?;
+    if let Some(cfg) = &a.imap {
+        let id =
+            imap::message_id(&raw).ok_or_else(|| anyhow::anyhow!("Couldn't save the draft"))?;
+        let mut session = imap_session(&a, cfg).await?;
+        imap::append(&mut session, &a, "DRAFT", "(\\Draft \\Seen)", &raw).await?;
+        // After the new copy is in, so a failure here leaves two drafts rather than none.
+        if let Some(old) = draft_id.as_deref().filter(|id| !id.is_empty()) {
+            imap::remove_by_msgid(&mut session, &a, "DRAFT", old).await?;
+        }
+        let _ = session.logout().await;
+        return Ok(id);
+    }
     let token = a.access_token(&s.http).await?;
     let id = Gmail {
         http: &s.http,
@@ -2424,6 +2679,13 @@ async fn delete_draft(
     let a = s.account(&account)?;
     if s.demo {
         db::delete_thread(&a.db(), &draft_id)?;
+        let _ = app.emit(CHANGED, ());
+        return Ok(());
+    }
+    if let Some(cfg) = &a.imap {
+        let mut session = imap_session(&a, cfg).await?;
+        imap::remove_by_msgid(&mut session, &a, "DRAFT", &draft_id).await?;
+        let _ = session.logout().await;
         let _ = app.emit(CHANGED, ());
         return Ok(());
     }
@@ -2867,6 +3129,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             status,
             add_account,
+            guess_imap,
+            add_imap_account,
             sign_out,
             sync_now,
             labels,

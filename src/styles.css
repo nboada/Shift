@@ -1155,6 +1155,17 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .ask footer { display: flex; justify-content: flex-end; gap: 8px; }
 .ask .ask-alt { margin-right: auto; height: auto; font-size: inherit; }
 .ask .primary.danger { background: var(--danger); }
+.imap-signin { width: min(420px, calc(100vw - 32px)); }
+.imap-signin label { display: grid; gap: 4px; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
+.imap-signin input { width: 100%; margin: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; font-size: 13.5px; }
+.imap-signin input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.imap-signin details { margin-bottom: 8px; }
+.imap-signin summary { margin-bottom: 12px; color: var(--muted); font-size: 13px; }
+.imap-row { display: grid; grid-template-columns: 1fr 72px; gap: 8px; }
+.imap-signin .error { margin: 0 0 14px; font-size: 12.5px; }
+.imap-signin .error:empty { display: none; }
+.link-btn { margin-top: 14px; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.link-btn:hover { color: var(--text); }
 /* Without these the generic primary hover and press would turn a red confirm button orange. */
 .ask .primary.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger), #fff 10%); }
 .ask .primary.danger:active:not(:disabled) { background: color-mix(in srgb, var(--danger), #000 8%); }
