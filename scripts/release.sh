@@ -26,7 +26,7 @@ bun install --frozen-lockfile
 (cd site && bun install --frozen-lockfile)
 bun test
 bun run build
-(cd src-tauri && cargo test && cargo clippy --all-targets -- -D warnings)
+(cd src-tauri && cargo fmt --check && cargo test && cargo clippy --all-targets -- -D warnings)
 
 PUBLISH=0
 if [ "${1:-}" = "--publish" ]; then PUBLISH=1; shift; fi

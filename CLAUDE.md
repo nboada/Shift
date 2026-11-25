@@ -13,6 +13,7 @@ bun run build                     # tsc + vite (the frontend typecheck)
 bun test                          # all TS tests; one file: bun test src/keys.test.ts
 cd src-tauri && cargo test        # one test: cargo test label_filtering
 cd src-tauri && cargo clippy --all-targets
+cd src-tauri && cargo fmt         # rustfmt defaults; `cargo fmt --check` is one of the checks
 cd src-tauri && cargo audit        # advisories; .cargo/audit.toml lists the Linux-only ones ignored for the Mac build
 cd site && bun run dev           # the Astro site (home, roadmap, changelog, privacy, terms) with hot reload
 cd site && bunx wrangler dev     # the built site plus the early access Worker, local KV and R2
@@ -22,9 +23,9 @@ scripts/release.sh [--publish] "notes"   # signed, notarized universal build; --
 
 The site's changelog is one Markdown file per release in `site/src/content/changelog/`. The roadmap page lists GitHub Issues labelled `roadmap: now`, `roadmap: next` or `roadmap: later` (titles only), read at build time.
 
-Run all four checks (`bun test`, `bun run build`, `cargo test`, `cargo clippy`) before calling a change done. `tauri dev` and `demo` both need port 1420, so only one can run at a time. To release, bump `version` in `tauri.conf.json`, commit, and run `scripts/release.sh`: it refuses uncommitted changes, runs the four checks, stages in `site/.release` (never in `site/public`, whose files Cloudflare would serve ahead of the R2 feed), and tags `v<version>` on publish. Release builds check `updates/latest.json` (served from R2 by the Worker) at launch and every six hours and offer a restart. The script's one-time Keychain and signing-key setup is in its header. `build.rs` bakes the OAuth client in at compile time, so a changed `.env.local` takes a Rust rebuild.
+Run all the checks (`bun test`, `bun run build`, `cargo fmt --check`, `cargo test`, `cargo clippy`) before calling a change done. `tauri dev` and `demo` both need port 1420, so only one can run at a time. To release, bump `version` in `tauri.conf.json`, commit, and run `scripts/release.sh`: it refuses uncommitted changes, runs the checks, stages in `site/.release` (never in `site/public`, whose files Cloudflare would serve ahead of the R2 feed), and tags `v<version>` on publish. Release builds check `updates/latest.json` (served from R2 by the Worker) at launch and every six hours and offer a restart. The script's one-time Keychain and signing-key setup is in its header. `build.rs` bakes the OAuth client in at compile time, so a changed `.env.local` takes a Rust rebuild.
 
-Before writing or changing Rust, load the `anthropic-skills:rust-best-practices` skill and follow it. `Cargo.toml`'s `[lints.clippy]` enforces part of it (no `unwrap()` outside tests, `perf`, redundant clones), and an exception takes `#[expect(..., reason = "...")]`, not `#[allow]`. The rest is judgement: borrow rather than clone, `&str` and `&[T]` parameters where nothing needs ownership, `anyhow` with `?` and `.context()`. The Rust isn't `cargo fmt`-formatted, so don't run it.
+Before writing or changing Rust, load the `anthropic-skills:rust-best-practices` skill and follow it. `Cargo.toml`'s `[lints.clippy]` enforces part of it (no `unwrap()` outside tests, `perf`, redundant clones), and an exception takes `#[expect(..., reason = "...")]`, not `#[allow]`. The rest is judgement: borrow rather than clone, `&str` and `&[T]` parameters where nothing needs ownership, `anyhow` with `?` and `.context()`. Run `cargo fmt` after editing Rust. The commit that first formatted it is in `.git-blame-ignore-revs`.
 
 ## Architecture
 
