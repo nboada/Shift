@@ -104,8 +104,8 @@ export function inviteCard(i: Invite | null | undefined, msg: number, opts: Opts
     const a = i.attendees.find((p) => PAST[p.status]);
     if (a) side = `<span class="invite-note" data-status="${a.status}">${who(a)} ${PAST[a.status]}</span>`;
   } else if (i.organizer.email) {
-    side = `<div class="invite-rsvp"><span class="invite-ask" aria-hidden="true">Going?</span>
-      <div class="invite-answers" role="group" aria-label="Going?">${ANSWERS.map(
+    side = `<div class="invite-rsvp"><span class="invite-ask" aria-hidden="true">Attending?</span>
+      <div class="invite-answers" role="group" aria-label="Attending?">${ANSWERS.map(
         ([status, label]) =>
           `<button type="button" data-rsvp="${status}" data-msg="${msg}" aria-pressed="${i.status === status}"><i class="ti ti-${ICONS[status]}" aria-hidden="true"></i>${label}</button>`,
       ).join("")}</div></div>`;
