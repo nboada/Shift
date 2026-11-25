@@ -855,7 +855,7 @@ async function openThread(id: string) {
   }
   if (selected !== id) return;
   messages = loaded;
-  reader.innerHTML = `<h1>${esc(messages[0]?.subject || thread?.subject || "(no subject)")}</h1>`;
+  reader.innerHTML = `<div class="reader-head"><h1>${esc(messages[0]?.subject || thread?.subject || "(no subject)")}</h1></div>`;
   syncToolbar();
   for (const m of messages) {
     const el = document.createElement("section");
@@ -3508,7 +3508,22 @@ function renderAccountFooter() {
   $("#account-dot").hidden = !one;
   $("#account-all").hidden = !!one;
   $<HTMLButtonElement>("#account-btn").disabled = !multi();
+  // Next to the list title: a dot per account, to show just that one (click it again for all).
+  const only = scope?.length === 1 ? scope[0] : null;
+  const dots = $("#acct-dots");
+  dots.hidden = !multi();
+  dots.classList.toggle("filtered", !!only);
+  dots.innerHTML = accounts
+    .map((a) => {
+      const label = only === a ? "Show all accounts" : `Show only ${accountName(a)}`;
+      return `<button type="button" class="acct-pick${only === a ? " on" : ""}" data-acct="${esc(a)}" data-tip="${esc(label)}" aria-label="${esc(label)}" aria-pressed="${only === a}"><span class="account-dot acct-${accountSettings(a).color}"></span></button>`;
+    })
+    .join("");
 }
+$("#acct-dots").addEventListener("click", (e) => {
+  const a = (e.target as Element).closest<HTMLElement>("[data-acct]")?.dataset.acct;
+  if (a) setScope(scope?.length === 1 && scope[0] === a ? null : [a]);
+});
 
 /** Multi-select account picker above the sidebar footer; stays open while ticking accounts. */
 function openAccountMenu() {
