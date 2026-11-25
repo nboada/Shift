@@ -3,8 +3,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ask } from "./dialog";
 import { ACTIONS, comboOf, formatCombo, keysFor } from "./keys";
-import { DEFAULT_WRITING_RULES,
-  ACCOUNT_COLORS, AI_PROVIDERS, DEFAULTS, ZOOM_STEPS, accountSettings, getSetting, setAccountSetting, setSetting, settings, signatureFor,
+import {
+  DEFAULT_WRITING_RULES,
+  ACCOUNT_COLORS,
+  AI_PROVIDERS,
+  DEFAULTS,
+  ZOOM_STEPS,
+  accountSettings,
+  getSetting,
+  setAccountSetting,
+  setSetting,
+  settings,
+  signatureFor,
 } from "./settings";
 
 const SECTIONS: [string, string, string][] = [
@@ -22,7 +32,12 @@ const SECTIONS: [string, string, string][] = [
 ];
 
 const SWIPE_ACTIONS: [string, string][] = [
-  ["none", "Nothing"], ["archive", "Archive"], ["trash", "Delete"], ["unread", "Mark read / unread"], ["star", "Pin / unpin"], ["spam", "Spam"],
+  ["none", "Nothing"],
+  ["archive", "Archive"],
+  ["trash", "Delete"],
+  ["unread", "Mark read / unread"],
+  ["star", "Pin / unpin"],
+  ["spam", "Spam"],
 ];
 
 const esc = (s: string) =>
@@ -71,8 +86,10 @@ function openDropdown(button: HTMLButtonElement, pick: (value: string | number) 
   const options = dropdownOptions.get(path) ?? [];
   const value = String(getSetting(path));
   popup.innerHTML = options
-    .map(([v, label], i) => `<button type="button" role="option" data-i="${i}" aria-selected="${String(v) === value}">
-      <i class="ti ti-check"></i><span>${esc(label)}</span></button>`)
+    .map(
+      ([v, label], i) => `<button type="button" role="option" data-i="${i}" aria-selected="${String(v) === value}">
+      <i class="ti ti-check"></i><span>${esc(label)}</span></button>`,
+    )
     .join("");
   popup.onclick = (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-i]");
@@ -109,7 +126,13 @@ document.addEventListener("pointerdown", (e) => {
 });
 
 /** Segmented control for short option lists: every choice visible, one click to pick. */
-function segmented(path: string, options: [string | number, string, string?][], disabled = false, pick = `data-pick="${path}"`, value = String(getSetting(path))) {
+function segmented(
+  path: string,
+  options: [string | number, string, string?][],
+  disabled = false,
+  pick = `data-pick="${path}"`,
+  value = String(getSetting(path)),
+) {
   const numeric = typeof getSetting(path) === "number";
   // Buttons with role="radio" rather than hidden radio inputs: every click (mouse, keyboard, assistive tech) reaches us.
   return `<div class="segmented" role="radiogroup"><span class="seg-thumb" aria-hidden="true"></span>${options
@@ -122,14 +145,16 @@ function segmented(path: string, options: [string | number, string, string?][], 
 
 /** Moves each segmented control's sliding highlight under its selected option. */
 function placeThumbs() {
-  panel().querySelectorAll<HTMLElement>(".segmented").forEach((seg) => {
-    const on = seg.querySelector<HTMLElement>("button.on");
-    if (!on) return;
-    seg.style.setProperty("--thumb-x", `${on.offsetLeft}px`);
-    seg.style.setProperty("--thumb-w", `${on.offsetWidth}px`);
-    // Only animate after the first placement, so opening a section doesn't slide in from the edge.
-    requestAnimationFrame(() => seg.classList.add("ready"));
-  });
+  panel()
+    .querySelectorAll<HTMLElement>(".segmented")
+    .forEach((seg) => {
+      const on = seg.querySelector<HTMLElement>("button.on");
+      if (!on) return;
+      seg.style.setProperty("--thumb-x", `${on.offsetLeft}px`);
+      seg.style.setProperty("--thumb-w", `${on.offsetWidth}px`);
+      // Only animate after the first placement, so opening a section doesn't slide in from the edge.
+      requestAnimationFrame(() => seg.classList.add("ready"));
+    });
 }
 
 function toggle(path: string, disabled = false) {
@@ -144,39 +169,93 @@ let rowIds = 0;
 function row(title: string, control: string, desc = "") {
   const id = `set-${++rowIds}`;
   // Inputs only: buttons (dropdowns, segmented options) already say what they are, and this would replace that.
-  const named = control.replace(/<(input|select|textarea)\b(?![^>]*aria-label)/, `<$1 aria-labelledby="${id}"${desc ? ` aria-describedby="${id}-d"` : ""}`);
+  const named = control.replace(
+    /<(input|select|textarea)\b(?![^>]*aria-label)/,
+    `<$1 aria-labelledby="${id}"${desc ? ` aria-describedby="${id}-d"` : ""}`,
+  );
   return `<div class="setting-row"><div class="setting-text"><strong id="${id}">${title}</strong>${desc ? `<span id="${id}-d">${desc}</span>` : ""}</div><div class="setting-control">${named}</div></div>`;
 }
 
-const group = (title: string, rows: string) => `<section class="setting-group">${title ? `<h3>${title}</h3>` : ""}${rows}</section>`;
+const group = (title: string, rows: string) =>
+  `<section class="setting-group">${title ? `<h3>${title}</h3>` : ""}${rows}</section>`;
 // ---- sections ----
 
 /** The signature editor shared by Composer (the default) and each account; `bind` names the setting a field writes to. */
-const signatureFields = (sig: { mode: string; text: string; html: string }, bind: (field: "text" | "html") => string) =>
+const signatureFields = (
+  sig: { mode: string; text: string; html: string },
+  bind: (field: "text" | "html") => string,
+) =>
   sig.mode === "html"
     ? `<textarea class="code" ${bind("html")} rows="7" spellcheck="false" placeholder="<p><strong>Your Name</strong><br>Company · +61 …</p>">${esc(sig.html)}</textarea>
        <div class="sig-preview"><span>Preview</span><iframe id="sig-preview" sandbox="allow-same-origin" title="Signature preview"></iframe></div>`
-    : sig.mode === "text" ? `<textarea ${bind("text")} rows="4" placeholder="Your name, role, phone…">${esc(sig.text)}</textarea>` : "";
+    : sig.mode === "text"
+      ? `<textarea ${bind("text")} rows="4" placeholder="Your name, role, phone…">${esc(sig.text)}</textarea>`
+      : "";
 
 function accountDetail(email: string) {
   const a = accountSettings(email);
   const link = (icon: string, label: string, where: string, target?: string) =>
     `<button class="more-link" ${target ? `data-cmd="goto" data-target="${target}"` : "disabled"}><i class="${iconClass(icon)}"></i><span>${label}</span>${
-      target ? `<em>in ${where}</em><i class="ti ti-chevron-right"></i>` : `<em>${where}</em>`}</button>`;
-  return `<button class="back-link" data-cmd="close-account"><i class="ti ti-arrow-left"></i>All accounts</button>
+      target ? `<em>in ${where}</em><i class="ti ti-chevron-right"></i>` : `<em>${where}</em>`
+    }</button>`;
+  return (
+    `<button class="back-link" data-cmd="close-account"><i class="ti ti-arrow-left"></i>All accounts</button>
     <h3 class="account-heading">${esc(email)}</h3>` +
-    group("", row("Sender's name", `<input type="text" data-account-key="name" value="${esc(a.name)}" placeholder="Your name" />`, "Your name shown to recipients.") +
-      row("Account title", `<input type="text" data-account-key="title" value="${esc(a.title)}" placeholder="e.g. Work" />`, "Only you see it, in the sidebar.") +
-      row("Colour", `<div class="swatches" role="radiogroup">${ACCOUNT_COLORS.map((c) =>
-        `<button type="button" role="radio" class="swatch acct-${c}" aria-label="${c}" aria-checked="${c === a.color}" data-pick-account="color" data-value="${c}"></button>`).join("")}</div>`, "Marks this account in the sidebar.") +
-      row("Show in unified inbox", `<input type="checkbox" class="switch" role="switch" data-account-key="unified" ${a.unified ? "checked" : ""} />`, "Include this account in “All accounts”.")) +
-    group("Signature", row("Signature", segmented("", [["default", "Same as default"], ["text", "Plain text"], ["html", "HTML"]], false,
-      'data-pick-account="signature"', a.signature?.mode ?? "default"), "Added to emails sent from this account.") +
-      (a.signature ? signatureFields(a.signature, (f) => `data-account-sig="${f}"`) : "")) +
+    group(
+      "",
+      row(
+        "Sender's name",
+        `<input type="text" data-account-key="name" value="${esc(a.name)}" placeholder="Your name" />`,
+        "Your name shown to recipients.",
+      ) +
+        row(
+          "Account title",
+          `<input type="text" data-account-key="title" value="${esc(a.title)}" placeholder="e.g. Work" />`,
+          "Only you see it, in the sidebar.",
+        ) +
+        row(
+          "Colour",
+          `<div class="swatches" role="radiogroup">${ACCOUNT_COLORS.map(
+            (c) =>
+              `<button type="button" role="radio" class="swatch acct-${c}" aria-label="${c}" aria-checked="${c === a.color}" data-pick-account="color" data-value="${c}"></button>`,
+          ).join("")}</div>`,
+          "Marks this account in the sidebar.",
+        ) +
+        row(
+          "Show in unified inbox",
+          `<input type="checkbox" class="switch" role="switch" data-account-key="unified" ${a.unified ? "checked" : ""} />`,
+          "Include this account in “All accounts”.",
+        ),
+    ) +
+    group(
+      "Signature",
+      row(
+        "Signature",
+        segmented(
+          "",
+          [
+            ["default", "Same as default"],
+            ["text", "Plain text"],
+            ["html", "HTML"],
+          ],
+          false,
+          'data-pick-account="signature"',
+          a.signature?.mode ?? "default",
+        ),
+        "Added to emails sent from this account.",
+      ) + (a.signature ? signatureFields(a.signature, (f) => `data-account-sig="${f}"`) : ""),
+    ) +
     `<h3 class="group-title">More</h3>` +
-    group("", link("signature", "Default signature", "Composer", "composer") + link("bell", "Notifications", "Notifications", "notifications") +
-      link("at", "Aliases", "Coming soon") + link("folder", "Folders", "Coming soon") + link("app-store-logo", "App icon badge", "Coming soon")) +
-    `<div class="account-actions"><button class="quiet-danger" data-cmd="signout"><i class="ti ti-logout"></i><span>Sign out</span></button></div>`;
+    group(
+      "",
+      link("signature", "Default signature", "Composer", "composer") +
+        link("bell", "Notifications", "Notifications", "notifications") +
+        link("at", "Aliases", "Coming soon") +
+        link("folder", "Folders", "Coming soon") +
+        link("app-store-logo", "App icon badge", "Coming soon"),
+    ) +
+    `<div class="account-actions"><button class="quiet-danger" data-cmd="signout"><i class="ti ti-logout"></i><span>Sign out</span></button></div>`
+  );
 }
 
 const render: Record<string, () => string> = {
@@ -190,9 +269,17 @@ const render: Record<string, () => string> = {
         <i class="ti ti-chevron-right"></i>
       </button>`;
     });
-    return group("", rows.join("")) +
-      group("", row("Add a Google account", `<button class="secondary" data-cmd="add-account"><i class="ti ti-plus"></i> Add account</button>`,
-        "Sign in with Google in your browser. Mail is stored on this Mac."));
+    return (
+      group("", rows.join("")) +
+      group(
+        "",
+        row(
+          "Add a Google account",
+          `<button class="secondary" data-cmd="add-account"><i class="ti ti-plus"></i> Add account</button>`,
+          "Sign in with Google in your browser. Mail is stored on this Mac.",
+        ),
+      )
+    );
   },
 
   ai: () => {
@@ -200,85 +287,332 @@ const render: Record<string, () => string> = {
     const custom = !p.models.length || settings.ai.model === "custom";
     const models: [string, string][] = [...p.models.map((m): [string, string] => [m, m]), ["custom", "Custom model…"]];
     const perTask = tasksOpen || AI_TASKS.some(([t]) => settings.ai.tasks[t].provider);
-    return `<p class="section-lede">Write, reply and sort mail with your own AI account. Shift sends the provider only what a feature needs, straight from this Mac.</p>` +
-      group("", row("Provider", select("ai.provider", AI_PROVIDERS.map((x) => [x.id, x.name]))) +
-        (p.models.length ? row("Model", select("ai.model", models)) : "") +
-        (custom ? row("Model name", `<input type="text" data-path="ai.customModel" value="${esc(settings.ai.customModel)}" placeholder="${p.id === "openrouter" ? "provider/model" : p.id === "ollama" ? "e.g. a model you've pulled" : "model-id"}" spellcheck="false" />`, "Exactly as the provider names it.") : "") +
-        (p.baseUrl !== undefined ? row("Server URL", `<input type="url" data-path="ai.baseUrl" value="${esc(settings.ai.baseUrl || p.baseUrl)}" placeholder="https://…/v1" spellcheck="false" />`, p.id === "ollama" ? "Where Ollama is running." : "OpenAI-compatible endpoint.") : "") +
-        (p.needsKey ? keyRow(p) : "") +
-        `<details class="setting-more" id="ai-tasks"${perTask ? " open" : ""}><summary>Different model per task <i class="ti ti-chevron-down"></i></summary>` +
-        AI_TASKS.map(([task, label, hint]) => taskRows(task, label, hint)).join("") +
-        `<p class="group-note">A small, fast model is plenty for sorting. Keep a stronger one for writing.</p></details>`) +
-      group(`Writing rules<button class="group-action" data-cmd="reset-writing-rules">Reset</button>`,
+    return (
+      `<p class="section-lede">Write, reply and sort mail with your own AI account. Shift sends the provider only what a feature needs, straight from this Mac.</p>` +
+      group(
+        "",
+        row(
+          "Provider",
+          select(
+            "ai.provider",
+            AI_PROVIDERS.map((x) => [x.id, x.name]),
+          ),
+        ) +
+          (p.models.length ? row("Model", select("ai.model", models)) : "") +
+          (custom
+            ? row(
+                "Model name",
+                `<input type="text" data-path="ai.customModel" value="${esc(settings.ai.customModel)}" placeholder="${p.id === "openrouter" ? "provider/model" : p.id === "ollama" ? "e.g. a model you've pulled" : "model-id"}" spellcheck="false" />`,
+                "Exactly as the provider names it.",
+              )
+            : "") +
+          (p.baseUrl !== undefined
+            ? row(
+                "Server URL",
+                `<input type="url" data-path="ai.baseUrl" value="${esc(settings.ai.baseUrl || p.baseUrl)}" placeholder="https://…/v1" spellcheck="false" />`,
+                p.id === "ollama" ? "Where Ollama is running." : "OpenAI-compatible endpoint.",
+              )
+            : "") +
+          (p.needsKey ? keyRow(p) : "") +
+          `<details class="setting-more" id="ai-tasks"${perTask ? " open" : ""}><summary>Different model per task <i class="ti ti-chevron-down"></i></summary>` +
+          AI_TASKS.map(([task, label, hint]) => taskRows(task, label, hint)).join("") +
+          `<p class="group-note">A small, fast model is plenty for sorting. Keep a stronger one for writing.</p></details>`,
+      ) +
+      group(
+        `Writing rules<button class="group-action" data-cmd="reset-writing-rules">Reset</button>`,
         `<textarea data-path="ai.writingRules" rows="7" spellcheck="true" aria-label="Writing rules">${esc(settings.ai.writingRules)}</textarea>` +
-        `<p class="group-note">Followed whenever AI writes or rewrites for you. One rule per line.</p>`) +
-      group("", row("Auto-label new mail", toggle("ai.autoLabel"), "Adds your labels to new Inbox mail when one clearly fits. You can undo each one.") +
-        (settings.ai.autoLabel ? `<div id="ai-label-rules" class="ai-label-rules"><p class="group-note">Loading your labels…</p></div>` : ""));
+          `<p class="group-note">Followed whenever AI writes or rewrites for you. One rule per line.</p>`,
+      ) +
+      group(
+        "",
+        row(
+          "Auto-label new mail",
+          toggle("ai.autoLabel"),
+          "Adds your labels to new Inbox mail when one clearly fits. You can undo each one.",
+        ) +
+          (settings.ai.autoLabel
+            ? `<div id="ai-label-rules" class="ai-label-rules"><p class="group-note">Loading your labels…</p></div>`
+            : ""),
+      )
+    );
   },
 
   general: () =>
-    group("Startup", row("Open Shift at login", `<input type="checkbox" class="switch" role="switch" id="open-at-login" />`,
-      "Starts hidden in the Dock, so new mail notifications arrive without opening a window.")) +
-    group("Sync", row("Check for new mail", select("general.syncSeconds", [[15, "Every 15 seconds"], [30, "Every 30 seconds"], [60, "Every minute"], [300, "Every 5 minutes"], [900, "Every 15 minutes"]]), "Opened mail always loads from this Mac instantly.")) +
-    group("Reading", row("Mark as read when opened", toggle("general.markReadOnOpen")) +
-      row("Ask before deleting", toggle("general.confirmDelete"))),
+    group(
+      "Startup",
+      row(
+        "Open Shift at login",
+        `<input type="checkbox" class="switch" role="switch" id="open-at-login" />`,
+        "Starts hidden in the Dock, so new mail notifications arrive without opening a window.",
+      ),
+    ) +
+    group(
+      "Sync",
+      row(
+        "Check for new mail",
+        select("general.syncSeconds", [
+          [15, "Every 15 seconds"],
+          [30, "Every 30 seconds"],
+          [60, "Every minute"],
+          [300, "Every 5 minutes"],
+          [900, "Every 15 minutes"],
+        ]),
+        "Opened mail always loads from this Mac instantly.",
+      ),
+    ) +
+    group(
+      "Reading",
+      row("Mark as read when opened", toggle("general.markReadOnOpen")) +
+        row("Ask before deleting", toggle("general.confirmDelete")),
+    ),
 
   appearance: () =>
-    group("Theme", row("Appearance", segmented("appearance.theme", [["system", "System", "desktop"], ["light", "Light", "sun"], ["dark", "Dark", "moon"]]))) +
-    group("Message list", row("Layout", segmented("appearance.layout", [["split", "Split"], ["wide", "Wide list"]]), "Wide list shows one email per line and opens emails full width.") +
-      row("Density", segmented("appearance.density", [["comfortable", "Comfortable"], ["compact", "Compact"]])) +
-      row("Show avatars", toggle("appearance.showAvatars")) +
-      row("Preview lines", segmented("appearance.snippetLines", [[0, "None"], [1, "1"], [2, "2"]]))) +
-    group("Emails", row("Use the same font and text size for all emails", toggle("appearance.uniformEmailFont"), "Replaces the sender's fonts and body text size. Headings, layout, colours and images stay as sent.") +
-      row("Load remote images", toggle("appearance.loadRemoteImages"), "Off: images from the web stay hidden until you load them, so senders can't see when you open an email.")),
+    group(
+      "Theme",
+      row(
+        "Appearance",
+        segmented("appearance.theme", [
+          ["system", "System", "desktop"],
+          ["light", "Light", "sun"],
+          ["dark", "Dark", "moon"],
+        ]),
+      ),
+    ) +
+    group(
+      "Message list",
+      row(
+        "Layout",
+        segmented("appearance.layout", [
+          ["split", "Split"],
+          ["wide", "Wide list"],
+        ]),
+        "Wide list shows one email per line and opens emails full width.",
+      ) +
+        row(
+          "Density",
+          segmented("appearance.density", [
+            ["comfortable", "Comfortable"],
+            ["compact", "Compact"],
+          ]),
+        ) +
+        row("Show avatars", toggle("appearance.showAvatars")) +
+        row(
+          "Preview lines",
+          segmented("appearance.snippetLines", [
+            [0, "None"],
+            [1, "1"],
+            [2, "2"],
+          ]),
+        ),
+    ) +
+    group(
+      "Emails",
+      row(
+        "Use the same font and text size for all emails",
+        toggle("appearance.uniformEmailFont"),
+        "Replaces the sender's fonts and body text size. Headings, layout, colours and images stay as sent.",
+      ) +
+        row(
+          "Load remote images",
+          toggle("appearance.loadRemoteImages"),
+          "Off: images from the web stay hidden until you load them, so senders can't see when you open an email.",
+        ),
+    ),
 
   notifications: () =>
-    group("", row("New mail notifications", toggle("notifications.enabled"), "For Inbox mail that arrives while Shift is open.") +
-      row("Play a sound", toggle("notifications.sound")) +
-      row("Only from people", toggle("notifications.onlyPeople"), "Skip newsletters and automated mail (Gmail's Promotions, Social, Updates and Forums).")) +
-    group("", row("Try it", `<button class="secondary" data-cmd="test-notification"><i class="ti ti-bell"></i> Send a test notification</button>`,
-      "Uses your sound setting. If nothing shows, allow Shift in System Settings → Notifications.")),
+    group(
+      "",
+      row(
+        "New mail notifications",
+        toggle("notifications.enabled"),
+        "For Inbox mail that arrives while Shift is open.",
+      ) +
+        row("Play a sound", toggle("notifications.sound")) +
+        row(
+          "Only from people",
+          toggle("notifications.onlyPeople"),
+          "Skip newsletters and automated mail (Gmail's Promotions, Social, Updates and Forums).",
+        ),
+    ) +
+    group(
+      "",
+      row(
+        "Try it",
+        `<button class="secondary" data-cmd="test-notification"><i class="ti ti-bell"></i> Send a test notification</button>`,
+        "Uses your sound setting. If nothing shows, allow Shift in System Settings → Notifications.",
+      ),
+    ),
 
   scheduling: () =>
-    group("Send later", row("Later today", select("scheduling.laterTodayHours", [[1, "In 1 hour"], [2, "In 2 hours"], [3, "In 3 hours"], [4, "In 4 hours"]])) +
-      row("Mornings start at", `<input type="time" data-path="scheduling.morning" value="${esc(settings.scheduling.morning)}" />`, "Used for Tomorrow, This weekend and Next week.") +
-      row("This weekend", segmented("scheduling.weekendDay", [["saturday", "Saturday"], ["sunday", "Sunday"]])) +
-      row("Next week", segmented("scheduling.nextWeekDay", [["monday", "Monday"], ["sunday", "Sunday"]]))) +
+    group(
+      "Send later",
+      row(
+        "Later today",
+        select("scheduling.laterTodayHours", [
+          [1, "In 1 hour"],
+          [2, "In 2 hours"],
+          [3, "In 3 hours"],
+          [4, "In 4 hours"],
+        ]),
+      ) +
+        row(
+          "Mornings start at",
+          `<input type="time" data-path="scheduling.morning" value="${esc(settings.scheduling.morning)}" />`,
+          "Used for Tomorrow, This weekend and Next week.",
+        ) +
+        row(
+          "This weekend",
+          segmented("scheduling.weekendDay", [
+            ["saturday", "Saturday"],
+            ["sunday", "Sunday"],
+          ]),
+        ) +
+        row(
+          "Next week",
+          segmented("scheduling.nextWeekDay", [
+            ["monday", "Monday"],
+            ["sunday", "Sunday"],
+          ]),
+        ),
+    ) +
     `<p class="hint">Scheduled emails wait in Gmail Drafts and are sent by Shift, so it needs to be open at the send time. If it isn't, they go out the next time it opens.</p>`,
 
   inbox: () =>
-    group("Layout", row("Inbox view", segmented("inbox.view", [["smart", "Smart Inbox", "stack"], ["list", "Plain list", "list"]]), "Smart Inbox groups mail into sections; plain list is newest first.")) +
-    group("Smart Inbox", row("Pinned at the top", toggle("inbox.pinnedOnTop")) +
-      row("Split unread into People and Notifications", toggle("inbox.splitUnread"), "Notifications are Gmail's Promotions, Updates, Social and Forums.")) +
+    group(
+      "Layout",
+      row(
+        "Inbox view",
+        segmented("inbox.view", [
+          ["smart", "Smart Inbox", "stack"],
+          ["list", "Plain list", "list"],
+        ]),
+        "Smart Inbox groups mail into sections; plain list is newest first.",
+      ),
+    ) +
+    group(
+      "Smart Inbox",
+      row("Pinned at the top", toggle("inbox.pinnedOnTop")) +
+        row(
+          "Split unread into People and Notifications",
+          toggle("inbox.splitUnread"),
+          "Notifications are Gmail's Promotions, Updates, Social and Forums.",
+        ),
+    ) +
     group("Sidebar", row("Show unread count", toggle("inbox.unreadBadge"), "In the sidebar and on Shift's Dock icon.")),
 
   composer: () =>
-    group("Signature", row("Format", segmented("composer.signatureMode", [["text", "Plain text"], ["html", "HTML"]]), "Added to new emails, replies and forwards.") +
-      signatureFields(signatureFor(undefined), (f) => `data-path="composer.${f === "html" ? "signatureHtml" : "signature"}"`)) +
-    group("Replying", row("Write replies", segmented("composer.replyIn", [["inline", "In the email"], ["window", "In a window"]]), "Replies and forwards open under the email, or in a window like a new email.") +
-      row("Default reply", segmented("composer.defaultReply", [["reply", "Reply"], ["all", "Reply all"]]), "What R and ⌘R do. The other is always ⇧R.") +
-      row("Quote the original message", toggle("composer.quoteOriginal"))) +
-    group("Sending", (ctx.accounts().length > 1 ? row("Send new emails from", select("composer.defaultFrom", [["", "First account"], ...ctx.accounts().map((a): [string, string] => [a, accountSettings(a).title ? `${accountSettings(a).title} (${a})` : a])]),
-      "When viewing all accounts. Replies are sent from the account the email came to.") : "") +
-      row("Undo send", segmented("composer.undoSendSeconds", [[0, "Off"], [5, "5s"], [10, "10s"], [20, "20s"]]), "Wait before sending so you can take it back.")),
+    group(
+      "Signature",
+      row(
+        "Format",
+        segmented("composer.signatureMode", [
+          ["text", "Plain text"],
+          ["html", "HTML"],
+        ]),
+        "Added to new emails, replies and forwards.",
+      ) +
+        signatureFields(
+          signatureFor(undefined),
+          (f) => `data-path="composer.${f === "html" ? "signatureHtml" : "signature"}"`,
+        ),
+    ) +
+    group(
+      "Replying",
+      row(
+        "Write replies",
+        segmented("composer.replyIn", [
+          ["inline", "In the email"],
+          ["window", "In a window"],
+        ]),
+        "Replies and forwards open under the email, or in a window like a new email.",
+      ) +
+        row(
+          "Default reply",
+          segmented("composer.defaultReply", [
+            ["reply", "Reply"],
+            ["all", "Reply all"],
+          ]),
+          "What R and ⌘R do. The other is always ⇧R.",
+        ) +
+        row("Quote the original message", toggle("composer.quoteOriginal")),
+    ) +
+    group(
+      "Sending",
+      (ctx.accounts().length > 1
+        ? row(
+            "Send new emails from",
+            select("composer.defaultFrom", [
+              ["", "First account"],
+              ...ctx
+                .accounts()
+                .map((a): [string, string] => [a, accountSettings(a).title ? `${accountSettings(a).title} (${a})` : a]),
+            ]),
+            "When viewing all accounts. Replies are sent from the account the email came to.",
+          )
+        : "") +
+        row(
+          "Undo send",
+          segmented("composer.undoSendSeconds", [
+            [0, "Off"],
+            [5, "5s"],
+            [10, "10s"],
+            [20, "20s"],
+          ]),
+          "Wait before sending so you can take it back.",
+        ),
+    ),
 
   accessibility: () =>
-    group("Zoom", row("Zoom", select("accessibility.zoom", ZOOM_STEPS.map((z): [number, string] => [z, `${z}%`])), "Also ⌘+ ⌘− and ⌘0.")) +
-    group("Motion", row("Reduce motion", toggle("accessibility.reduceMotion"), "Turns off animations and transitions.")),
+    group(
+      "Zoom",
+      row(
+        "Zoom",
+        select(
+          "accessibility.zoom",
+          ZOOM_STEPS.map((z): [number, string] => [z, `${z}%`]),
+        ),
+        "Also ⌘+ ⌘− and ⌘0.",
+      ),
+    ) +
+    group(
+      "Motion",
+      row("Reduce motion", toggle("accessibility.reduceMotion"), "Turns off animations and transitions."),
+    ),
 
   swipes: () =>
-    group("Two-finger swipe on the message list", row("Swipe left", select("swipes.left", SWIPE_ACTIONS)) + row("Swipe right", select("swipes.right", SWIPE_ACTIONS))) +
-    `<p class="hint">Swipe a row sideways on the trackpad, or drag it on a touch screen.</p>`,
+    group(
+      "Two-finger swipe on the message list",
+      row("Swipe left", select("swipes.left", SWIPE_ACTIONS)) +
+        row("Swipe right", select("swipes.right", SWIPE_ACTIONS)),
+    ) + `<p class="hint">Swipe a row sideways on the trackpad, or drag it on a touch screen.</p>`,
 
   shortcuts: () => {
     const keys = keysFor(settings.shortcuts);
-    return `<div class="shortcut-head"><p class="hint">Click + to record a key. Single keys work like Spark, ⌘ combinations like Apple Mail.</p>
+    return (
+      `<div class="shortcut-head"><p class="hint">Click + to record a key. Single keys work like Spark, ⌘ combinations like Apple Mail.</p>
         <button class="secondary" data-cmd="reset-keys">Reset all</button></div>` +
-      group("", ACTIONS.map(([action, label]) => row(label, `<div class="chips">${keys[action]
-        .map((c) => `<span class="chip"><kbd>${esc(formatCombo(c))}</kbd><button data-cmd="remove-key" data-action="${action}" data-combo="${esc(c)}" aria-label="Remove ${esc(formatCombo(c))}"><i class="ti ti-x"></i></button></span>`)
-        .join("")}<button class="chip-add" data-cmd="record" data-action="${action}" aria-label="Add a key for ${label}"><i class="ti ti-plus"></i></button>${
-        settings.shortcuts[action] ? `<button class="chip-add" data-cmd="reset-key" data-action="${action}" data-tip="Reset to default"><i class="ti ti-restore"></i></button>` : ""}</div>`)).join("")) +
-      `<p class="hint" id="shortcut-note"></p>`;
+      group(
+        "",
+        ACTIONS.map(([action, label]) =>
+          row(
+            label,
+            `<div class="chips">${keys[action]
+              .map(
+                (c) =>
+                  `<span class="chip"><kbd>${esc(formatCombo(c))}</kbd><button data-cmd="remove-key" data-action="${action}" data-combo="${esc(c)}" aria-label="Remove ${esc(formatCombo(c))}"><i class="ti ti-x"></i></button></span>`,
+              )
+              .join(
+                "",
+              )}<button class="chip-add" data-cmd="record" data-action="${action}" aria-label="Add a key for ${label}"><i class="ti ti-plus"></i></button>${
+              settings.shortcuts[action]
+                ? `<button class="chip-add" data-cmd="reset-key" data-action="${action}" data-tip="Reset to default"><i class="ti ti-restore"></i></button>`
+                : ""
+            }</div>`,
+          ),
+        ).join(""),
+      ) +
+      `<p class="hint" id="shortcut-note"></p>`
+    );
   },
 };
 
@@ -288,7 +622,9 @@ function show(section: string) {
   current = section;
   // Fade content in only when the section changes; edits that re-render it (e.g. recording a key) stay still.
   panel().classList.toggle("switching", switching);
-  root().querySelectorAll<HTMLElement>("[data-section]").forEach((b) => b.classList.toggle("active", b.dataset.section === section));
+  root()
+    .querySelectorAll<HTMLElement>("[data-section]")
+    .forEach((b) => b.classList.toggle("active", b.dataset.section === section));
   document.getElementById("settings-title")!.textContent = SECTIONS.find(([id]) => id === section)![1];
   panel().innerHTML = render[section]();
   placeThumbs();
@@ -304,11 +640,20 @@ function show(section: string) {
 async function renderLabelRules() {
   const box = document.getElementById("ai-label-rules");
   if (!box) return;
-  const labels = await invoke<{ id: string; name: string; kind: string }[]>("labels", { accounts: null }).catch(() => []);
-  const names = [...new Set(labels.filter((l) => l.kind === "user").map((l) => l.name))].sort((a, b) => a.localeCompare(b));
+  const labels = await invoke<{ id: string; name: string; kind: string }[]>("labels", { accounts: null }).catch(
+    () => [],
+  );
+  const names = [...new Set(labels.filter((l) => l.kind === "user").map((l) => l.name))].sort((a, b) =>
+    a.localeCompare(b),
+  );
   box.innerHTML = names.length
     ? `<p class="group-note">Say when each label fits. Labels left empty are never used.</p>` +
-      names.map((n) => `<label class="ai-rule"><span>${esc(n)}</span><input type="text" data-ai-label="${esc(n)}" value="${esc(settings.ai.labelRules[n] ?? "")}" placeholder="e.g. Invoices and receipts from suppliers" spellcheck="false" /></label>`).join("") +
+      names
+        .map(
+          (n) =>
+            `<label class="ai-rule"><span>${esc(n)}</span><input type="text" data-ai-label="${esc(n)}" value="${esc(settings.ai.labelRules[n] ?? "")}" placeholder="e.g. Invoices and receipts from suppliers" spellcheck="false" /></label>`,
+        )
+        .join("") +
       `<div class="ai-label-now"><p class="group-note" id="ai-label-status">New mail is labelled as it arrives. To apply the rules to emails already in your Inbox:</p>
         <button class="secondary" data-cmd="label-inbox">Label my Inbox now</button></div>`
     : `<p class="group-note">You have no labels yet. Create one from an email's Label menu, then describe it here.</p>`;
@@ -322,14 +667,18 @@ async function refreshOpenAtLogin() {
 
 /** The settings page's preview: the open account's signature, or the default one in Composer. */
 const previewSignature = () =>
-  renderSignaturePreview(document.getElementById("sig-preview") as HTMLIFrameElement | null, signatureFor(current === "accounts" ? accountOpen ?? undefined : undefined).html);
+  renderSignaturePreview(
+    document.getElementById("sig-preview") as HTMLIFrameElement | null,
+    signatureFor(current === "accounts" ? (accountOpen ?? undefined) : undefined).html,
+  );
 
 /** Live preview of an HTML signature. Sandboxed without scripts, so pasted markup can't run code. */
 export function renderSignaturePreview(frame: HTMLIFrameElement | null, html: string) {
   if (!frame) return;
   frame.onload = () => (frame.style.height = `${frame.contentDocument?.documentElement.scrollHeight ?? 60}px`);
   frame.srcdoc = `<style>body{margin:0;padding:10px 12px;font:14px/1.5 -apple-system,system-ui,sans-serif;color:#1d1d1f}</style>${
-    html || '<span style="color:#999">Nothing yet</span>'}`;
+    html || '<span style="color:#999">Nothing yet</span>'
+  }`;
 }
 
 /** Whether "Different model per task" is open, so re-rendering the section keeps it as the user left it. */
@@ -344,15 +693,41 @@ const AI_TASKS: [task: "writing" | "sorting", label: string, hint: string][] = [
 function taskRows(task: string, label: string, hint: string) {
   const own = settings.ai.tasks[task as "writing" | "sorting"];
   const p = AI_PROVIDERS.find((x) => x.id === own.provider);
-  const model = !p ? "" : p.models.length
-    ? row(`${label} model`, select(`ai.tasks.${task}.model`, p.models.map((m) => [m, m])))
-    : row(`${label} model`, `<input type="text" data-path="ai.tasks.${task}.model" value="${esc(own.model)}" placeholder="model-id" spellcheck="false" />`, "Exactly as the provider names it.");
+  const model = !p
+    ? ""
+    : p.models.length
+      ? row(
+          `${label} model`,
+          select(
+            `ai.tasks.${task}.model`,
+            p.models.map((m) => [m, m]),
+          ),
+        )
+      : row(
+          `${label} model`,
+          `<input type="text" data-path="ai.tasks.${task}.model" value="${esc(own.model)}" placeholder="model-id" spellcheck="false" />`,
+          "Exactly as the provider names it.",
+        );
   const key = p?.needsKey && p.id !== settings.ai.provider ? keyRow(p, `${p.name} key`) : "";
-  return row(label, select(`ai.tasks.${task}.provider`, [["", "Same as default"], ...AI_PROVIDERS.map((x): [string, string] => [x.id, x.name])]), hint) + model + key;
+  return (
+    row(
+      label,
+      select(`ai.tasks.${task}.provider`, [
+        ["", "Same as default"],
+        ...AI_PROVIDERS.map((x): [string, string] => [x.id, x.name]),
+      ]),
+      hint,
+    ) +
+    model +
+    key
+  );
 }
 
 /** A provider's key: a field to paste it, or once saved, Replace and Remove. */
-const keyRow = (p: (typeof AI_PROVIDERS)[number], label = "API key") => `<div class="setting-row key-row" data-key-provider="${p.id}">
+const keyRow = (
+  p: (typeof AI_PROVIDERS)[number],
+  label = "API key",
+) => `<div class="setting-row key-row" data-key-provider="${p.id}">
     <div class="setting-text"><strong>${esc(label)}</strong><span class="ai-key-status">Checking…</span>
       ${p.keyUrl ? `<a href="${p.keyUrl}" data-cmd="open-link" class="get-key">Get a ${esc(p.name.split(" ")[0])} key</a>` : ""}</div>
     <div class="setting-control key-control"><input type="password" class="ai-key" placeholder="Paste your key" autocomplete="off" spellcheck="false" />
@@ -379,44 +754,53 @@ function startRecording(action: string, button: HTMLElement) {
   button.innerHTML = "Press keys…";
 }
 
-window.addEventListener("keydown", async (e) => {
-  if (!recording) return;
-  if (["Shift", "Meta", "Control", "Alt"].includes(e.key)) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
-  const action = recording;
-  recording = null;
-  if (e.key === "Escape") return show("shortcuts");
-  const combo = comboOf(e);
-  const keys = keysFor(settings.shortcuts);
-  const owner = Object.keys(keys).find((a) => a !== action && keys[a].includes(combo));
-  if (owner) {
-    const label = ACTIONS.find(([a]) => a === owner)![1];
-    const target = ACTIONS.find(([a]) => a === action)![1];
-    const replace = await ask({
-      title: `Replace ${formatCombo(combo)}?`,
-      message: `${formatCombo(combo)} is already used for “${label}”. Replacing it makes ${formatCombo(combo)} do “${target}” instead.`,
-      confirm: "Replace",
-    });
-    if (!replace) {
-      show("shortcuts");
-      document.getElementById("shortcut-note")!.textContent = `Kept ${formatCombo(combo)} for "${label}".`;
-      return;
+window.addEventListener(
+  "keydown",
+  async (e) => {
+    if (!recording) return;
+    if (["Shift", "Meta", "Control", "Alt"].includes(e.key)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const action = recording;
+    recording = null;
+    if (e.key === "Escape") return show("shortcuts");
+    const combo = comboOf(e);
+    const keys = keysFor(settings.shortcuts);
+    const owner = Object.keys(keys).find((a) => a !== action && keys[a].includes(combo));
+    if (owner) {
+      const label = ACTIONS.find(([a]) => a === owner)![1];
+      const target = ACTIONS.find(([a]) => a === action)![1];
+      const replace = await ask({
+        title: `Replace ${formatCombo(combo)}?`,
+        message: `${formatCombo(combo)} is already used for “${label}”. Replacing it makes ${formatCombo(combo)} do “${target}” instead.`,
+        confirm: "Replace",
+      });
+      if (!replace) {
+        show("shortcuts");
+        document.getElementById("shortcut-note")!.textContent = `Kept ${formatCombo(combo)} for "${label}".`;
+        return;
+      }
     }
-  }
-  const next = { ...settings.shortcuts };
-  if (owner) next[owner] = keys[owner].filter((c) => c !== combo);
-  if (!keys[action].includes(combo)) next[action] = [...keys[action], combo];
-  setSetting("shortcuts", next);
-  show("shortcuts");
-}, true);
+    const next = { ...settings.shortcuts };
+    if (owner) next[owner] = keys[owner].filter((c) => c !== combo);
+    if (!keys[action].includes(combo)) next[action] = [...keys[action], combo];
+    setSetting("shortcuts", next);
+    show("shortcuts");
+  },
+  true,
+);
 
 // ---- wiring ----
 
 export function initSettings(c: Ctx) {
   ctx = c;
   const nav = root().querySelector(".settings-nav")!;
-  nav.innerHTML = `<button id="settings-close" class="icon settings-close" data-tip="Close (Esc)"><i class="ti ti-x"></i></button>` + SECTIONS.map(([id, label, icon]) => `<button data-section="${id}"><i class="${iconClass(icon)}"></i><span>${label}</span></button>`).join("");
+  nav.innerHTML =
+    `<button id="settings-close" class="icon settings-close" data-tip="Close (Esc)"><i class="ti ti-x"></i></button>` +
+    SECTIONS.map(
+      ([id, label, icon]) =>
+        `<button data-section="${id}"><i class="${iconClass(icon)}"></i><span>${label}</span></button>`,
+    ).join("");
   nav.addEventListener("click", (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-section]");
     if (b) show(b.dataset.section!);
@@ -467,14 +851,25 @@ export function initSettings(c: Ctx) {
     const task = /^ai\.tasks\.(\w+)\.provider$/.exec(path)?.[1];
     if (task) setSetting(`ai.tasks.${task}.model`, AI_PROVIDERS.find((x) => x.id === value)?.models[0] ?? "");
     // Re-render where one choice changes which other options make sense.
-    if (path === "ai.provider" || path === "ai.model" || path === "ai.autoLabel" || path === "composer.signatureMode" || task) show(current);
+    if (
+      path === "ai.provider" ||
+      path === "ai.model" ||
+      path === "ai.autoLabel" ||
+      path === "composer.signatureMode" ||
+      task
+    )
+      show(current);
     if (path === "composer.signatureHtml") previewSignature();
   };
   panel().addEventListener("change", onEdit);
   // toggle doesn't bubble, so it's caught on the way down.
-  panel().addEventListener("toggle", (e) => {
-    if ((e.target as HTMLElement).id === "ai-tasks") tasksOpen = (e.target as HTMLDetailsElement).open;
-  }, true);
+  panel().addEventListener(
+    "toggle",
+    (e) => {
+      if ((e.target as HTMLElement).id === "ai-tasks") tasksOpen = (e.target as HTMLDetailsElement).open;
+    },
+    true,
+  );
   panel().addEventListener("input", (e) => {
     const el = e.target as HTMLElement;
     if (el.matches("textarea, input[type=text], input[type=url]")) onEdit(e);
@@ -496,7 +891,11 @@ export function initSettings(c: Ctx) {
     if (b.dataset.pickAccount === "signature" && accountOpen) {
       const mode = b.dataset.value as "default" | "text" | "html";
       // A new account signature starts as a copy of the default, to edit from.
-      setAccountSetting(accountOpen, "signature", mode === "default" ? undefined : { ...signatureFor(accountOpen), mode });
+      setAccountSetting(
+        accountOpen,
+        "signature",
+        mode === "default" ? undefined : { ...signatureFor(accountOpen), mode },
+      );
       return show("accounts");
     }
     if (b.dataset.pickAccount && accountOpen) {
@@ -519,7 +918,9 @@ export function initSettings(c: Ctx) {
       case "signout":
         return accountOpen && ctx.onSignOut(accountOpen);
       case "test-notification":
-        return invoke("test_notification").catch((e) => ask({ title: "Couldn't show a notification", message: String(e), confirm: "OK" }));
+        return invoke("test_notification").catch((e) =>
+          ask({ title: "Couldn't show a notification", message: String(e), confirm: "OK" }),
+        );
       case "add-account": {
         const label = b.innerHTML;
         b.textContent = "Finish signing in in your browser…";
@@ -569,7 +970,11 @@ export function initSettings(c: Ctx) {
         say("message-ai", "Reading your newest Inbox emails…", true);
         try {
           const n = await invoke<number>("ai_label_inbox", { accounts: null });
-          if (n) say("circle-check", `Labelled ${n} ${n === 1 ? "email" : "emails"}. Each shows "Labelled by AI" with Undo.`);
+          if (n)
+            say(
+              "circle-check",
+              `Labelled ${n} ${n === 1 ? "email" : "emails"}. Each shows "Labelled by AI" with Undo.`,
+            );
           else say("info-circle", "No email in your Inbox fits a label.");
         } catch (err) {
           say("alert-circle", String(err));
@@ -630,4 +1035,3 @@ export function closeSettings() {
 }
 
 export const settingsOpen = () => !root().hidden && !root().classList.contains("closing");
-

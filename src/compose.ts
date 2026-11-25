@@ -7,7 +7,11 @@ const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 /** Plain text as editor paragraphs, one per line. */
-export const textToHtml = (text: string) => text.split("\n").map((l) => `<p>${escapeHtml(l)}</p>`).join("");
+export const textToHtml = (text: string) =>
+  text
+    .split("\n")
+    .map((l) => `<p>${escapeHtml(l)}</p>`)
+    .join("");
 
 /**
  * The HTML signature as one block in the editor. It holds no markup of its own: the editor shows a sandboxed preview
@@ -27,8 +31,13 @@ export function blockText(el: Element) {
   const copy = el.cloneNode(true) as Element;
   copy.querySelectorAll("br").forEach((br) => br.replaceWith("\n"));
   copy.querySelectorAll("td, th").forEach((c) => c.append(" "));
-  copy.querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote, pre, table").forEach((b) => b.append("\n"));
-  return (copy.textContent ?? "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  copy
+    .querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote, pre, table")
+    .forEach((b) => b.append("\n"));
+  return (copy.textContent ?? "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**
@@ -42,8 +51,16 @@ export const Quote = Node.create({
   atom: true,
   selectable: true,
   addAttributes: () => ({
-    html: { default: "", parseHTML: (el) => el.getAttribute("data-quote") ?? el.innerHTML, renderHTML: (a) => ({ "data-quote": a.html }) },
-    text: { default: "", parseHTML: (el) => el.getAttribute("data-text") ?? blockText(el), renderHTML: (a) => ({ "data-text": a.text }) },
+    html: {
+      default: "",
+      parseHTML: (el) => el.getAttribute("data-quote") ?? el.innerHTML,
+      renderHTML: (a) => ({ "data-quote": a.html }),
+    },
+    text: {
+      default: "",
+      parseHTML: (el) => el.getAttribute("data-text") ?? blockText(el),
+      renderHTML: (a) => ({ "data-text": a.text }),
+    },
   }),
   parseHTML: () => [{ tag: "div[data-quote]" }, { tag: "blockquote.gmail_quote", priority: 60 }],
   renderHTML: ({ HTMLAttributes }) => ["div", HTMLAttributes],
@@ -63,7 +80,8 @@ export function hasMessage(doc: PMNode) {
     const node = doc.child(i);
     if (["signature", "blockquote", "quote"].includes(node.type.name) || node.textContent === "-- ") return false;
     // A reply's "On … wrote:" line, right before its quote.
-    if (/wrote:\s*$/.test(node.textContent) && ["blockquote", "quote"].includes(doc.maybeChild(i + 1)?.type.name ?? "")) return false;
+    if (/wrote:\s*$/.test(node.textContent) && ["blockquote", "quote"].includes(doc.maybeChild(i + 1)?.type.name ?? ""))
+      return false;
     if (node.textContent.trim() || node.type.name !== "paragraph") return true;
   }
   return false;
@@ -73,19 +91,31 @@ const QUOTE_STYLE = "margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1
 
 /** An attribute value as the editor's HTML serialises it, back to the HTML it holds. */
 const unescapeAttr = (s: string) =>
-  s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, "\u00a0").replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  s
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, "\u00a0")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
 
 /** Editor HTML as sent: email-safe paragraph spacing, Gmail's quote style, the quoted email whole, and the real HTML
  *  signature. Quotes are set aside first, so the rewrites never touch their markup. */
 export function emailHtml(html: string, sigHtml: string) {
   const quotes: string[] = [];
   return html
-    .replace(/<div data-quote="([^"]*)"(?: data-text="[^"]*")?><\/div>/g, (_, q: string) => `\u0000${quotes.push(unescapeAttr(q)) - 1}\u0000`)
+    .replace(
+      /<div data-quote="([^"]*)"(?: data-text="[^"]*")?><\/div>/g,
+      (_, q: string) => `\u0000${quotes.push(unescapeAttr(q)) - 1}\u0000`,
+    )
     .replace(/<p><\/p>/g, "<p><br></p>")
     .replace(/<p>/g, '<p style="margin:0">')
     .replace(/<blockquote>/g, `<blockquote style="${QUOTE_STYLE}">`)
     .replace(/<div data-signature="[^"]*"><\/div>/g, () => `<div class="signature">${sigHtml}</div>`)
-    .replace(/\u0000(\d+)\u0000/g, (_, i: string) => `<blockquote class="gmail_quote" style="${QUOTE_STYLE}">${quotes[Number(i)]}</blockquote>`);
+    .replace(
+      /\u0000(\d+)\u0000/g,
+      (_, i: string) => `<blockquote class="gmail_quote" style="${QUOTE_STYLE}">${quotes[Number(i)]}</blockquote>`,
+    );
 }
 
 /** Plain-text version of the editor document: "> " quotes, list markers, link URLs and the "-- " signature kept. */
@@ -135,7 +165,10 @@ export function docToText(doc: PMNode, sigText = ""): string {
       case "signature":
         return ["-- ", ...sigText.trim().split("\n")];
       case "quote":
-        return String(n.attrs.text).trimEnd().split("\n").map((l) => (l ? `> ${l}` : ">"));
+        return String(n.attrs.text)
+          .trimEnd()
+          .split("\n")
+          .map((l) => (l ? `> ${l}` : ">"));
       case "horizontalRule":
         return ["---"];
       default:

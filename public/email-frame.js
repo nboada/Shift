@@ -22,7 +22,8 @@
     if (!first) return;
     // The top-level block that holds the quote, so everything after it is quoted too.
     let start = first;
-    while (start.parentElement && start.parentElement !== doc.body && !start.previousElementSibling) start = start.parentElement;
+    while (start.parentElement && start.parentElement !== doc.body && !start.previousElementSibling)
+      start = start.parentElement;
     const range = doc.createRange();
     range.setStart(doc.body, 0);
     range.setEndBefore(start);
@@ -74,7 +75,9 @@
     e.preventDefault();
     const raw = a.getAttribute("href") ?? a.getAttributeNS("http://www.w3.org/1999/xlink", "href") ?? "";
     let url = "";
-    try { url = new URL(raw, "about:blank").href; } catch {}
+    try {
+      url = new URL(raw, "about:blank").href;
+    } catch {}
     if (/^(https?|mailto):/i.test(url)) post({ type: "link", url });
   });
 
@@ -85,7 +88,9 @@
     if (a === hovered) return;
     hovered = a;
     let url = "";
-    try { url = a ? new URL(a.getAttribute("href"), "about:blank").href : ""; } catch {}
+    try {
+      url = a ? new URL(a.getAttribute("href"), "about:blank").href : "";
+    } catch {}
     post({ type: "hover", url: /^(https?|mailto):/i.test(url) ? url : "" });
   });
   doc.documentElement.addEventListener("mouseleave", () => {
@@ -104,7 +109,9 @@
     if (e.source !== parent || e.data?.type !== "cid") return;
     for (const img of doc.querySelectorAll('img[src^="cid:" i]')) {
       let ref = img.getAttribute("src").slice(4);
-      try { ref = decodeURIComponent(ref); } catch {}
+      try {
+        ref = decodeURIComponent(ref);
+      } catch {}
       if (ref.toLowerCase() === String(e.data.cid).toLowerCase()) img.src = e.data.src;
     }
   });

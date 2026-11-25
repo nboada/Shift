@@ -4,7 +4,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { iconHtml } from "./icons";
 
-type Item = { account: string; id: string; group: "newsletter" | "notification" | "done" | "keep"; sender: string; subject: string };
+type Item = {
+  account: string;
+  id: string;
+  group: "newsletter" | "notification" | "done" | "keep";
+  sender: string;
+  subject: string;
+};
 
 type Context = {
   scope: () => string[] | null;
@@ -43,7 +49,8 @@ export function initCleanup(context: Context) {
     const box = e.target as HTMLInputElement;
     const group = box.closest<HTMLElement>(".cu-group");
     if (!group) return;
-    if (box.dataset.all !== undefined) group.querySelectorAll<HTMLInputElement>("li input").forEach((b) => (b.checked = box.checked));
+    if (box.dataset.all !== undefined)
+      group.querySelectorAll<HTMLInputElement>("li input").forEach((b) => (b.checked = box.checked));
     updateCounts(group);
   });
   body().addEventListener("click", (e) => {
@@ -147,11 +154,17 @@ function updateCounts(group: HTMLElement) {
 /** One `modify_many` (Gmail's batch call) per account; resolves with the emails whose account succeeded. */
 async function setInbox(list: { account: string; id: string }[], inInbox: boolean) {
   const accounts = [...new Set(list.map((i) => i.account))];
-  const results = await Promise.allSettled(accounts.map((account) =>
-    invoke("modify_many", {
-      account, ids: list.filter((i) => i.account === account).map((i) => i.id),
-      add: inInbox ? ["INBOX"] : [], remove: inInbox ? [] : ["INBOX"], trash: false,
-    })));
+  const results = await Promise.allSettled(
+    accounts.map((account) =>
+      invoke("modify_many", {
+        account,
+        ids: list.filter((i) => i.account === account).map((i) => i.id),
+        add: inInbox ? ["INBOX"] : [],
+        remove: inInbox ? [] : ["INBOX"],
+        trash: false,
+      }),
+    ),
+  );
   const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
   const ok = new Set(accounts.filter((_, i) => results[i].status === "fulfilled"));
   return { done: list.filter((i) => ok.has(i.account)), error: failed && String(failed.reason) };

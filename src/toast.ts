@@ -26,14 +26,22 @@ export function toast(msg: string, { action, ms = action ? 8000 : 4000, icon }: 
   const text = Object.assign(document.createElement("span"), { className: "toast-text", textContent: msg });
   el.append(text);
   if (action) {
-    const btn = Object.assign(document.createElement("button"), { type: "button", className: "toast-action", textContent: action.label });
+    const btn = Object.assign(document.createElement("button"), {
+      type: "button",
+      className: "toast-action",
+      textContent: action.label,
+    });
     btn.onclick = () => {
       close();
       action.run();
     };
     el.append(btn);
   }
-  const x = Object.assign(document.createElement("button"), { type: "button", className: "toast-close", ariaLabel: "Dismiss" });
+  const x = Object.assign(document.createElement("button"), {
+    type: "button",
+    className: "toast-close",
+    ariaLabel: "Dismiss",
+  });
   x.innerHTML = `<i class="${iconClass("x")}" aria-hidden="true"></i>`;
   x.onclick = () => close();
   el.append(x);

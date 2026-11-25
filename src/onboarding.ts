@@ -55,18 +55,37 @@ const switchRow = (id: string, icon: string, label: string, hint: string, checke
     <input type="checkbox" class="switch" role="switch" id="${id}" ${checked ? "checked" : ""} /></label>`;
 
 const HEAD: Record<Step, [icon: string, title: string, lede: string]> = {
-  accounts: ["users", "Your accounts", "Every Gmail account in one inbox, each with its own colour. Add the rest now, or later in Settings."],
-  look: ["palette", "Make it yours", "Pick a layout and a theme. You'll see them on your inbox right away, and can change them in Settings."],
-  notify: ["bell", "Stay in the loop", "Shift tells you about new Inbox mail. Closing the window keeps it running in the Dock."],
-  keys: ["keyboard", "Fly through your inbox", "Everything works from the keyboard. Start with these; Settings → Shortcuts changes any of them."],
+  accounts: [
+    "users",
+    "Your accounts",
+    "Every Gmail account in one inbox, each with its own colour. Add the rest now, or later in Settings.",
+  ],
+  look: [
+    "palette",
+    "Make it yours",
+    "Pick a layout and a theme. You'll see them on your inbox right away, and can change them in Settings.",
+  ],
+  notify: [
+    "bell",
+    "Stay in the loop",
+    "Shift tells you about new Inbox mail. Closing the window keeps it running in the Dock.",
+  ],
+  keys: [
+    "keyboard",
+    "Fly through your inbox",
+    "Everything works from the keyboard. Start with these; Settings → Shortcuts changes any of them.",
+  ],
 };
 
 const views: Record<Step, () => string> = {
   accounts: () => `
-    <ul class="ob-accounts">${ctx.accounts().map((a) => {
-      const name = accountSettings(a).title || a;
-      return `<li><span class="account-avatar acct-${accountSettings(a).color}">${esc(name[0]?.toUpperCase() ?? "?")}</span><span>${esc(name)}</span>${iconHtml("circle-check")}</li>`;
-    }).join("")}</ul>
+    <ul class="ob-accounts">${ctx
+      .accounts()
+      .map((a) => {
+        const name = accountSettings(a).title || a;
+        return `<li><span class="account-avatar acct-${accountSettings(a).color}">${esc(name[0]?.toUpperCase() ?? "?")}</span><span>${esc(name)}</span>${iconHtml("circle-check")}</li>`;
+      })
+      .join("")}</ul>
     <button type="button" class="ob-add" data-cmd="add">${iconHtml("plus")} Add another account</button>
     <p class="ob-note" id="ob-status"></p>`,
   look: () => `
@@ -84,10 +103,19 @@ const views: Record<Step, () => string> = {
     <p class="ob-note" id="ob-status"></p>`,
   keys: () => {
     const keys: [string, string][] = [
-      ["archive", "Archive"], ["trash", "Delete"], ["reply", "Reply"], ["compose", "New email"],
-      ["next", "Next email"], ["prev", "Previous email"], ["palette", "Every command"], ["undo", "Undo"],
+      ["archive", "Archive"],
+      ["trash", "Delete"],
+      ["reply", "Reply"],
+      ["compose", "New email"],
+      ["next", "Next email"],
+      ["prev", "Previous email"],
+      ["palette", "Every command"],
+      ["undo", "Undo"],
     ];
-    return `<ul class="ob-keys">${keys.filter(([a]) => ctx.keyLabel(a)).map(([a, label]) => `<li><kbd>${esc(ctx.keyLabel(a)!)}</kbd><span>${label}</span></li>`).join("")}</ul>`;
+    return `<ul class="ob-keys">${keys
+      .filter(([a]) => ctx.keyLabel(a))
+      .map(([a, label]) => `<li><kbd>${esc(ctx.keyLabel(a)!)}</kbd><span>${label}</span></li>`)
+      .join("")}</ul>`;
   },
 };
 
@@ -121,7 +149,10 @@ function render() {
     <button type="button" class="primary ob-next" data-cmd="next">${i === STEPS.length - 1 ? "Start using Shift" : `Continue ${iconHtml("arrow-right")}`}</button>`;
   if (step === "notify") {
     // macOS owns the login item, so the switch shows the real state.
-    void invoke<boolean>("open_at_login").then((on) => ((document.getElementById("ob-login") as HTMLInputElement).checked = on), () => {});
+    void invoke<boolean>("open_at_login").then(
+      (on) => ((document.getElementById("ob-login") as HTMLInputElement).checked = on),
+      () => {},
+    );
   }
   root().querySelector<HTMLElement>(".ob-next")!.focus();
 }

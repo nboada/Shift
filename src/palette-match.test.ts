@@ -11,5 +11,8 @@ test("substring beats letters-in-order, word starts beat mid-word", () => {
 test("empty query keeps the original order", () => {
   const items = [{ label: "B" }, { label: "A" }];
   expect(rank(items, "").map((x) => x.label)).toEqual(["B", "A"]);
-  expect(rank([{ label: "Reply" }, { label: "Reply all" }, { label: "Forward" }], "rep").map((x) => x.label)).toEqual(["Reply", "Reply all"]);
+  expect(rank([{ label: "Reply" }, { label: "Reply all" }, { label: "Forward" }], "rep").map((x) => x.label)).toEqual([
+    "Reply",
+    "Reply all",
+  ]);
 });

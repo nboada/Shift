@@ -17,7 +17,8 @@ function findQuote(doc: PMNode): [number, PMNode, PMNode] | null {
   let found: [number, PMNode, PMNode] | null = null;
   let prev: [number, PMNode] | null = null;
   doc.forEach((node, offset) => {
-    if (["blockquote", "quote"].includes(node.type.name) && prev && /wrote:\s*$/.test(prev[1].textContent)) found = [prev[0], prev[1], node];
+    if (["blockquote", "quote"].includes(node.type.name) && prev && /wrote:\s*$/.test(prev[1].textContent))
+      found = [prev[0], prev[1], node];
     prev = [offset, node];
   });
   return found;
@@ -39,21 +40,29 @@ const QuoteFold = Extension.create({
           if (!quote) return null;
           const [from, header, block] = quote;
           const folded = quoteFoldKey.getState(state)!;
-          const toggle = Decoration.widget(from, (view) => {
-            const b = document.createElement("button");
-            b.type = "button";
-            b.className = "quote-toggle";
-            b.textContent = "•••";
-            b.title = folded ? "Show quoted text" : "Hide quoted text";
-            b.setAttribute("aria-expanded", String(!folded));
-            b.contentEditable = "false";
-            b.addEventListener("mousedown", (e) => e.preventDefault());
-            b.addEventListener("click", () => view.dispatch(view.state.tr.setMeta(quoteFoldKey, !folded)));
-            return b;
-          }, { side: -1, key: folded ? "quote-folded" : "quote-open", ignoreSelection: true, stopEvent: () => true });
+          const toggle = Decoration.widget(
+            from,
+            (view) => {
+              const b = document.createElement("button");
+              b.type = "button";
+              b.className = "quote-toggle";
+              b.textContent = "•••";
+              b.title = folded ? "Show quoted text" : "Hide quoted text";
+              b.setAttribute("aria-expanded", String(!folded));
+              b.contentEditable = "false";
+              b.addEventListener("mousedown", (e) => e.preventDefault());
+              b.addEventListener("click", () => view.dispatch(view.state.tr.setMeta(quoteFoldKey, !folded)));
+              return b;
+            },
+            { side: -1, key: folded ? "quote-folded" : "quote-open", ignoreSelection: true, stopEvent: () => true },
+          );
           const hidden = folded
-            ? [Decoration.node(from, from + header.nodeSize, { class: "quote-folded" }),
-              Decoration.node(from + header.nodeSize, from + header.nodeSize + block.nodeSize, { class: "quote-folded" })]
+            ? [
+                Decoration.node(from, from + header.nodeSize, { class: "quote-folded" }),
+                Decoration.node(from + header.nodeSize, from + header.nodeSize + block.nodeSize, {
+                  class: "quote-folded",
+                }),
+              ]
             : [];
           return DecorationSet.create(state.doc, [toggle, ...hidden]);
         },
@@ -66,7 +75,10 @@ type Command = "bold" | "italic" | "underline" | "link" | "bulletList" | "ordere
 
 /** Tiptap editor for the composer body, with the floating format bar that shows over a selection. */
 export function createEditor(
-  element: HTMLElement, bar: HTMLElement, onChange: () => void, signatureHtml: () => string,
+  element: HTMLElement,
+  bar: HTMLElement,
+  onChange: () => void,
+  signatureHtml: () => string,
   renderQuote: (frame: HTMLIFrameElement, html: string) => void,
 ) {
   const linkInput = bar.querySelector<HTMLInputElement>("input")!;
@@ -77,15 +89,17 @@ export function createEditor(
     extensions: [
       ...extensions.filter((e) => e !== Signature && e !== Quote),
       Quote.extend({
-        addNodeView: () => ({ node }) => {
-          const dom = document.createElement("div");
-          dom.className = "compose-quote";
-          const frame = document.createElement("iframe");
-          frame.title = "Quoted email";
-          dom.append(frame);
-          renderQuote(frame, node.attrs.html);
-          return { dom };
-        },
+        addNodeView:
+          () =>
+          ({ node }) => {
+            const dom = document.createElement("div");
+            dom.className = "compose-quote";
+            const frame = document.createElement("iframe");
+            frame.title = "Quoted email";
+            dom.append(frame);
+            renderQuote(frame, node.attrs.html);
+            return { dom };
+          },
       }),
       QuoteFold,
       Signature.extend({
@@ -118,7 +132,13 @@ export function createEditor(
     onSelectionUpdate: ({ editor }) => {
       // Until something is written, a click on a blank line below the first starts typing on the first one.
       const { doc, selection } = editor.state;
-      if (selection.empty && !hasMessage(doc) && selection.$from.depth === 1 && selection.$from.index(0) > 0 && !selection.$from.parent.textContent) {
+      if (
+        selection.empty &&
+        !hasMessage(doc) &&
+        selection.$from.depth === 1 &&
+        selection.$from.index(0) > 0 &&
+        !selection.$from.parent.textContent
+      ) {
         editor.commands.setTextSelection(1);
       }
       place();
@@ -134,7 +154,8 @@ export function createEditor(
     const { from, to, empty } = editor.state.selection;
     bar.hidden = !linking && (empty || !editor.isFocused);
     if (bar.hidden) return;
-    for (const b of bar.querySelectorAll<HTMLElement>("[data-cmd]")) b.classList.toggle("on", editor.isActive(b.dataset.cmd!));
+    for (const b of bar.querySelectorAll<HTMLElement>("[data-cmd]"))
+      b.classList.toggle("on", editor.isActive(b.dataset.cmd!));
     const a = editor.view.coordsAtPos(from);
     const b = editor.view.coordsAtPos(to);
     const x = (a.left + b.right) / 2 - bar.offsetWidth / 2;
@@ -203,12 +224,20 @@ export function createEditor(
   // Native menu, so Cut/Copy/Paste behave like the system's (WebKit blocks scripted paste).
   element.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    const check = (cmd: Command, text: string, accelerator?: string) =>
-      ({ text, accelerator, checked: editor.isActive(cmd), action: run[cmd] });
+    const check = (cmd: Command, text: string, accelerator?: string) => ({
+      text,
+      accelerator,
+      checked: editor.isActive(cmd),
+      action: run[cmd],
+    });
     const sep = { item: "Separator" } as const;
     Menu.new({
       items: [
-        { item: "Cut" }, { item: "Copy" }, { item: "Paste" }, { item: "SelectAll" }, sep,
+        { item: "Cut" },
+        { item: "Copy" },
+        { item: "Paste" },
+        { item: "SelectAll" },
+        sep,
         check("bold", "Bold", "CmdOrCtrl+B"),
         check("italic", "Italic", "CmdOrCtrl+I"),
         check("underline", "Underline", "CmdOrCtrl+U"),
