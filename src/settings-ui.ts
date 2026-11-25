@@ -659,7 +659,7 @@ async function renderLabelRules() {
             `<label class="ai-rule"><span>${esc(n)}</span><input type="text" data-ai-label="${esc(n)}" value="${esc(settings.ai.labelRules[n] ?? "")}" placeholder="e.g. Invoices and receipts from suppliers" spellcheck="false" /></label>`,
         )
         .join("") +
-      `<div class="ai-label-now"><p class="group-note" id="ai-label-status">New mail is labelled as it arrives. To apply the rules to emails already in your Inbox:</p>
+      `<div class="ai-label-now"><p class="group-note">New mail is labelled as it arrives. To apply the rules to emails already in your Inbox:</p>
         <button class="secondary" data-cmd="label-inbox">Label my Inbox now</button></div>`
     : `<p class="group-note">You have no labels yet. Create one from an email's Label menu, then describe it here.</p>`;
 }
@@ -980,26 +980,35 @@ export function initSettings(c: Ctx) {
         return;
       }
       case "label-inbox": {
-        const status = document.getElementById("ai-label-status")!;
-        const say = (icon: string, text: string, working = false) =>
-          (status.innerHTML = `<i class="${iconClass(icon)}${working ? " ai-working" : ""}" aria-hidden="true"></i><span${working ? ' class="ai-shimmer"' : ""}>${esc(text)}</span>`);
-        const label = b.textContent;
-        (b as HTMLButtonElement).disabled = true;
-        b.textContent = "Labelling…";
-        say("message-ai", "Reading your newest Inbox emails…", true);
+        // Runs in the background with a corner card, like Clean up, so Settings can close and work carries on.
+        const card = document.getElementById("ai-label-card")!;
+        if (!card.hidden && card.querySelector(".cu-spinner")) return;
+        closeSettings();
+        const say = (html: string) => {
+          card.innerHTML = html;
+          card.hidden = false;
+        };
+        const done = (icon: string, title: string, note: string) =>
+          say(`<i class="${iconClass(icon)}"></i><span><strong>${esc(title)}</strong><small>${esc(note)}</small></span>
+            <button type="button" class="icon" aria-label="Dismiss"><i class="${iconClass("x")}"></i></button>`);
+        card.onclick = (e) => {
+          if ((e.target as Element).closest("button")) card.hidden = true;
+        };
+        say(
+          `<span class="cu-spinner small"></span><span><strong>Labelling your Inbox</strong><small>You can keep working</small></span>`,
+        );
         try {
           const n = await invoke<number>("ai_label_inbox", { accounts: null });
           if (n)
-            say(
+            done(
               "circle-check",
-              `Labelled ${n} ${n === 1 ? "email" : "emails"}. Each shows "Labelled by AI" with Undo.`,
+              `Labelled ${n} ${n === 1 ? "email" : "emails"}`,
+              `Each shows "Labelled by AI" with Undo`,
             );
-          else say("info-circle", "No email in your Inbox fits a label.");
+          else done("info-circle", "Nothing to label", "No unlabelled email fits a label");
         } catch (err) {
-          say("alert-circle", String(err));
+          done("alert-circle", "Couldn't label your Inbox", String(err));
         }
-        b.textContent = label;
-        (b as HTMLButtonElement).disabled = false;
         return;
       }
       case "reset-writing-rules":
