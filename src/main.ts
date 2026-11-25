@@ -1137,7 +1137,7 @@ function act(action: string, id = selected) {
   if (!t) return;
   if (mailbox === "SCHEDULED") return scheduledAction(action, t.id);
   // Replies need the thread's messages, so open it first.
-  if (["reply", "replyAll", "forward"].includes(action) && t.id !== selected) {
+  if (["reply", "replyAll", "forward", "aiReply"].includes(action) && t.id !== selected) {
     openThread(t.id).then(() => act(action, t.id));
     return;
   }
@@ -1175,6 +1175,8 @@ function act(action: string, id = selected) {
       return reply("all");
     case "forward":
       return reply("forward");
+    case "aiReply":
+      return reply(settings.composer.defaultReply === "all" ? "all" : "reply")?.then(aiDraftReply);
     case "move":
       return openMenu("move", t);
     case "label":
@@ -2466,6 +2468,28 @@ async function aiWrite(run: () => Promise<string>, range: { from: number; to: nu
   }
 }
 
+/** Drafts a reply to the open conversation into the composer, from the user's notes there if any. */
+function aiDraftReply() {
+  const state = compose;
+  if (!state) return;
+  const own = ownText();
+  const name = accountSettings(state.account).name;
+  const conversation = messages
+    .slice(-8)
+    .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
+    .join("\n\n---\n\n");
+  return aiWrite(
+    () =>
+      invoke<string>("ai_draft_reply", {
+        conversation,
+        notes: own.text,
+        me: name ? `${name} <${state.account}>` : state.account,
+        rules: settings.ai.writingRules,
+      }),
+    own,
+  );
+}
+
 $("#ai-write").addEventListener("click", () => {
   const state = compose;
   const anchor = $<HTMLButtonElement>("#ai-write");
@@ -2474,23 +2498,6 @@ $("#ai-write").addEventListener("click", () => {
   const own = ownText();
   const rewrite = (instruction: string) =>
     aiWrite(() => invoke<string>("ai_rewrite", { text: own.text, instruction, rules: settings.ai.writingRules }), own);
-  const draftReply = () => {
-    const name = accountSettings(state.account).name;
-    const conversation = messages
-      .slice(-8)
-      .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
-      .join("\n\n---\n\n");
-    void aiWrite(
-      () =>
-        invoke<string>("ai_draft_reply", {
-          conversation,
-          notes: own.text,
-          me: name ? `${name} <${state.account}>` : state.account,
-          rules: settings.ai.writingRules,
-        }),
-      own,
-    );
-  };
   // Edits only once there's text to edit, rather than a list of greyed-out ones.
   const items: MenuItem[] = [
     ...(state.context && messages.length
@@ -2509,7 +2516,7 @@ $("#ai-write").addEventListener("click", () => {
   ];
   const r = anchor.getBoundingClientRect();
   showMenu(editor.state.selection.empty ? null : "Edit the selection", items, { x: r.left, y: r.bottom + 6 }, (id) => {
-    if (id === "draft") draftReply();
+    if (id === "draft") void aiDraftReply();
     else if (id === "custom") {
       void askText({
         title: "Rewrite with AI",
