@@ -987,6 +987,14 @@ async fn apply_label_rules(
         .into_iter()
         .filter(|(n, _)| ids.contains_key(n))
         .collect();
+    // A conversation that already has one of the user's labels (theirs, a Gmail filter's or an earlier AI pass) is left
+    // alone, so the AI never adds a second, conflicting one; it only files unlabelled mail.
+    let mail: Vec<&db::NewMail> = {
+        let c = a.db();
+        mail.iter()
+            .filter(|m| !db::has_user_label(&c, &m.id).unwrap_or(true))
+            .collect()
+    };
     if rules.is_empty() || mail.is_empty() {
         return Ok(0);
     }

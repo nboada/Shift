@@ -328,7 +328,7 @@ const render: Record<string, () => string> = {
         row(
           "Auto-label new mail",
           toggle("ai.autoLabel"),
-          "Adds your labels to new Inbox mail when one clearly fits. You can undo each one.",
+          "Adds one of your labels to new Inbox mail when one clearly fits. Emails that already have a label are left as they are, and you can undo each one.",
         ) +
           (settings.ai.autoLabel
             ? `<div id="ai-label-rules" class="ai-label-rules"><p class="group-note">Loading your labels…</p></div>`
