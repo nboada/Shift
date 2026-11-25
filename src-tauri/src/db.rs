@@ -253,18 +253,19 @@ pub struct PendingOp {
     pub trash: bool,
 }
 
+/// Queues a label change for Gmail and returns its `seq`, which `done_pending` takes once Gmail has it.
 pub fn add_pending(
     conn: &Connection,
     thread: &str,
     add: &[String],
     remove: &[String],
     trash: bool,
-) -> Result<()> {
+) -> Result<i64> {
     conn.execute(
         "INSERT INTO pending_ops (thread_id, add_labels, remove_labels, trash) VALUES (?1, ?2, ?3, ?4)",
         params![thread, serde_json::to_string(add)?, serde_json::to_string(remove)?, trash],
     )?;
-    Ok(())
+    Ok(conn.last_insert_rowid())
 }
 
 /// Pending changes, oldest first, so they reach Gmail in the order the user made them.
