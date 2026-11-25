@@ -1316,7 +1316,8 @@ menu.addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
-const NEW_LABEL = "\u0000new-label";
+// Round-trips through a data attribute, so no characters HTML rewrites (a NUL becomes U+FFFD); Gmail label ids never hold ":".
+const NEW_LABEL = "new-label:";
 /** Gmail labels that act as folders: mail sits in at most one, and Archive is none of them. */
 const FOLDERS = ["INBOX", "SPAM", "TRASH"];
 
