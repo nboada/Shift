@@ -1167,7 +1167,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 /* Without these the generic primary hover and press would turn a red confirm button orange. */
 .ask .primary.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger), #fff 10%); }
 .ask .primary.danger:active:not(:disabled) { background: color-mix(in srgb, var(--danger), #000 8%); }
-.ask button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ask button:focus-visible { outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--text), transparent 86%); }
 
 .toast {
   position: fixed;
