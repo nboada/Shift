@@ -43,6 +43,7 @@ fn main() {
             "modify_many",
             "search",
             "send",
+            "rsvp",
             "get_settings",
             "search_local",
             "suggest_senders",

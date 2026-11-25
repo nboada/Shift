@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   sender TEXT NOT NULL, recipients TEXT NOT NULL, cc TEXT NOT NULL, date INTEGER NOT NULL,
   subject TEXT NOT NULL, message_id TEXT NOT NULL, refs TEXT NOT NULL,
-  html TEXT, text TEXT, reply_to TEXT NOT NULL DEFAULT '');
+  html TEXT, text TEXT, reply_to TEXT NOT NULL DEFAULT '', ics TEXT);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id, date);
 CREATE TABLE IF NOT EXISTS attachments (
   message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, idx INTEGER NOT NULL,
@@ -37,10 +37,11 @@ CREATE TABLE IF NOT EXISTS pending_ops (
 CREATE TABLE IF NOT EXISTS ai_labels (
   thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE, label_id TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (thread_id, label_id)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS rsvps (uid TEXT PRIMARY KEY, sequence INTEGER NOT NULL, status TEXT NOT NULL);
 ";
 
 /// Schema version, kept in `PRAGMA user_version`. Bump it and add an `if version < N` step to `open` for each change.
-const VERSION: i64 = 2;
+const VERSION: i64 = 3;
 
 pub fn open(path: &std::path::Path) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
@@ -63,6 +64,17 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
         tx.execute(
             "UPDATE threads SET full = 0 WHERE full = 1 AND id IN (SELECT thread_id FROM messages
                WHERE (html IS NULL AND text IS NULL) OR instr(coalesce(html, '') || coalesce(text, ''), char(65533)) > 0)",
+            [],
+        )?;
+    }
+    if version < 3 {
+        add_column(&tx, "messages", "ics TEXT")?;
+        // Fetch invites again so the reader can show their events. Only those with an .ics file are known; one sent
+        // as an inline calendar part alone shows once its thread is fetched again for another reason.
+        tx.execute(
+            "UPDATE threads SET full = 0 WHERE full = 1 AND id IN (SELECT m.thread_id FROM messages m
+               JOIN attachments a ON a.message_id = m.id
+               WHERE a.mime IN ('text/calendar', 'application/ics') OR lower(a.filename) LIKE '%.ics')",
             [],
         )?;
     }
@@ -395,11 +407,12 @@ pub fn upsert_thread(conn: &mut Connection, t: &gmail::Thread, full: bool) -> Re
     }
     for m in &t.messages {
         tx.execute(
-            "INSERT INTO messages (id, thread_id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO messages (id, thread_id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to, ics)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 m.id, t.id, m.header("From"), m.header("To"), m.header("Cc"), m.date_ms(), m.header("Subject"),
-                m.header("Message-ID"), m.header("References"), m.body("text/html"), m.body("text/plain"), m.header("Reply-To")
+                m.header("Message-ID"), m.header("References"), m.body("text/html"), m.body("text/plain"), m.header("Reply-To"),
+                m.calendar()
             ],
         )?;
         for (i, a) in m.attachments().into_iter().enumerate() {
@@ -834,6 +847,8 @@ pub struct MessageRow {
     /// Where replies go, when the sender set it (mailing lists, help desks); empty otherwise.
     reply_to: String,
     pub attachments: Vec<AttachmentRow>,
+    /// The calendar event, when the email is an invite or an answer to one.
+    pub invite: Option<crate::invite::Invite>,
 }
 
 #[derive(Serialize, Debug)]
@@ -847,10 +862,12 @@ pub struct AttachmentRow {
 
 pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
     let mut st = conn.prepare_cached(
-        "SELECT id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to
+        "SELECT id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to, ics
          FROM messages WHERE thread_id = ?1 ORDER BY date",
     )?;
+    let me = get_meta(conn, "email")?.unwrap_or_default();
     let rows = st.query_map([thread], |r| {
+        let ics: Option<String> = r.get(11)?;
         Ok(MessageRow {
             id: r.get(0)?,
             sender: r.get(1)?,
@@ -864,9 +881,18 @@ pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
             text: r.get(9)?,
             reply_to: r.get(10)?,
             attachments: Vec::new(),
+            invite: ics.and_then(|ics| crate::invite::parse(&ics, &me)),
         })
     })?;
     let mut out: Vec<MessageRow> = rows.collect::<Result<_, _>>()?;
+    // An answer sent from Shift, until Gmail brings an updated invite. A newer version of the event asks again.
+    for i in out.iter_mut().filter_map(|m| m.invite.as_mut()) {
+        if let Some((sequence, status)) = rsvp(conn, &i.uid)?
+            && sequence >= i.sequence
+        {
+            i.status = status;
+        }
+    }
     let mut st = conn.prepare_cached(
         "SELECT idx, filename, mime, size, content_id FROM attachments WHERE message_id = ?1 ORDER BY idx",
     )?;
@@ -884,6 +910,41 @@ pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
             .collect::<Result<_, _>>()?;
     }
     Ok(out)
+}
+
+/// An invite and what answering it needs: (calendar data, thread id, Message-ID, References).
+pub fn invite_source(conn: &Connection, message: &str) -> Result<(String, String, String, String)> {
+    conn.query_row(
+        "SELECT ics, thread_id, message_id, refs FROM messages WHERE id = ?1 AND ics IS NOT NULL",
+        [message],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )
+    .optional()?
+    .ok_or_else(|| anyhow::anyhow!("This email has no invite"))
+}
+
+/// The answer last sent from Shift for an event: (its version, the `PARTSTAT`).
+pub fn rsvp(conn: &Connection, uid: &str) -> Result<Option<(i64, String)>> {
+    Ok(conn
+        .query_row(
+            "SELECT sequence, status FROM rsvps WHERE uid = ?1",
+            [uid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
+/// Records an answer, or with `None` forgets it (when sending it failed).
+pub fn set_rsvp(conn: &Connection, uid: &str, answer: Option<&(i64, String)>) -> Result<()> {
+    match answer {
+        Some((sequence, status)) => conn.execute(
+            "INSERT INTO rsvps (uid, sequence, status) VALUES (?1, ?2, ?3)
+             ON CONFLICT(uid) DO UPDATE SET sequence = excluded.sequence, status = excluded.status",
+            params![uid, sequence, status],
+        )?,
+        None => conn.execute("DELETE FROM rsvps WHERE uid = ?1", [uid])?,
+    };
+    Ok(())
 }
 
 /// Where an attachment's bytes are: inline `data`, or the Gmail `attachment_id` to fetch. Also its filename.
@@ -909,6 +970,39 @@ mod tests {
             "payload": { "headers": [{ "name": "Subject", "value": "subj" }, { "name": "From", "value": "a@b.c" }, { "name": "To", "value": "to@x.y" }] }
         }]});
         serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn sent_answer_shows_until_the_event_changes() {
+        use base64::Engine;
+        let mut c = open(std::path::Path::new(":memory:")).unwrap();
+        set_meta(&c, "email", "me@x.com").unwrap();
+        let ics = "BEGIN:VCALENDAR\nMETHOD:REQUEST\nBEGIN:VEVENT\nUID:ev1\nSEQUENCE:1\n\
+                   ORGANIZER:mailto:o@x.com\nATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:me@x.com\nEND:VEVENT\nEND:VCALENDAR";
+        let data = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(ics);
+        let t: gmail::Thread =
+            serde_json::from_value(serde_json::json!({ "id": "t", "messages": [{
+                "id": "m", "labelIds": ["INBOX"], "internalDate": "1",
+                "payload": { "mimeType": "text/calendar", "body": { "data": data } }
+            }]}))
+            .unwrap();
+        upsert_thread(&mut c, &t, true).unwrap();
+        let status = |c: &Connection| {
+            messages(c, "t").unwrap()[0]
+                .invite
+                .as_ref()
+                .unwrap()
+                .status
+                .clone()
+        };
+        set_rsvp(&c, "ev1", Some(&(1, "ACCEPTED".into()))).unwrap();
+        assert_eq!(status(&c), "ACCEPTED");
+        set_rsvp(&c, "ev1", Some(&(0, "DECLINED".into()))).unwrap();
+        assert_eq!(
+            status(&c),
+            "NEEDS-ACTION",
+            "an answer to an older version doesn't count"
+        );
     }
 
     #[test]
