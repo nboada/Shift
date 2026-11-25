@@ -1169,7 +1169,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 :root[data-reduce-motion="true"] *, :root[data-reduce-motion="true"] *::before { transition: none !important; animation: none !important; }
 
 /* swipes: the row slides and tints with the colour of the action it will run */
-.threads li[data-id] { touch-action: pan-y; transition: transform 0.18s ease, background-color 0.12s; }
+.threads li[data-id] { touch-action: pan-y; transition: transform 0.18s ease; }
 .threads li[data-swipe] { transition: none; }
 .threads li.swipe-armed { color: #fff; }
 .threads li.swipe-armed .snippet, .threads li.swipe-armed .date { color: rgb(255 255 255 / 0.85); }
