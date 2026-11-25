@@ -59,7 +59,7 @@ Permanently emptying Trash and Spam is a standard feature of desktop mail client
 - Refresh tokens are stored in the macOS Keychain, one item per account (`auth.rs:48` `keychain`). Access tokens are held in memory only.
 - No analytics, crash reporting or telemetry: none of these SDKs is in `src-tauri/Cargo.toml` or `package.json`.
 - **Sign out** deletes that account's database and its Keychain item (`lib.rs:491`).
-- The privacy policy at https://shift.talkk.com.au/privacy already says this and includes the Limited Use statement.
+- The privacy policy at https://getshiftmail.com/privacy already says this and includes the Limited Use statement.
 
 ---
 
@@ -161,10 +161,10 @@ Google Auth Platform: `https://console.cloud.google.com/auth/overview?project=sh
    - App name: `Shift`
    - User support email: a TALKK address (e.g. `hello@talkk.com.au`)
    - App logo: the Shift icon, 120×120 px square (size **unconfirmed** for the current console)
-   - Application home page: `https://shift.talkk.com.au`
-   - Application privacy policy link: `https://shift.talkk.com.au/privacy`
-   - Application terms of service link: `https://shift.talkk.com.au/terms`
-   - Authorised domains: `talkk.com.au` (already verified in Search Console)
+   - Application home page: `https://getshiftmail.com`
+   - Application privacy policy link: `https://getshiftmail.com/privacy`
+   - Application terms of service link: `https://getshiftmail.com/terms`
+   - Authorised domains: `getshiftmail.com` (verify it in Search Console first; `talkk.com.au` can stay for the support email)
    - Developer contact email: a TALKK address
 2. Check the home page meets Google's rules: public, describes what the app does, links to the same privacy policy URL as the consent screen. The live home page links to `/privacy` and `/terms`. Make sure that link resolves to exactly the URL entered above.
 3. Click **Verify Branding**. The automated check usually takes a few minutes; fix any issues it lists or request a manual review. When it says **Ready to publish**, click **Publish branding**. Google: brand verification "typically takes 2-3 business days" when the branding has changed.
@@ -187,7 +187,7 @@ Google Auth Platform: `https://console.cloud.google.com/auth/overview?project=sh
    - **Why narrower scopes aren't sufficient:** the "Why narrower scopes are not enough" table, written out as text.
    - **Demo video:** the unlisted YouTube link.
    - **What features will you use?** (permitted app type): pick the Gmail option matching "Built-in and web email clients that allow users to compose, send, read, and process email via a user interface" (exact option text in the console **unconfirmed**). If unsure, Google says you can leave it blank and they decide.
-   - **Up to three documentation links:** `https://shift.talkk.com.au`, `https://shift.talkk.com.au/privacy`, `https://shift.talkk.com.au/terms`.
+   - **Up to three documentation links:** `https://getshiftmail.com`, `https://getshiftmail.com/privacy`, `https://getshiftmail.com/terms`.
    - Any question about servers or data storage: "Shift has no servers. Google user data is fetched directly to the user's Mac, stored only there, and never transmitted to TALKK or third parties."
 3. Submit. Then watch the contact inboxes: Trust and Safety follows up by email, and the review pauses while it waits for an answer. If they ask for a security assessment, they assign it and you pick an authorised lab.
 

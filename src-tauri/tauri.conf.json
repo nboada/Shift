@@ -51,7 +51,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY5REY1RTdBQzMzNzJGMzQKUldRMEx6ZkRlbDdmYWF4THEzUDJaOGtjcDlCb2JjbmJpSjl1ZlFIK0tGbzJrUkpKMWIxejdUOFAK",
       "endpoints": [
-        "https://shift.talkk.com.au/updates/latest.json"
+        "https://getshiftmail.com/updates/latest.json"
       ]
     }
   }

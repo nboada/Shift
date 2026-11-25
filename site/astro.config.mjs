@@ -1,7 +1,7 @@
 import { defineConfig } from "astro/config";
 
 export default defineConfig({
-  site: "https://shift.talkk.com.au",
+  site: "https://getshiftmail.com",
   // The dev toolbar runs scripts over the page and makes Lenis scrolling stutter in dev.
   devToolbar: { enabled: false },
   // privacy.html instead of privacy/index.html, so /privacy keeps working without a redirect.
