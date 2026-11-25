@@ -33,53 +33,13 @@ import DOMPurify from "dompurify";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
 import { formatWhen, quickTimes } from "./schedule";
-import { type Invite, inviteCard, isCalendarFile } from "./invite";
+import { inviteCard, isCalendarFile } from "./invite";
 import { actionToastOpen, toast } from "./toast";
 import { Menu } from "@tauri-apps/api/menu";
 import AirDatepicker from "air-datepicker";
 import localeEnModule from "air-datepicker/locale/en";
-import {
-  type Attachment,
-  type OutFile,
-  attachmentButton,
-  checkSize,
-  fileIcon,
-  listedAttachments,
-  readFile,
-} from "./attachments";
-
-type Label = { id: string; name: string; kind: string; unread: number; color: string | null };
-type Thread = {
-  id: string;
-  subject: string;
-  sender: string;
-  snippet: string;
-  date: number;
-  count: number;
-  unread: boolean;
-  starred: boolean;
-  primary: boolean;
-  labels: string;
-  /** Address of the account the thread belongs to. */
-  account: string;
-};
-type Message = {
-  id: string;
-  sender: string;
-  recipients: string;
-  cc: string;
-  date: number;
-  subject: string;
-  message_id: string;
-  refs: string;
-  html: string | null;
-  text: string | null;
-  attachments: Attachment[];
-  /** Where replies go when the sender set Reply-To (mailing lists, help desks); empty otherwise. */
-  reply_to: string;
-  /** The calendar event when the email is an invite, or an answer to one. */
-  invite: Invite | null;
-};
+import { type OutFile, attachmentButton, checkSize, fileIcon, listedAttachments, readFile } from "./attachments";
+import { type Fields, type Label, type Message, type Thread, SECTIONS, SYSTEM, createMailCore } from "./core/mail";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const app = $("#app");
@@ -88,51 +48,13 @@ const reader = $("#reader");
 const searchInputs = [...document.querySelectorAll<HTMLInputElement>(".search input")];
 // Desktop shows the top-right field, phones the one above the list; use whichever is on screen.
 const visibleSearch = () => searchInputs.find((i) => i.offsetParent !== null) ?? searchInputs[0];
-let userLabels: Label[] = [];
-/** Each account's own user labels, for the per-thread Label and Move menus (ids differ between accounts). */
-let accountLabels = new Map<string, Label[]>();
 const composer = $<HTMLDialogElement>("#composer");
 const composeForm = $<HTMLFormElement>("#compose-form");
 
-const SYSTEM: [string | null, string, string][] = [
-  ["INBOX", "Inbox", "inbox"],
-  ["STARRED", "Starred", "star"],
-  ["IMPORTANT", "Important", "bookmark"],
-  ["SENT", "Sent", "send"],
-  ["DRAFT", "Drafts", "file"],
-  ["SCHEDULED", "Scheduled", "clock"],
-  ["ARCHIVE", "Archive", "archive"],
-  [null, "All Mail", "mail"],
-  ["SPAM", "Spam", "alert-octagon"],
-  ["TRASH", "Trash", "trash"],
-];
-
-/** Accounts signed in with a password over IMAP rather than with Google. */
-let imapAccounts = new Set<string>();
-type Status = { accounts: string[]; imap: string[]; broken: string[] };
-async function loadStatus(): Promise<Status> {
-  const s = await invoke<Status>("status");
-  imapAccounts = new Set(s.imap);
-  return s;
-}
-/** Signed-in accounts, oldest first. */
-let accounts: string[] = [];
-/** Which accounts the sidebar and list show; null is "All accounts". */
-let scope: string[] | null = null;
-const multi = () => accounts.length > 1;
-/** The account new emails come from: the one being viewed, else the first. */
-/** Where a new email is sent from: the account on screen when viewing one, else the default from Settings → Composer. */
-const defaultAccount = () => {
-  if (scope?.length === 1) return scope[0];
-  const pick = settings.composer.defaultFrom;
-  return pick && accounts.includes(pick) && (!scope || scope.includes(pick)) ? pick : (scope?.[0] ?? accounts[0]);
-};
+const mail = createMailCore();
+const multi = () => mail.accounts.length > 1;
+const defaultAccount = () => mail.defaultAccount();
 const accountName = (a: string) => accountSettings(a).title || a;
-let mailbox: string | null = "INBOX";
-let search: string | null = null;
-let threads: Thread[] = [];
-let selected: string | null = null;
-let messages: Message[] = [];
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -241,21 +163,12 @@ async function updateDockBadge() {
     .catch(() => {});
 }
 
-async function renderMailboxes() {
-  const labels = await invoke<Label[]>("labels", { accounts: scope });
-  userLabels = labels.filter((l) => l.kind === "user");
-  accountLabels = new Map(
-    await Promise.all(
-      accounts.map(
-        async (a) =>
-          [a, (await invoke<Label[]>("labels", { accounts: [a] })).filter((l) => l.kind === "user")] as const,
-      ),
-    ),
-  );
+function drawMailboxes() {
+  const labels = mail.labels;
   const unread = new Map(labels.map((l) => [l.id, l.unread]));
   labelColorCss(labels.map((l) => l.color ?? ""));
   const link = (group: string, id: string | null, name: string, icon: string, count = 0, color: string | null = null) =>
-    `<a href="#" draggable="false" data-group="${group}" data-mailbox="${esc(id ?? "")}" class="${!search && id === mailbox ? "active" : ""}" ${!search && id === mailbox ? 'aria-current="page"' : ""}>
+    `<a href="#" draggable="false" data-group="${group}" data-mailbox="${esc(id ?? "")}" class="${!mail.search && id === mail.mailbox ? "active" : ""}" ${!mail.search && id === mail.mailbox ? 'aria-current="page"' : ""}>
       ${icon ? iconHtml(icon) : labelDot(name, color)}<span>${esc(name)}</span>${count ? `<small>${count}</small>` : ""}</a>`;
   const badge = settings.inbox.unreadBadge;
   void updateDockBadge();
@@ -263,7 +176,7 @@ async function renderMailboxes() {
   const system = arrange(SYSTEM, ([id]) => id ?? "ALL", order, hidden).map(([id, name, icon]) =>
     link("system", id, name, icon, badge && id === "INBOX" ? unread.get(id) : 0),
   );
-  const user = arrange(userLabels, (l) => l.id, order, hidden).map((l) =>
+  const user = arrange(mail.userLabels, (l) => l.id, order, hidden).map((l) =>
     link("label", l.id, l.name, "", badge ? l.unread : 0, l.color),
   );
   $("#mailboxes").innerHTML =
@@ -272,10 +185,10 @@ async function renderMailboxes() {
 }
 
 function listTitle() {
-  if (search) return `Search: ${search}`;
+  if (mail.search) return `Search: ${mail.search}`;
   return (
-    SYSTEM.find(([id]) => id === mailbox)?.[1] ??
-    document.querySelector(`[data-mailbox="${CSS.escape(mailbox ?? "")}"] span:not(.label-dot)`)?.textContent ??
+    SYSTEM.find(([id]) => id === mail.mailbox)?.[1] ??
+    document.querySelector(`[data-mailbox="${CSS.escape(mail.mailbox ?? "")}"] span:not(.label-dot)`)?.textContent ??
     ""
   );
 }
@@ -381,30 +294,7 @@ document.addEventListener(
   true,
 );
 
-type Section = "pinned" | "new" | "people" | "notifications" | "seen";
-const SECTIONS: [Section, string, string][] = [
-  ["pinned", "Pinned", "push-pin"],
-  ["new", "New", "envelope-simple"],
-  ["people", "People", "user"],
-  ["notifications", "Notifications", "bell"],
-  ["seen", "Seen", "eye"],
-];
-
-// Threads opened while this mailbox is showing keep their section, so reading one doesn't make the list jump.
-const keptUnread = new Set<string>();
-
-function sectionOf(t: Thread): Section {
-  if (t.starred && settings.inbox.pinnedOnTop) return "pinned";
-  if (!t.unread && !keptUnread.has(t.id)) return "seen";
-  if (!settings.inbox.splitUnread) return "new";
-  return t.primary ? "people" : "notifications";
-}
-
-const pinnedFirst = () => settings.inbox.pinnedOnTop && mailbox === "INBOX" && !search;
 const PINNED_HEAD = `${iconHtml("push-pin")}Pinned`;
-
-// "smart" groups the Inbox into Pinned/People/Notifications/Seen; "list" is plain newest-first.
-const smartInbox = () => settings.inbox.view === "smart" && mailbox === "INBOX" && !search;
 
 function renderViewButton() {
   const btn = $("#view-btn");
@@ -417,7 +307,7 @@ function renderViewButton() {
 /** The thread's own (user) labels as coloured chips. */
 function labelChips(t: Thread) {
   const ids = t.labels.split(" ");
-  return (accountLabels.get(t.account) ?? [])
+  return (mail.accountLabels.get(t.account) ?? [])
     .filter((l) => ids.includes(l.id))
     .map(
       (l) =>
@@ -442,7 +332,7 @@ function rowActions(t: Thread) {
 }
 
 function threadRow(t: Thread) {
-  const on = multiPicked() ? picked.has(t.id) : t.id === selected;
+  const on = multiPicked() ? picked.has(t.id) : t.id === mail.selected;
   return `<li data-id="${t.id}" role="option" aria-selected="${on}" aria-label="${esc(`${t.unread ? "Unread, " : ""}${displayName(t.sender)}, ${t.subject || "(no subject)"}`)}" class="${t.unread ? "unread" : ""} ${on ? "selected" : ""}">
         <span class="dot"></span>
         <span class="avatar-ring${multi() ? ` acct-${accountSettings(t.account).color}` : ""}" ${multi() ? `data-tip="${esc(accountName(t.account))}"` : ""}>${avatar(t.sender)}</span>
@@ -450,7 +340,7 @@ function threadRow(t: Thread) {
         <span class="date">${shortDate(t.date)}</span>
         <span class="subject"><span class="subject-text">${esc(t.subject || "(no subject)")}</span></span>
         <span class="snippet">${esc(decodeEntities(t.snippet))}</span>${rowLabels(t)}
-        ${mailbox === "SCHEDULED" ? "" : rowActions(t)}
+        ${mail.mailbox === "SCHEDULED" ? "" : rowActions(t)}
       </li>`;
 }
 
@@ -460,7 +350,7 @@ let drawnFor = "";
 
 /** The reader's Pin and Unread buttons follow the open email: a solid pin when it's pinned, labels that say what a click does. */
 function syncToolbar() {
-  const t = threads.find((x) => x.id === selected);
+  const t = mail.threads.find((x) => x.id === mail.selected);
   const set = (action: string, label: string, on?: boolean) => {
     const b = document.querySelector<HTMLElement>(`.toolbar [data-action="${action}"]`);
     if (!b) return;
@@ -489,27 +379,34 @@ function renderThreads() {
   syncToolbar();
   $("#list-title").textContent = listTitle();
   const emptyBtn = $("#empty-btn");
-  emptyBtn.hidden = !!search || (mailbox !== "TRASH" && mailbox !== "SPAM");
-  emptyBtn.querySelector("span")!.textContent = mailbox === "SPAM" ? "Empty Spam" : "Empty Trash";
-  emptyBtn.toggleAttribute("disabled", !threads.length);
+  emptyBtn.hidden = !!mail.search || (mail.mailbox !== "TRASH" && mail.mailbox !== "SPAM");
+  emptyBtn.querySelector("span")!.textContent = mail.mailbox === "SPAM" ? "Empty Spam" : "Empty Trash";
+  emptyBtn.toggleAttribute("disabled", !mail.threads.length);
   // Smart Inbox / plain list only applies to the Inbox.
-  $("#view-btn").hidden = !!search || mailbox !== "INBOX";
-  $("#cleanup-btn").hidden = !!search || mailbox !== "INBOX";
-  if (!threads.length) {
-    threadList.innerHTML = `<li class="empty">${search ? "No results" : "No messages"}</li>`;
+  $("#view-btn").hidden = !!mail.search || mail.mailbox !== "INBOX";
+  $("#cleanup-btn").hidden = !!mail.search || mail.mailbox !== "INBOX";
+  if (!mail.threads.length) {
+    threadList.innerHTML = `<li class="empty">${mail.search ? "No results" : "No messages"}</li>`;
     return;
   }
   // Only the rows near the top are drawn, more as the list scrolls: a mailbox of a thousand threads redrawn on every
   // open, archive or sync took a few hundred ms each time.
-  const key = `${mailbox}|${search}|${scope?.join(",") ?? ""}`;
+  const key = `${mail.mailbox}|${mail.search}|${mail.scope?.join(",") ?? ""}`;
   if (key !== drawnFor) [drawn, drawnFor] = [PAGE, key];
-  const visible = threads.slice(0, Math.max(drawn, threads.findIndex((t) => t.id === selected) + PAGE / 2));
-  if (!smartInbox()) {
+  const visible = mail.threads.slice(
+    0,
+    Math.max(drawn, mail.threads.findIndex((t) => t.id === mail.selected) + PAGE / 2),
+  );
+  if (!mail.smartInbox()) {
     let last = "";
     threadList.innerHTML = visible
       .map((t) => {
         const group =
-          search || mailbox === "SCHEDULED" ? "" : pinnedFirst() && t.starred ? PINNED_HEAD : dateGroup(t.date);
+          mail.search || mail.mailbox === "SCHEDULED"
+            ? ""
+            : mail.pinnedFirst() && t.starred
+              ? PINNED_HEAD
+              : dateGroup(t.date);
         const head = group !== last ? `<li class="section">${group}</li>` : "";
         last = group;
         return head + threadRow(t);
@@ -518,17 +415,9 @@ function renderThreads() {
     return;
   }
   threadList.innerHTML = SECTIONS.map(([key, title, icon]) => {
-    const rows = visible.filter((t) => sectionOf(t) === key);
+    const rows = visible.filter((t) => mail.sectionOf(t) === key);
     return rows.length ? `<li class="section">${iconHtml(icon)}${title}</li>${rows.map(threadRow).join("")}` : "";
   }).join("");
-}
-
-/** Smart Inbox order (pinned, unread people, unread notifications, seen) so j/k follows what's on screen. */
-function sortForInbox(list: Thread[]) {
-  const rank = (t: Thread) => SECTIONS.findIndex(([key]) => key === sectionOf(t));
-  if (smartInbox()) return [...list].sort((a, b) => rank(a) - rank(b) || b.date - a.date);
-  // The plain Inbox list also keeps pinned mail on top; sort is stable, so each part stays newest first.
-  return pinnedFirst() ? [...list].sort((a, b) => Number(b.starred) - Number(a.starred)) : list;
 }
 
 // Gmail snippets arrive HTML-escaped.
@@ -538,135 +427,7 @@ function decodeEntities(s: string) {
   return t.value;
 }
 
-type Scheduled = {
-  id: number;
-  account: string;
-  draft_id: string | null;
-  send_at: number;
-  sending: boolean;
-  error: string | null;
-  draft: { to: string };
-  ui: { fields: Fields; opts: ComposeOptions };
-};
-/** Rows of the Scheduled view by list id; they are emails waiting in this Mac, not Gmail threads. */
-const scheduledRows = new Map<string, Scheduled>();
-
-/** Bumped on every list load, so a slow result (a search, another mailbox) can't land after the user moved on. */
-let loadSeq = 0;
-
-async function loadThreads() {
-  const seq = ++loadSeq;
-  if (mailbox === "SCHEDULED" && !search) {
-    const rows = await invoke<Scheduled[]>("scheduled", { accounts: scope });
-    if (seq !== loadSeq) return;
-    scheduledRows.clear();
-    threads = rows.map((r) => {
-      // Row ids are numbered per account, so two accounts can both have row 1: the list id carries the account.
-      const id = `${r.account}:${r.id}`;
-      scheduledRows.set(id, r);
-      return {
-        id,
-        account: r.account,
-        subject: r.ui.fields.subject ?? "",
-        sender: `To: ${r.draft.to}`,
-        snippet: r.sending
-          ? "Sending…"
-          : r.error
-            ? `Couldn't send yet, trying again: ${r.error}`
-            : `Sends ${formatWhen(new Date(r.send_at))}`,
-        date: r.send_at,
-        count: 1,
-        unread: false,
-        starred: false,
-        primary: true,
-        labels: "",
-      };
-    });
-    return renderThreads();
-  }
-  if (search) return searchAccounts(search, seq);
-  const list = await invoke<Thread[]>("threads", { label: mailbox, accounts: scope });
-  if (seq !== loadSeq) return;
-  threads = sortForInbox(list);
-  renderThreads();
-  // A list too short to scroll (Trash, a quiet label) asks for older mail straight away.
-  if (threadList.scrollHeight <= threadList.clientHeight) loadMore();
-}
-
 const searchingTitle = (q: string) => `Searching ${inMail() === "in Gmail" ? "Gmail" : "your mail"} for “${q}”…`;
-
-/**
- * Gmail search, one request per account at once: each account's results join the list as they arrive, rather than
- * waiting for the slowest account (and every old conversation it has to download first). Rejects with the first
- * error once all have answered, so the results that did arrive stay.
- */
-async function searchAccounts(query: string, seq: number) {
-  const inView = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
-  let pending = inView.length;
-  const errors: unknown[] = [];
-  await Promise.all(
-    inView.map(async (account) => {
-      try {
-        const found = await invoke<Thread[]>("search", { query, accounts: [account] });
-        if (seq !== loadSeq) return;
-        const ids = new Set(found.map((t) => t.id));
-        const merged = [...threads.filter((t) => t.account !== account || !ids.has(t.id)), ...found];
-        threads = sortForInbox(merged.sort((a, b) => b.date - a.date));
-      } catch (e) {
-        errors.push(e);
-      } finally {
-        pending--;
-        if (seq === loadSeq) {
-          renderThreads();
-          if (pending) $("#list-title").textContent = searchingTitle(query);
-        }
-      }
-    }),
-  );
-  if (errors.length) throw errors[0];
-}
-
-/**
- * Older mail beyond what the first sync listed: fetched from Gmail when the list is scrolled near its end, a page at a
- * time per account. Stops asking once Gmail says there's nothing older for this mailbox and view.
- */
-let loadingMore = false;
-let loadMoreAfter = 0; // after a failure (offline), wait a minute rather than retry on every scroll
-const noMore = new Set<string>();
-function loadMore() {
-  const key = `${mailbox}|${scope?.join(",") ?? "all"}`;
-  if (loadingMore || search || mailbox === "SCHEDULED" || noMore.has(key) || Date.now() < loadMoreAfter) return;
-  loadingMore = true;
-  invoke<[number, boolean]>("load_more", { accounts: scope, label: mailbox })
-    .then(([added, more]) => {
-      if (!more) noMore.add(key);
-      if (added) refresh();
-    })
-    .catch(() => (loadMoreAfter = Date.now() + 60_000))
-    .finally(() => (loadingMore = false));
-}
-
-let refreshQueued = false;
-function refresh() {
-  if (refreshQueued) return;
-  refreshQueued = true;
-  // A short timer, not requestAnimationFrame: rAF is paused while the window is hidden, which left the list empty
-  // when Shift started or reloaded in the background. The 60 ms gathers bursts (a bulk archive sends one
-  // mail-changed per thread) into one repaint.
-  setTimeout(async () => {
-    refreshQueued = false;
-    // Something changed in the cache, so messages loaded ahead may be out of date.
-    nearby.clear();
-    await renderMailboxes();
-    if (!search) await loadThreads();
-    // A new message in the open conversation (a reply, or one just sent) shows without reopening it. Not while an
-    // inline reply is being written, and not in Drafts or Scheduled, where opening a row opens the composer.
-    const open = threads.find((t) => t.id === selected);
-    if (open && open.count !== messages.length && !compose?.inline && mailbox !== "DRAFT" && mailbox !== "SCHEDULED")
-      void openThread(open.id);
-    if (selected) prefetchAround(selected);
-  }, 60);
-}
 
 const EMAIL_CSS = `<style>
   body { margin: 0; padding: 16px; font: 14px/1.5 -apple-system, system-ui, sans-serif; color: #1d1d1f; overflow-wrap: anywhere; }
@@ -847,114 +608,86 @@ function scrollToLatest() {
   grow.observe(all.at(-1)!);
 }
 
-/** Messages of the open email and its neighbours, loaded ahead so moving on (j/k, archive, delete, move) doesn't wait. */
-const nearby = new Map<string, Promise<Message[]>>();
-function loadMessages(account: string, id: string) {
-  const key = `${account} ${id}`;
-  let p = nearby.get(key);
-  if (!p) {
-    p = invoke<Message[]>("thread", { account, id });
-    nearby.set(key, p);
-    p.catch(() => nearby.delete(key));
-  }
-  return p;
-}
-function prefetchAround(id: string) {
-  const i = threads.findIndex((t) => t.id === id);
-  if (i < 0 || mailbox === "SCHEDULED") return;
-  for (const t of [threads[i + 1], threads[i - 1]]) if (t) loadMessages(t.account, t.id).catch(() => {});
-}
-
 async function openThread(id: string) {
   $("#link-status").hidden = true;
-  if (mailbox === "SCHEDULED") return editScheduled(id);
-  if (mailbox === "DRAFT" && (await openDraft(id))) return;
+  if (mail.mailbox === "SCHEDULED") return editScheduled(id);
+  if (mail.mailbox === "DRAFT" && (await openDraft(id))) return;
   picked.clear();
   pickAnchor = id;
   delete app.dataset.picked;
   if (compose?.inline) closeComposer();
-  selected = id;
   app.dataset.open = "";
-  renderThreads();
+  const opening = mail.openThread(id, show);
   setView("reader");
-  const thread = threads.find((t) => t.id === id);
-  // Into a local first: if the user opened another email meanwhile, this late answer must not replace `messages`,
-  // which Reply and Forward read.
-  let loaded: Message[];
+  const thread = mail.threads.find((t) => t.id === id);
   try {
-    loaded = await loadMessages(thread?.account ?? defaultAccount(), id);
+    await opening;
   } catch (e) {
-    if (selected === id) reader.innerHTML = `<div class="placeholder">${esc(String(e))}</div>`;
-    return;
+    reader.innerHTML = `<div class="placeholder">${esc(String(e))}</div>`;
   }
-  if (selected !== id) return;
-  messages = loaded;
-  reader.innerHTML = `<div class="reader-head"><h1>${esc(messages[0]?.subject || thread?.subject || "(no subject)")}</h1></div>`;
-  syncToolbar();
-  for (const m of messages) {
-    const el = document.createElement("section");
-    el.className = "message";
-    const name = displayName(m.sender);
-    // Accordion: older emails in a conversation start collapsed to one line; the header toggles each one.
-    if (messages.length > 1 && m !== messages.at(-1)) el.classList.add("collapsed");
-    const toggles = messages.length > 1;
-    el.innerHTML = `<header ${toggles ? `role="button" tabindex="0" aria-expanded="${!el.classList.contains("collapsed")}"` : ""}>
+  function show() {
+    reader.innerHTML = `<div class="reader-head"><h1>${esc(mail.messages[0]?.subject || thread?.subject || "(no subject)")}</h1></div>`;
+    syncToolbar();
+    for (const m of mail.messages) {
+      const el = document.createElement("section");
+      el.className = "message";
+      const name = displayName(m.sender);
+      // Accordion: older emails in a conversation start collapsed to one line; the header toggles each one.
+      if (mail.messages.length > 1 && m !== mail.messages.at(-1)) el.classList.add("collapsed");
+      const toggles = mail.messages.length > 1;
+      el.innerHTML = `<header ${toggles ? `role="button" tabindex="0" aria-expanded="${!el.classList.contains("collapsed")}"` : ""}>
         ${avatar(m.sender)}
         <div class="meta"><strong>${esc(name)}</strong><span class="to">To: ${esc(m.recipients)}${m.cc ? `, Cc: ${esc(m.cc)}` : ""}</span><span class="preview">${esc(preview(m))}</span></div>
         <time>${new Date(m.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time>${toggles ? '<i class="ti ti-chevron-down toggle-caret" aria-hidden="true"></i>' : ""}
-      </header>${inviteCard(m.invite, messages.indexOf(m))}`;
-    const account = thread?.account ?? defaultAccount();
-    if (m.html) {
-      const frame = document.createElement("iframe");
-      frame.title = `Email from ${name}`;
-      el.append(frame);
-      reader.append(el);
-      const html = m.html;
-      const mount = () => {
-        if (mountEmail(frame, html)) {
-          frame.insertAdjacentHTML(
-            "beforebegin",
-            `<div class="images-bar"><i class="ti ti-photo-off"></i><span>Remote images are hidden to protect your privacy.</span><button type="button">Load images</button></div>`,
-          );
-          frame.previousElementSibling!.querySelector("button")!.addEventListener("click", (e) => {
-            (e.currentTarget as Element).closest(".images-bar")!.remove();
-            mountEmail(frame, html, true);
-            showInlineImages(frame, m, account);
+      </header>${inviteCard(m.invite, mail.messages.indexOf(m))}`;
+      const account = thread?.account ?? defaultAccount();
+      if (m.html) {
+        const frame = document.createElement("iframe");
+        frame.title = `Email from ${name}`;
+        el.append(frame);
+        reader.append(el);
+        const html = m.html;
+        const mount = () => {
+          if (mountEmail(frame, html)) {
+            frame.insertAdjacentHTML(
+              "beforebegin",
+              `<div class="images-bar"><i class="ti ti-photo-off"></i><span>Remote images are hidden to protect your privacy.</span><button type="button">Load images</button></div>`,
+            );
+            frame.previousElementSibling!.querySelector("button")!.addEventListener("click", (e) => {
+              (e.currentTarget as Element).closest(".images-bar")!.remove();
+              mountEmail(frame, html, true);
+              showInlineImages(frame, m, account);
+            });
+          }
+          showInlineImages(frame, m, account);
+          // Resolves once the frame has loaded (and sized itself), or after a moment if it never says so.
+          return new Promise<void>((done) => {
+            frame.addEventListener("load", () => done(), { once: true });
+            setTimeout(done, 600);
           });
-        }
-        showInlineImages(frame, m, account);
-        // Resolves once the frame has loaded (and sized itself), or after a moment if it never says so.
-        return new Promise<void>((done) => {
-          frame.addEventListener("load", () => done(), { once: true });
-          setTimeout(done, 600);
-        });
-      };
-      // A long conversation used to build a document for every message up front; collapsed ones wait until opened.
-      if (el.classList.contains("collapsed")) lazyMounts.set(el, mount);
-      else void mount();
-    } else {
-      const text = document.createElement("div");
-      text.className = "text";
-      text.textContent = m.text ?? "";
-      el.append(text);
-      reader.append(el);
-    }
-    el.insertAdjacentHTML(
-      "beforeend",
-      attachmentStrip(m, account) +
-        `<footer class="message-actions">
-        <button class="icon" data-reply="reply" data-msg="${messages.indexOf(m)}" data-tip="Reply" aria-label="Reply"><i class="ti ti-arrow-back-up"></i></button>
-        <button class="icon" data-reply="all" data-msg="${messages.indexOf(m)}" data-tip="Reply all" aria-label="Reply all"><i class="ti ti-arrow-back-up-double"></i></button>
-        <button class="icon" data-reply="forward" data-msg="${messages.indexOf(m)}" data-tip="Forward" aria-label="Forward"><i class="ti ti-arrow-forward-up"></i></button>
+        };
+        // A long conversation used to build a document for every message up front; collapsed ones wait until opened.
+        if (el.classList.contains("collapsed")) lazyMounts.set(el, mount);
+        else void mount();
+      } else {
+        const text = document.createElement("div");
+        text.className = "text";
+        text.textContent = m.text ?? "";
+        el.append(text);
+        reader.append(el);
+      }
+      el.insertAdjacentHTML(
+        "beforeend",
+        attachmentStrip(m, account) +
+          `<footer class="message-actions">
+        <button class="icon" data-reply="reply" data-msg="${mail.messages.indexOf(m)}" data-tip="Reply" aria-label="Reply"><i class="ti ti-arrow-back-up"></i></button>
+        <button class="icon" data-reply="all" data-msg="${mail.messages.indexOf(m)}" data-tip="Reply all" aria-label="Reply all"><i class="ti ti-arrow-back-up-double"></i></button>
+        <button class="icon" data-reply="forward" data-msg="${mail.messages.indexOf(m)}" data-tip="Forward" aria-label="Forward"><i class="ti ti-arrow-forward-up"></i></button>
       </footer>`,
-    );
-  }
-  reader.scrollTop = 0;
-  scrollToLatest();
-  prefetchAround(id);
-  if (thread?.unread && settings.general.markReadOnOpen) {
-    keptUnread.add(id);
-    modify(thread, [], ["UNREAD"]);
+      );
+    }
+    reader.scrollTop = 0;
+    scrollToLatest();
   }
 }
 
@@ -1009,15 +742,15 @@ function showInlineImages(frame: HTMLIFrameElement, m: Message, account: string)
 
 reader.addEventListener("click", (e) => {
   const b = (e.target as Element).closest<HTMLElement>("[data-reply]");
-  if (b) reply(b.dataset.reply as "reply" | "all" | "forward", messages[Number(b.dataset.msg)]);
+  if (b) reply(b.dataset.reply as "reply" | "all" | "forward", mail.messages[Number(b.dataset.msg)]);
 });
 
 // Yes, Maybe or No on an invite: shown as chosen at once, put back if the answer couldn't be sent.
 reader.addEventListener("click", async (e) => {
   const b = (e.target as Element).closest<HTMLButtonElement>("[data-rsvp]");
   if (!b || b.getAttribute("aria-pressed") === "true") return;
-  const m = messages[Number(b.dataset.msg)];
-  const account = threads.find((t) => t.id === selected)?.account ?? defaultAccount();
+  const m = mail.messages[Number(b.dataset.msg)];
+  const account = mail.threads.find((t) => t.id === mail.selected)?.account ?? defaultAccount();
   const group = [...b.parentElement!.querySelectorAll<HTMLButtonElement>("[data-rsvp]")];
   const before = group.find((x) => x.getAttribute("aria-pressed") === "true");
   const press = (on: HTMLButtonElement | undefined) =>
@@ -1065,73 +798,17 @@ reader.addEventListener("click", async (e) => {
 
 function clearReader() {
   if (compose?.inline) closeComposer();
-  selected = null;
+  mail.closeThread();
   delete app.dataset.open;
   delete app.dataset.picked;
-  messages = [];
   reader.innerHTML = `<div class="placeholder empty-reader"><i class="ti ti-chevron-up"></i><span>No email selected</span></div>`;
 }
 
-// Takes the thread itself, not its id: archive/trash drop it from `threads` first, and looking it up again
-// would fall back to the default account and change the wrong mailbox.
-function changeLocally(t: Thread, add: string[], remove: string[]) {
-  if (add.includes("UNREAD")) t.unread = true;
-  if (remove.includes("UNREAD")) t.unread = false;
-  if (add.includes("STARRED")) t.starred = true;
-  if (remove.includes("STARRED")) t.starred = false;
-}
-
-async function modify(t: Thread, add: string[], remove: string[], trash = false) {
-  changeLocally(t, add, remove);
-  renderThreads();
-  try {
-    await invoke("modify", { account: t.account, id: t.id, add, remove, trash });
-  } catch (e) {
-    toast(`Couldn't update message: ${e}`, { kind: "error" });
-  }
-}
-
-// Archive, delete, spam and move, newest last; ⌘Z applies the reverse label change.
-// One entry per action, so ⌘Z undoes a whole multi-selection at once.
-const undoStack: { t: Thread; add: string[]; remove: string[] }[][] = [];
-function undoable(t: Thread, add: string[], remove: string[], trash = false) {
-  return undoableAll([t], add, remove, trash);
-}
-function undoableAll(list: Thread[], add: string[], remove: string[], trash = false) {
-  // Only labels the thread has are removed, so ⌘Z after deleting from Sent doesn't put it in the Inbox.
-  const changes = list.map((t) => ({ t, add, remove: remove.filter((l) => t.labels.split(" ").includes(l)) }));
-  undoStack.push(changes);
-  if (undoStack.length > 50) undoStack.shift();
-  return applyChanges(changes, trash);
-}
 function undo() {
-  const last = undoStack.pop();
-  if (!last) return toast("Nothing to undo");
+  const undone = mail.undo();
+  if (!undone) return toast("Nothing to undo");
   toast("Undone", { kind: "success" });
-  // The backend's mail-changed refresh puts the threads back in the list.
-  return applyChanges(last.map((u) => ({ t: u.t, add: u.remove, remove: u.add })));
-}
-
-/** Label changes for several threads: one `modify_many` (Gmail's batch call) per account and change. */
-function applyChanges(changes: { t: Thread; add: string[]; remove: string[] }[], trash = false) {
-  const groups = new Map<string, typeof changes>();
-  for (const c of changes) {
-    const key = JSON.stringify([c.t.account, c.add, c.remove]);
-    groups.set(key, [...(groups.get(key) ?? []), c]);
-  }
-  return Promise.all(
-    [...groups.values()].map(async (group) => {
-      const [{ t, add, remove }] = group;
-      if (group.length === 1) return modify(t, add, remove, trash);
-      group.forEach((c) => changeLocally(c.t, add, remove));
-      renderThreads();
-      try {
-        await invoke("modify_many", { account: t.account, ids: group.map((c) => c.t.id), add, remove, trash });
-      } catch (e) {
-        toast(`Couldn't update ${group.length} emails: ${e}`, { kind: "error" });
-      }
-    }),
-  );
+  return undone;
 }
 
 /** Delete inside Trash: gone for good in Gmail too, so it always asks and can't be undone. */
@@ -1144,28 +821,22 @@ async function deleteForever(list: Thread[]) {
   });
   if (!yes) return;
   if (multiPicked()) {
-    threads = threads.filter((t) => !picked.has(t.id));
+    mail.threads = mail.threads.filter((t) => !picked.has(t.id));
     picked.clear();
     delete app.dataset.picked;
     clearReader();
     setView("list");
     renderThreads();
   } else list.forEach((t) => removeAndAdvance(t.id));
-  const byAccount = new Map<string, string[]>();
-  for (const t of list) byAccount.set(t.account, [...(byAccount.get(t.account) ?? []), t.id]);
-  await Promise.all(
-    [...byAccount].map(([account, ids]) =>
-      invoke("delete_forever", { account, ids }).catch((e) => toast(String(e), { kind: "error" })),
-    ),
-  );
+  await mail.deleteForever(list);
 }
 
 /** Archive/trash: drop the thread from the list and move selection to its neighbour. */
 function removeAndAdvance(id: string) {
-  const i = threads.findIndex((t) => t.id === id);
-  threads = threads.filter((t) => t.id !== id);
-  if (id !== selected) return renderThreads();
-  const next = threads[Math.min(i, threads.length - 1)];
+  const i = mail.threads.findIndex((t) => t.id === id);
+  mail.threads = mail.threads.filter((t) => t.id !== id);
+  if (id !== mail.selected) return renderThreads();
+  const next = mail.threads[Math.min(i, mail.threads.length - 1)];
   if (next && app.dataset.view !== "list") openThread(next.id);
   else {
     clearReader();
@@ -1175,22 +846,22 @@ function removeAndAdvance(id: string) {
 }
 
 /** Runs an action on the open thread, or on `id` (e.g. a right-clicked row) without disturbing the reader. */
-function act(action: string, id = selected) {
+function act(action: string, id = mail.selected) {
   if (multiPicked() && (!id || picked.has(id))) return actOnPicked(action);
-  const t = threads.find((t) => t.id === id);
+  const t = mail.threads.find((t) => t.id === id);
   if (!t) return;
-  if (mailbox === "SCHEDULED") return scheduledAction(action, t.id);
+  if (mail.mailbox === "SCHEDULED") return scheduledAction(action, t.id);
   // Replies need the thread's messages, so open it first.
-  if (["reply", "replyAll", "forward", "aiReply"].includes(action) && t.id !== selected) {
+  if (["reply", "replyAll", "forward", "aiReply"].includes(action) && t.id !== mail.selected) {
     openThread(t.id).then(() => act(action, t.id));
     return;
   }
   switch (action) {
     case "archive":
       removeAndAdvance(t.id);
-      return undoable(t, [], ["INBOX"]);
+      return mail.undoable(t, [], ["INBOX"]);
     case "trash":
-      if (mailbox === "TRASH") return void deleteForever([t]);
+      if (mail.mailbox === "TRASH") return void deleteForever([t]);
       if (settings.general.confirmDelete) {
         ask({
           title: "Delete this email?",
@@ -1201,18 +872,18 @@ function act(action: string, id = selected) {
         return;
       }
       removeAndAdvance(t.id);
-      return undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
+      return mail.undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
     case "trashNow":
       removeAndAdvance(t.id);
-      return undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
+      return mail.undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
     case "unread":
-      return modify(t, t.unread ? [] : ["UNREAD"], t.unread ? ["UNREAD"] : []);
+      return mail.modify(t, t.unread ? [] : ["UNREAD"], t.unread ? ["UNREAD"] : []);
     case "star":
-      return modify(t, t.starred ? [] : ["STARRED"], t.starred ? ["STARRED"] : []);
+      return mail.modify(t, t.starred ? [] : ["STARRED"], t.starred ? ["STARRED"] : []);
     case "spam":
       removeAndAdvance(t.id);
-      if (mailbox === "SPAM") return undoable(t, ["INBOX"], ["SPAM"]);
-      return undoable(t, ["SPAM"], ["INBOX", "TRASH"]);
+      if (mail.mailbox === "SPAM") return mail.undoable(t, ["INBOX"], ["SPAM"]);
+      return mail.undoable(t, ["SPAM"], ["INBOX", "TRASH"]);
     case "reply":
       return reply("reply");
     case "replyAll":
@@ -1236,9 +907,9 @@ let pickAnchor: string | null = null;
 const multiPicked = () => picked.size > 1;
 
 function pick(id: string, range: boolean) {
-  if (!picked.size && selected) picked.add(selected);
-  const anchor = pickAnchor ?? selected;
-  const ids = threads.map((t) => t.id);
+  if (!picked.size && mail.selected) picked.add(mail.selected);
+  const anchor = pickAnchor ?? mail.selected;
+  const ids = mail.threads.map((t) => t.id);
   const [a, b] = [anchor ? ids.indexOf(anchor) : -1, ids.indexOf(id)];
   if (range && a >= 0)
     ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((x) => picked.size < PICK_MAX && picked.add(x));
@@ -1262,12 +933,12 @@ function pick(id: string, range: boolean) {
 const PICK_MAX = 250;
 
 function selectAll() {
-  if (mailbox === "SCHEDULED" || !threads.length) return;
+  if (mail.mailbox === "SCHEDULED" || !mail.threads.length) return;
   picked.clear();
-  threads.slice(0, PICK_MAX).forEach((t) => picked.add(t.id));
-  if (!multiPicked()) return openThread(threads[0].id);
+  mail.threads.slice(0, PICK_MAX).forEach((t) => picked.add(t.id));
+  if (!multiPicked()) return openThread(mail.threads[0].id);
   showPicked();
-  if (threads.length > PICK_MAX) toast(`Selected the first ${PICK_MAX} emails, the most Shift changes at once`);
+  if (mail.threads.length > PICK_MAX) toast(`Selected the first ${PICK_MAX} emails, the most Shift changes at once`);
 }
 
 function clearPicked() {
@@ -1286,12 +957,11 @@ const PICK_ACTIONS: [action: string, label: string, icon: string][] = [
 
 function showPicked() {
   if (compose?.inline) closeComposer();
-  selected = null;
-  messages = [];
+  mail.closeThread();
   app.dataset.open = "";
   app.dataset.picked = "";
   setView("reader");
-  const list = threads.filter((t) => picked.has(t.id));
+  const list = mail.threads.filter((t) => picked.has(t.id));
   const anyUnread = list.some((t) => t.unread);
   const button = ([action, label, icon]: (typeof PICK_ACTIONS)[number]) => {
     if (action === "unread")
@@ -1317,17 +987,17 @@ reader.addEventListener("click", (e) => {
 });
 
 function actOnPicked(action: string) {
-  const list = threads.filter((t) => picked.has(t.id));
-  if (!list.length || mailbox === "SCHEDULED") return;
+  const list = mail.threads.filter((t) => picked.has(t.id));
+  if (!list.length || mail.mailbox === "SCHEDULED") return;
   const n = `${list.length} ${list.length === 1 ? "email" : "emails"}`;
   const leave = (add: string[], remove: string[], trash = false) => {
-    threads = threads.filter((t) => !picked.has(t.id));
+    mail.threads = mail.threads.filter((t) => !picked.has(t.id));
     picked.clear();
     delete app.dataset.picked;
     clearReader();
     setView("list");
     renderThreads();
-    void undoableAll(list, add, remove, trash);
+    void mail.undoableAll(list, add, remove, trash);
   };
   switch (action) {
     case "archive":
@@ -1335,7 +1005,7 @@ function actOnPicked(action: string) {
     case "spam":
       return leave(["SPAM"], ["INBOX", "TRASH"]);
     case "trash":
-      if (mailbox === "TRASH") return void deleteForever(list);
+      if (mail.mailbox === "TRASH") return void deleteForever(list);
       if (settings.general.confirmDelete) {
         void ask({ title: `Delete ${n}?`, message: "They will move to Trash.", confirm: "Delete", danger: true }).then(
           (yes) => yes && actOnPicked("trashNow"),
@@ -1348,12 +1018,12 @@ function actOnPicked(action: string) {
     case "unread": {
       // Any unread: mark them all read; otherwise all unread.
       const read = list.some((t) => t.unread);
-      void applyChanges(list.map((t) => ({ t, add: read ? [] : ["UNREAD"], remove: read ? ["UNREAD"] : [] })));
+      void mail.applyChanges(list.map((t) => ({ t, add: read ? [] : ["UNREAD"], remove: read ? ["UNREAD"] : [] })));
       return showPicked();
     }
     case "star": {
       const pin = list.some((t) => !t.starred);
-      void applyChanges(list.map((t) => ({ t, add: pin ? ["STARRED"] : [], remove: pin ? [] : ["STARRED"] })));
+      void mail.applyChanges(list.map((t) => ({ t, add: pin ? ["STARRED"] : [], remove: pin ? [] : ["STARRED"] })));
       return showPicked();
     }
     default:
@@ -1474,7 +1144,7 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
     pos = { x: r.left, y: r.bottom + 6 };
   }
   const has = new Set(t.labels.split(" "));
-  const own = accountLabels.get(t.account) ?? [];
+  const own = mail.accountLabels.get(t.account) ?? [];
   const items: MenuItem[] =
     kind === "move"
       ? [
@@ -1502,7 +1172,7 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
         try {
           const created = await invoke<string>("create_label", { account: t.account, name });
           t.labels = `${t.labels} ${created}`.trim();
-          await modify(t, [created], []);
+          await mail.modify(t, [created], []);
         } catch (err) {
           toast(String(err), { kind: "error" });
         }
@@ -1517,13 +1187,13 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
             .split(" ")
             .filter((l) => l !== id)
             .join(" ");
-      modify(t, on ? [id] : [], on ? [] : [id]);
+      mail.modify(t, on ? [id] : [], on ? [] : [id]);
       openMenu("label", t, menuPos);
       return true;
     }
     if (id === "TRASH") return void act("trash", t.id);
-    if (mailbox !== null && mailbox !== id) removeAndAdvance(t.id);
-    undoable(
+    if (mail.mailbox !== null && mail.mailbox !== id) removeAndAdvance(t.id);
+    mail.undoable(
       t,
       id === "ARCHIVE" ? [] : [id],
       FOLDERS.filter((f) => f !== id && has.has(f)),
@@ -1539,7 +1209,7 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
   e.preventDefault();
   closeMenu();
   const id = a.dataset.mailbox || null;
-  const label = userLabels.find((l) => l.id === id);
+  const label = mail.userLabels.find((l) => l.id === id);
   const items: MenuItem[] = [
     {
       id: "read",
@@ -1553,7 +1223,7 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
   items.push("-", { id: "hide", label: "Hide from sidebar", icon: "eye-slash" });
   const names = new Map([
     ...SYSTEM.map(([sid, name]) => [sid ?? "ALL", name] as const),
-    ...userLabels.map((l) => [l.id, l.name] as const),
+    ...mail.userLabels.map((l) => [l.id, l.name] as const),
   ]);
   const hidden = settings.sidebar.hidden.filter((k) => names.has(k));
   if (hidden.length)
@@ -1575,7 +1245,7 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
         title: `Mark all of ${box} as read?`,
         message: `Every unread email in ${box}${inAccounts()} is marked read ${inMail()}, including older ones not shown here.`,
         confirm: "Mark as read",
-      }).then((yes) => void (yes && labelAction(invoke("mark_all_read", { label: id, accounts: scope }))));
+      }).then((yes) => void (yes && labelAction(invoke("mark_all_read", { label: id, accounts: mail.scope }))));
       return;
     }
     if (pick === "empty") return void emptyMailbox(id!);
@@ -1594,7 +1264,7 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
         (bg) => {
           const text = LABEL_COLORS.find((c) => c[1] === bg)![2];
           // Shown at once, then sent to Gmail; if Gmail refuses, the refresh puts the saved colour back.
-          for (const l of [...userLabels, ...[...accountLabels.values()].flat()])
+          for (const l of [...mail.userLabels, ...[...mail.accountLabels.values()].flat()])
             if (l.name === label.name) l.color = bg;
           const dot = document.querySelector<HTMLElement>(
             `#mailboxes [data-mailbox="${CSS.escape(label.id)}"] .label-dot`,
@@ -1604,9 +1274,9 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
             dot.dataset.color = bg.slice(1).toLowerCase();
           }
           renderThreads();
-          invoke("set_label_color", { label: label.id, background: bg, text, accounts: scope }).catch((err) => {
+          invoke("set_label_color", { label: label.id, background: bg, text, accounts: mail.scope }).catch((err) => {
             toast(String(err), { kind: "error" });
-            refresh();
+            mail.refresh();
           });
         },
       );
@@ -1621,8 +1291,8 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
       }).then((name) => {
         if (!name || name === label.name) return;
         // A merged label's id is its name, so the open mailbox follows the rename.
-        const follow = mailbox === label.id && label.id.startsWith("name:") ? `name:${name}` : undefined;
-        void labelAction(invoke("rename_label", { label: label.id, name, accounts: scope }), follow);
+        const follow = mail.mailbox === label.id && label.id.startsWith("name:") ? `name:${name}` : undefined;
+        void labelAction(invoke("rename_label", { label: label.id, name, accounts: mail.scope }), follow);
         for (const key of ["needsReply", "waiting"] as const)
           if (settings.inbox.followUps[key] === label.name) setSetting(`inbox.followUps.${key}`, name);
       });
@@ -1638,8 +1308,8 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
           void (
             yes &&
             labelAction(
-              invoke("delete_label", { label: label.id, accounts: scope }),
-              mailbox === label.id ? "INBOX" : undefined,
+              invoke("delete_label", { label: label.id, accounts: mail.scope }),
+              mail.mailbox === label.id ? "INBOX" : undefined,
             )
           ),
       );
@@ -1708,12 +1378,12 @@ function saveSidebarOrder() {
 /** " in both accounts" / " in all 3 accounts" when an action reaches every account in the unified view, else "". */
 /** Where a change lands: "in Gmail", or "on your mail server" once an IMAP account is in view. */
 function inMail() {
-  return (scope ?? accounts).some((a) => imapAccounts.has(a)) ? "on your mail server" : "in Gmail";
+  return (mail.scope ?? mail.accounts).some((a) => mail.imapAccounts.has(a)) ? "on your mail server" : "in Gmail";
 }
 
 function inAccounts() {
-  const n = (scope ?? accounts.filter((x) => accountSettings(x).unified !== false)).length;
-  return n < 2 ? "" : n === 2 ? " in both accounts" : ` in all ${n} accounts`;
+  const n = (mail.scope ?? mail.accounts.filter((x) => accountSettings(x).unified !== false)).length;
+  return n < 2 ? "" : n === 2 ? " in both accounts" : ` in all ${n} mail.accounts`;
 }
 
 async function emptyMailbox(id: string) {
@@ -1724,9 +1394,9 @@ async function emptyMailbox(id: string) {
     confirm: `Empty ${name}`,
     danger: true,
   });
-  if (yes) await labelAction(invoke("empty_mailbox", { label: id, accounts: scope }));
+  if (yes) await labelAction(mail.emptyMailbox(id));
 }
-$("#empty-btn").addEventListener("click", () => mailbox && emptyMailbox(mailbox));
+$("#empty-btn").addEventListener("click", () => mail.mailbox && emptyMailbox(mail.mailbox));
 
 async function labelAction(run: Promise<unknown>, nextMailbox?: string) {
   try {
@@ -1741,12 +1411,12 @@ threadList.addEventListener("contextmenu", (e) => {
   const li = (e.target as Element).closest<HTMLElement>("li[data-id]");
   if (!li) return;
   e.preventDefault();
-  const t = threads.find((x) => x.id === li.dataset.id);
+  const t = mail.threads.find((x) => x.id === li.dataset.id);
   if (!t) return;
   closeMenu();
   li.classList.add("context");
   if (multiPicked() && picked.has(t.id)) {
-    const list = threads.filter((x) => picked.has(x.id));
+    const list = mail.threads.filter((x) => picked.has(x.id));
     return showMenu(
       `${list.length} emails`,
       [
@@ -1766,7 +1436,7 @@ threadList.addEventListener("contextmenu", (e) => {
       (id) => actOnPicked(id),
     );
   }
-  if (mailbox === "SCHEDULED") {
+  if (mail.mailbox === "SCHEDULED") {
     return showMenu(
       null,
       [
@@ -1779,9 +1449,9 @@ threadList.addEventListener("contextmenu", (e) => {
       (id) => void scheduledAction(id, t.id),
     );
   }
-  const binned = mailbox === "SPAM" || mailbox === "TRASH";
+  const binned = mail.mailbox === "SPAM" || mail.mailbox === "TRASH";
   // Your own sent mail is never unread and never spam.
-  const sent = mailbox === "SENT";
+  const sent = mail.mailbox === "SENT";
   const items: MenuItem[] = [
     { id: "reply", label: "Reply", icon: "arrow-bend-up-left", key: keyLabel("reply") },
     { id: "replyAll", label: "Reply all", icon: "arrow-bend-double-up-left", key: keyLabel("replyAll") },
@@ -1818,13 +1488,13 @@ threadList.addEventListener("contextmenu", (e) => {
     ...(sent
       ? []
       : [
-          mailbox === "SPAM"
+          mail.mailbox === "SPAM"
             ? { id: "spam", label: "Not spam", icon: "inbox", key: keyLabel("spam") }
             : { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
         ]),
     {
       id: "trash",
-      label: mailbox === "TRASH" ? "Delete forever" : "Delete",
+      label: mail.mailbox === "TRASH" ? "Delete forever" : "Delete",
       icon: "trash",
       key: keyLabel("trash"),
       danger: true,
@@ -1848,7 +1518,7 @@ document.addEventListener("pointerdown", (e) => {
 // Drafts save to Gmail Drafts as you type, so closing never loses work and drafts reach your other devices.
 
 type ReplyContext = { thread_id: string; in_reply_to: string; references: string };
-type Fields = { to?: string; cc?: string; bcc?: string; subject?: string; body?: string };
+
 type ComposeOptions = {
   title?: string;
   context?: ReplyContext | null;
@@ -1897,7 +1567,7 @@ function renderFromRow() {
   const row = $("#from-row");
   row.hidden = !multi() || !compose || !!compose.context;
   if (row.hidden || !compose) return;
-  row.querySelector(".from-choices")!.innerHTML = accounts
+  row.querySelector(".from-choices")!.innerHTML = mail.accounts
     .map(
       (
         a,
@@ -2031,8 +1701,8 @@ async function closeComposer(discard = false) {
   compose = null;
   detachComposer();
   if (discard) {
-    if (state.thread && mailbox === "DRAFT") {
-      threads = threads.filter((t) => t.id !== state.thread);
+    if (state.thread && mail.mailbox === "DRAFT") {
+      mail.threads = mail.threads.filter((t) => t.id !== state.thread);
       renderThreads();
     }
     await draftQueue;
@@ -2090,7 +1760,7 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     // Its draft couldn't be saved, so it came back open: keep it rather than replace it.
     if (compose) return;
   }
-  const inline = !!opts.inline && !!selected && (!opts.context || opts.context.thread_id === selected);
+  const inline = !!opts.inline && !!mail.selected && (!opts.context || opts.context.thread_id === mail.selected);
   compose = {
     title: opts.title ?? "New Email",
     context: opts.context ?? null,
@@ -2200,11 +1870,11 @@ function renderQuote(frame: HTMLIFrameElement, html: string) {
 }
 
 /** Replies to or forwards `last`: the newest message, or the one whose own buttons were clicked. */
-function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
-  if (!last || !selected) return;
-  const thread = threads.find((t) => t.id === selected);
+function reply(kind: "reply" | "all" | "forward", last = mail.messages.at(-1)) {
+  if (!last || !mail.selected) return;
+  const thread = mail.threads.find((t) => t.id === mail.selected);
   const account = thread?.account ?? defaultAccount();
-  const notMe = (a: string) => !accounts.includes(bareEmail(a));
+  const notMe = (a: string) => !mail.accounts.includes(bareEmail(a));
   const when = new Date(last.date).toLocaleString();
   if (kind === "forward") {
     const header = textToHtml(
@@ -2233,7 +1903,7 @@ function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
     },
     {
       title: kind === "all" ? "Reply all" : "Reply",
-      context: { thread_id: selected, in_reply_to: last.message_id, references: last.refs },
+      context: { thread_id: mail.selected, in_reply_to: last.message_id, references: last.refs },
       inline: settings.composer.replyIn === "inline",
       account,
     },
@@ -2538,7 +2208,7 @@ function aiDraftReply() {
   if (!state) return;
   const own = ownText();
   const name = accountSettings(state.account).name;
-  const conversation = messages
+  const conversation = mail.messages
     .slice(-8)
     .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
     .join("\n\n---\n\n");
@@ -2564,7 +2234,7 @@ $("#ai-write").addEventListener("click", () => {
     aiWrite(() => invoke<string>("ai_rewrite", { text: own.text, instruction, rules: settings.ai.writingRules }), own);
   // Edits only once there's text to edit, rather than a list of greyed-out ones.
   const items: MenuItem[] = [
-    ...(state.context && messages.length
+    ...(state.context && mail.messages.length
       ? [
           { id: "draft", label: own.text ? "Draft a reply from my notes" : "Draft a reply", icon: "message-reply" },
           ...(own.text ? ["-" as const] : []),
@@ -2598,18 +2268,18 @@ $("#ai-write").addEventListener("click", () => {
 
 /** Opening a scheduled email pauses it while it's edited; closing the composer schedules it again for the same time. */
 async function editScheduled(id: string) {
-  const r = scheduledRows.get(id);
+  const r = mail.scheduledRows.get(id);
   if (!r) return;
   // One step in the backend, so it can't be sent between reading it and taking it off the schedule.
   let attachments: OutFile[] | null;
   try {
     attachments = await invoke<OutFile[] | null>("take_scheduled", { account: r.account, id: r.id });
   } catch (err) {
-    refresh();
+    mail.refresh();
     return toast(String(err), { kind: "error" });
   }
   await openComposer(r.ui.fields, {
-    ...r.ui.opts,
+    ...(r.ui.opts as ComposeOptions),
     account: r.account,
     draftId: r.draft_id,
     attachments: attachments ?? [],
@@ -2621,7 +2291,7 @@ async function editScheduled(id: string) {
 }
 
 function scheduledAction(action: string, id: string) {
-  const r = scheduledRows.get(id);
+  const r = mail.scheduledRows.get(id);
   if (!r) return;
   if (action === "edit") return editScheduled(id);
   if (action === "sendNow") return invoke("reschedule", { account: r.account, id: r.id, sendAt: Date.now() });
@@ -2685,7 +2355,7 @@ function attachFrom(m: Message, account: string) {
  * keep) are looked up meanwhile, queued ahead of any save so an early save replaces this draft instead of adding one.
  */
 async function openDraft(id: string): Promise<boolean> {
-  const account = threads.find((t) => t.id === id)?.account ?? defaultAccount();
+  const account = mail.threads.find((t) => t.id === id)?.account ?? defaultAccount();
   const lookup = invoke<[string, string, string] | null>("find_draft", { account, thread: id }).catch(() => null);
   const msgs = await invoke<Message[]>("thread", { account, id }).catch(() => [] as Message[]);
   // The draft is the newest message in its conversation; a reply draft answers the one before it.
@@ -2837,12 +2507,12 @@ $("#mailboxes").addEventListener("click", (e) => {
 /** The sidebar's + next to Labels: creates the label in every account on screen. Gmail labels belong to one account;
  * the sidebar merges labels with the same name, so one created in each account shows as one label for all of them. */
 async function newLabel() {
-  const list = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
+  const list = mail.scope ?? mail.accounts.filter((a) => accountSettings(a).unified !== false);
   const where =
-    list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} accounts`;
+    list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} mail.accounts`;
   const picked = await askTextAndColor({
     title: "New label",
-    message: accounts.length > 1 ? `Created ${inMail()} for ${where}.` : `Created ${inMail()}.`,
+    message: mail.accounts.length > 1 ? `Created ${inMail()} for ${where}.` : `Created ${inMail()}.`,
     confirm: "Create",
     value: "",
     colors: LABEL_COLORS.map(([colorName, bg]) => [
@@ -2862,26 +2532,21 @@ async function newLabel() {
     )
   ).flatMap((r, i) => (r.status === "rejected" ? [`${accountName(list[i])}: ${r.reason}`] : []));
   if (failed.length) toast(`Couldn't create the label in ${failed.join("; ")}`, { kind: "error" });
-  await renderMailboxes();
+  await mail.loadLabels();
 }
 
 /** Shows some accounts (null: all of them); keeps the current mailbox when it exists there. */
 function setScope(list: string[] | null) {
-  scope = list && list.length < accounts.length ? accounts.filter((a) => list.includes(a)) : null;
+  mail.setScope(list);
   renderAccountFooter();
-  // Label ids belong to one account and merged ones to several, so a label mailbox falls back to the Inbox.
-  if (mailbox && !SYSTEM.some(([id]) => id === mailbox)) mailbox = "INBOX";
-  openMailbox(mailbox);
+  openMailbox(mail.mailbox);
 }
 
 function openMailbox(id: string | null) {
-  mailbox = id;
-  keptUnread.clear();
-  search = null;
+  mail.openMailbox(id);
   searchInputs.forEach((i) => (i.value = ""));
   clearReader();
   setView("list");
-  refresh();
 }
 
 let suppressClick = false;
@@ -2889,7 +2554,7 @@ threadList.addEventListener(
   "scroll",
   () => {
     if (threadList.scrollTop + threadList.clientHeight < threadList.scrollHeight - 400) return;
-    if (drawn >= threads.length) return loadMore();
+    if (drawn >= mail.threads.length) return mail.loadMore();
     drawn += PAGE;
     renderThreads();
   },
@@ -2902,7 +2567,7 @@ threadList.addEventListener("click", (e) => {
   if (!li) return;
   const rowAction = (e.target as Element).closest<HTMLElement>("[data-row-action]")?.dataset.rowAction;
   if (rowAction) act(rowAction, li.dataset.id);
-  else if ((e.metaKey || e.shiftKey) && mailbox !== "SCHEDULED") pick(li.dataset.id!, e.shiftKey);
+  else if ((e.metaKey || e.shiftKey) && mail.mailbox !== "SCHEDULED") pick(li.dataset.id!, e.shiftKey);
   else openThread(li.dataset.id!);
 });
 
@@ -3028,14 +2693,11 @@ function pickSuggestion(form: HTMLFormElement, i: number) {
 async function runLive(form: HTMLFormElement, value: string) {
   const seq = ++liveSeq;
   const [rows, senders] = await Promise.all([
-    invoke<Thread[]>("search_local", { query: value, accounts: scope }),
-    invoke<string[]>("suggest_senders", { query: value, accounts: scope }),
+    invoke<Thread[]>("search_local", { query: value, accounts: mail.scope }),
+    invoke<string[]>("suggest_senders", { query: value, accounts: mail.scope }),
   ]);
   if (seq !== liveSeq) return; // a newer keystroke already ran
-  search = value;
-  loadSeq++; // a list load still in flight mustn't replace these results
-  threads = rows;
-  renderThreads();
+  mail.showResults(value, rows);
   suggestions = value.includes("from:") ? [] : senders;
   suggestIndex = -1;
   renderSuggest(form);
@@ -3050,10 +2712,10 @@ searchInputs.forEach((input) => {
     if (!value) {
       liveSeq++;
       closeSuggest();
-      if (search !== null) {
-        search = null;
+      if (mail.search !== null) {
+        mail.search = null;
         clearReader();
-        refresh();
+        mail.refresh();
       }
       return;
     }
@@ -3087,13 +2749,13 @@ document.querySelectorAll<HTMLFormElement>(".search").forEach((form) =>
     liveSeq++;
     closeSuggest();
     if (!value) return;
-    search = value;
+    mail.search = value;
     clearReader();
     try {
-      threads = await invoke<Thread[]>("search_local", { query: value, accounts: scope });
+      mail.threads = await invoke<Thread[]>("search_local", { query: value, accounts: mail.scope });
       renderThreads();
       $("#list-title").textContent = searchingTitle(value);
-      await loadThreads();
+      await mail.loadThreads();
     } catch (err) {
       // Offline or Gmail error: keep the results already showing (this Mac's, and any account that answered).
       renderThreads();
@@ -3111,23 +2773,21 @@ $("#view-btn").addEventListener("click", () =>
 async function signOut(account: string) {
   const waiting = (await invoke<unknown[]>("scheduled", { accounts: [account] })).length;
   const unsent = waiting
-    ? ` ${waiting} scheduled ${waiting === 1 ? "email" : "emails"} won't be sent; ${waiting === 1 ? "it stays" : "they stay"} in ${imapAccounts.has(account) ? "Drafts" : "Gmail's Drafts"}.`
+    ? ` ${waiting} scheduled ${waiting === 1 ? "email" : "emails"} won't be sent; ${waiting === 1 ? "it stays" : "they stay"} in ${mail.imapAccounts.has(account) ? "Drafts" : "Gmail's Drafts"}.`
     : "";
   const yes = await ask({
     title: `Sign out of ${account}?`,
-    message: `Mail stored on this ${DEVICE} for this account will be removed. ${imapAccounts.has(account) ? "The mail on your server" : "Your Gmail"} isn't affected.${unsent}`,
+    message: `Mail stored on this ${DEVICE} for this account will be removed. ${mail.imapAccounts.has(account) ? "The mail on your server" : "Your Gmail"} isn't affected.${unsent}`,
     confirm: "Sign out",
     danger: true,
   });
   if (!yes) return;
   await invoke("sign_out", { account });
-  const left = (await loadStatus()).accounts;
+  const left = (await mail.loadStatus()).accounts;
   if (!left.length) return location.reload();
-  accounts = left;
-  scope = scope?.filter((a) => a !== account) ?? null;
-  if (!scope?.length) scope = null;
+  mail.setAccounts(left);
   closeSettings();
-  start(accounts);
+  start(mail.accounts);
 }
 
 $("#settings-btn").addEventListener("click", () => openSettings());
@@ -3135,7 +2795,7 @@ $("#settings-btn").addEventListener("click", () => openSettings());
 async function addAccount() {
   try {
     await invoke<string>("add_account");
-    start((await loadStatus()).accounts);
+    start((await mail.loadStatus()).accounts);
   } catch (e) {
     toast(String(e), { kind: "error" });
   }
@@ -3143,19 +2803,19 @@ async function addAccount() {
 
 /** Email and password sign-in for an account that isn't Gmail. */
 async function addOtherAccount() {
-  if (await addImapAccount()) start((await loadStatus()).accounts);
+  if (await addImapAccount()) start((await mail.loadStatus()).accounts);
 }
 
 initSettings({
-  accounts: () => accounts,
-  isImap: (a) => imapAccounts.has(a),
+  accounts: () => mail.accounts,
+  isImap: (a) => mail.imapAccounts.has(a),
   onAddAccount: addAccount,
   onAddImap: addOtherAccount,
   onSignOut: signOut,
 });
 $("#signin-other").addEventListener("click", () => void addOtherAccount());
 initOnboarding();
-initCleanup({ scope: () => scope, toast });
+initCleanup({ scope: () => mail.scope, toast });
 $("#cleanup-btn").addEventListener("click", () => void openCleanup());
 
 $("#signin-btn").addEventListener("click", async () => {
@@ -3164,7 +2824,7 @@ $("#signin-btn").addEventListener("click", async () => {
   $("#signin-error").textContent = "Finish signing in with Google…";
   try {
     await invoke<string>("add_account");
-    start((await loadStatus()).accounts);
+    start((await mail.loadStatus()).accounts);
   } catch (e) {
     $("#signin-error").textContent = String(e);
   } finally {
@@ -3184,7 +2844,7 @@ let paletteIndex = 0;
 
 function paletteCommands(): Command[] {
   const k = (a: string) => keyLabel(a);
-  const thread = threads.find((t) => t.id === selected);
+  const thread = mail.threads.find((t) => t.id === mail.selected);
   const email: Command[] = thread
     ? [
         { label: "Archive", icon: "archive", key: k("archive"), group: "Email", run: () => act("archive") },
@@ -3218,7 +2878,7 @@ function paletteCommands(): Command[] {
       ]
     : [];
   const switchTo: Command[] = multi()
-    ? [null, ...accounts].map(
+    ? [null, ...mail.accounts].map(
         (a): Command => ({
           label: a ? `Switch to ${accountName(a)}` : "Switch to All accounts",
           icon: "user-circle",
@@ -3231,7 +2891,7 @@ function paletteCommands(): Command[] {
     ...SYSTEM.map(
       ([id, name, icon]): Command => ({ label: `Go to ${name}`, icon, group: "Go to", run: () => openMailbox(id) }),
     ),
-    ...userLabels.map(
+    ...mail.userLabels.map(
       (l): Command => ({ label: `Go to ${l.name}`, icon: "tag", group: "Go to", run: () => openMailbox(l.id) }),
     ),
   ];
@@ -3434,8 +3094,8 @@ document.addEventListener("keydown", (e) => {
   }
   if (!action) return;
   e.preventDefault();
-  const i = threads.findIndex((t) => t.id === selected);
-  const go = (n: number) => threads[n] && openThread(threads[n].id);
+  const i = mail.threads.findIndex((t) => t.id === mail.selected);
+  const go = (n: number) => mail.threads[n] && openThread(mail.threads[n].id);
   switch (action) {
     case "compose":
       return $("#compose-btn").click();
@@ -3582,22 +3242,22 @@ function updateShortcutTips() {
 
 /** Sidebar footer: the accounts being shown, which opens the account picker when there are several. */
 function renderAccountFooter() {
-  const one = scope?.length === 1 ? scope[0] : !multi() ? accounts[0] : null;
+  const one = mail.scope?.length === 1 ? mail.scope[0] : !multi() ? mail.accounts[0] : null;
   $("#account-email").textContent = one
     ? accountName(one)
-    : scope
-      ? `${scope.length} accounts`
-      : `All accounts (${accounts.length})`;
+    : mail.scope
+      ? `${mail.scope.length} mail.accounts`
+      : `All accounts (${mail.accounts.length})`;
   $("#account-dot").className = `account-dot ${one ? `acct-${accountSettings(one).color}` : ""}`;
   $("#account-dot").hidden = !one;
   $("#account-all").hidden = !!one;
   $<HTMLButtonElement>("#account-btn").disabled = !multi();
   // Next to the list title: a dot per account, to show just that one (click it again for all).
-  const only = scope?.length === 1 ? scope[0] : null;
+  const only = mail.scope?.length === 1 ? mail.scope[0] : null;
   const dots = $("#acct-dots");
   dots.hidden = !multi();
   dots.classList.toggle("filtered", !!only);
-  dots.innerHTML = accounts
+  dots.innerHTML = mail.accounts
     .map((a) => {
       const label = only === a ? "Show all accounts" : `Show only ${accountName(a)}`;
       return `<button type="button" class="acct-pick${only === a ? " on" : ""}" data-acct="${esc(a)}" data-tip="${esc(label)}" aria-label="${esc(label)}" aria-pressed="${only === a}"><span class="account-dot acct-${accountSettings(a).color}"></span></button>`;
@@ -3606,17 +3266,17 @@ function renderAccountFooter() {
 }
 $("#acct-dots").addEventListener("click", (e) => {
   const a = (e.target as Element).closest<HTMLElement>("[data-acct]")?.dataset.acct;
-  if (a) setScope(scope?.length === 1 && scope[0] === a ? null : [a]);
+  if (a) setScope(mail.scope?.length === 1 && mail.scope[0] === a ? null : [a]);
 });
 
 /** Multi-select account picker above the sidebar footer; stays open while ticking accounts. */
 function openAccountMenu() {
   const btn = $("#account-btn");
-  const shown = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
+  const shown = mail.scope ?? mail.accounts.filter((a) => accountSettings(a).unified !== false);
   const items: MenuItem[] = [
-    { id: "", label: "All accounts", icon: "users", checked: !scope },
+    { id: "", label: "All accounts", icon: "users", checked: !mail.scope },
     "-",
-    ...accounts.map((a) => ({
+    ...mail.accounts.map((a) => ({
       id: a,
       label: accountName(a),
       icon: "",
@@ -3628,7 +3288,7 @@ function openAccountMenu() {
   showMenu(null, items, { x: r.left, y: r.top }, (id) => {
     if (!id) setScope(null);
     // From "All accounts", or with just two, clicking an account shows only that one.
-    else if (!scope || accounts.length === 2) setScope([id]);
+    else if (!mail.scope || mail.accounts.length === 2) setScope([id]);
     else {
       const next = shown.includes(id) ? shown.filter((a) => a !== id) : [...shown, id];
       // At least one account stays ticked.
@@ -3647,34 +3307,73 @@ $("#account-btn").addEventListener("click", () =>
 
 onSettingsChange((path) => {
   applyVisualSettings();
-  if (accounts.length) renderAccountFooter();
+  if (mail.accounts.length) renderAccountFooter();
   bindings = bindingsFrom(settings.shortcuts);
   renderViewButton();
   updateShortcutTips();
-  if (!app.hidden && (path === "*" || path.startsWith("inbox.") || path === "accounts")) refresh();
-  else if (!app.hidden && path.startsWith("sidebar.")) void renderMailboxes();
+  if (!app.hidden && (path === "*" || path.startsWith("inbox.") || path === "accounts")) mail.refresh();
+  else if (!app.hidden && path.startsWith("sidebar.")) void mail.loadLabels();
 });
 
 function start(list: string[]) {
-  accounts = list;
+  mail.setAccounts(list);
   // New accounts take the next unused colour in Shift's order, like the native app.
-  for (const a of accounts) {
+  for (const a of mail.accounts) {
     if (settings.accounts[a]?.color) continue;
-    const used = accounts.map((x) => settings.accounts[x]?.color).filter(Boolean);
+    const used = mail.accounts.map((x) => settings.accounts[x]?.color).filter(Boolean);
     setAccountSetting(a, "color", ACCOUNT_COLOR_ORDER.find((c) => !used.includes(c)) ?? ACCOUNT_COLOR_ORDER[0]);
   }
-  scope = scope?.filter((a) => accounts.includes(a)) ?? null;
-  if (!scope?.length) scope = null;
   renderAccountFooter();
   $("#signin").hidden = true;
   app.hidden = false;
   clearReader();
-  refresh();
+  mail.refresh();
   // Adding an account from inside the walkthrough calls start() again; the open walkthrough carries on.
-  if (onboardingDue() && $("#onboarding").hidden) startOnboarding({ accounts: () => accounts, addAccount, keyLabel });
+  if (onboardingDue() && $("#onboarding").hidden)
+    startOnboarding({ accounts: () => mail.accounts, addAccount, keyLabel });
 }
 
-listen("mail-changed", refresh);
+mail.subscribe((e) => {
+  switch (e.type) {
+    case "labels":
+      return drawMailboxes();
+    case "threads":
+      return renderThreads();
+    case "loaded":
+      // A list too short to scroll (Trash, a quiet label) asks for older mail straight away.
+      if (threadList.scrollHeight <= threadList.clientHeight) void mail.loadMore();
+      return;
+    case "searching":
+      $("#list-title").textContent = searchingTitle(e.query);
+      return;
+    case "refreshed": {
+      // A new message in the open conversation (a reply, or one just sent) shows without reopening it. Not while an
+      // inline reply is being written, and not in Drafts or Scheduled, where opening a row opens the composer.
+      const open = mail.threads.find((t) => t.id === mail.selected);
+      if (
+        open &&
+        open.count !== mail.messages.length &&
+        !compose?.inline &&
+        mail.mailbox !== "DRAFT" &&
+        mail.mailbox !== "SCHEDULED"
+      )
+        void openThread(open.id);
+      return;
+    }
+    case "error":
+      toast(e.message, { kind: "error" });
+      return;
+    case "sync-error": {
+      // Shown once per distinct error every 10 minutes (sync retries every tick), and never over an Undo or Restart toast.
+      const now = Date.now();
+      if (now - (syncErrorShown.get(e.message) ?? 0) < 10 * 60_000) return;
+      if (actionToastOpen()) return;
+      syncErrorShown.set(e.message, now);
+      toast(`Sync failed: ${e.message}`, { kind: "error" });
+    }
+  }
+});
+const syncErrorShown = new Map<string, number>();
 // Counted, since a manual sync can overlap the timed one.
 let syncs = 0;
 listen<boolean>("syncing", (e) =>
@@ -3685,10 +3384,10 @@ listen("scheduled-sent", () => toast("Email sent", { kind: "success" }));
 // A clicked new-mail notification: its email (or, for several, the Inbox), in a view that includes its account.
 listen<{ account?: string; thread?: string }>("open-from-notification", async ({ payload }) => {
   if (settingsOpen()) closeSettings();
-  if (payload.account && scope && !scope.includes(payload.account)) setScope(null);
-  if (mailbox !== "INBOX" || search) openMailbox("INBOX");
-  await loadThreads();
-  if (payload.thread && threads.some((t) => t.id === payload.thread)) await openThread(payload.thread);
+  if (payload.account && mail.scope && !mail.scope.includes(payload.account)) setScope(null);
+  if (mail.mailbox !== "INBOX" || mail.search) openMailbox("INBOX");
+  await mail.loadThreads();
+  if (payload.thread && mail.threads.some((t) => t.id === payload.thread)) await openThread(payload.thread);
 });
 // Messages from the backend, such as the outcome of Shift → Check for Updates….
 listen<string>("app-toast", (e) => toast(e.payload));
@@ -3715,18 +3414,9 @@ listen<string>("update-ready", (e) =>
     action: { label: "Restart", run: () => void saveBeforeQuit().finally(() => invoke("restart_app")) },
   }),
 );
-// Shown once per distinct error every 10 minutes (sync retries every tick), and never over an Undo or Restart toast.
-const syncErrorShown = new Map<string, number>();
-listen<string>("sync-error", (e) => {
-  const now = Date.now();
-  if (now - (syncErrorShown.get(e.payload) ?? 0) < 10 * 60_000) return;
-  if (actionToastOpen()) return;
-  syncErrorShown.set(e.payload, now);
-  toast(`Sync failed: ${e.payload}`, { kind: "error" });
-});
 
 loadSettings()
-  .then(loadStatus)
+  .then(mail.loadStatus)
   .then((s) => {
     if (s.accounts.length) start(s.accounts);
     else $("#signin").hidden = false;
