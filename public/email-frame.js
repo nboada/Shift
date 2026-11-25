@@ -51,18 +51,37 @@
     });
   }
 
+  // Phones: an email laid out wider than the frame (newsletters, fixed-width tables) is scaled down to fit, so it
+  // never scrolls sideways. Measured with the zoom off each time, since images and rotation change the width.
+  const fitting = !!doc.currentScript?.dataset.fit;
+  const fitWidth = () => {
+    // iOS enlarges text in wide layouts on its own, which fights the zoom and overlaps the lines.
+    doc.documentElement.style.webkitTextSizeAdjust = "100%";
+    doc.body.style.zoom = "";
+    const wide = doc.documentElement.scrollWidth;
+    const room = doc.documentElement.clientWidth;
+    if (wide > room + 1) doc.body.style.zoom = String(room / wide);
+  };
+
   try {
     if (doc.currentScript?.dataset.even) evenTextSize();
     foldQuote();
   } catch {
     // Odd markup: show the email as it is.
   }
+  if (fitting) {
+    fitWidth();
+    addEventListener("load", fitWidth);
+    addEventListener("resize", fitWidth);
+  }
 
   // The <html> box is as tall as the content (scrollHeight never drops below the frame's own height), so the frame
   // also shrinks when the quote folds away. Hidden frames measure 0 and aren't reported.
   let last = 0;
   const fit = () => {
-    const h = Math.ceil(Math.max(doc.documentElement.getBoundingClientRect().height, doc.body.scrollHeight));
+    // A zoomed body's scrollHeight is its unzoomed height, so a fitted email goes by the <html> box alone.
+    const box = doc.documentElement.getBoundingClientRect().height;
+    const h = Math.ceil(fitting ? box : Math.max(box, doc.body.scrollHeight));
     if (h && h !== last) post({ type: "height", height: (last = h) });
   };
   fit();
