@@ -1404,7 +1404,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .compose-quote.ProseMirror-selectednode { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 button.secondary { padding: 6px 12px; border: 1px solid var(--card-line); background: transparent; font-weight: 500; }
-button.secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--brand), transparent 92%); border-color: color-mix(in srgb, var(--brand), transparent 60%); }
+button.secondary:hover:not(:disabled) { border-color: color-mix(in srgb, var(--text), transparent 70%); }
 button.secondary:disabled { opacity: 0.5; }
 .empty-btn, .quiet-danger { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; color: var(--muted); font-size: 12.5px; font-weight: 500; transition: background-color 0.12s, color 0.12s; }
 .empty-btn i, .quiet-danger i { font-size: 15px; }
