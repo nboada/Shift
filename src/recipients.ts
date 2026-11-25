@@ -30,6 +30,19 @@ export function splitList(list: string): string[] {
   return out;
 }
 
+export const displayName = (addr: string) => {
+  const m = addr.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>/);
+  return (m ? m[1] || m[2] : addr).trim();
+};
+export const bareEmail = (addr: string) => (addr.match(/<([^>]+)>/)?.[1] ?? addr).trim().toLowerCase();
+
+/** Splits an address header on commas that aren't inside a quoted display name. */
+export const splitAddresses = (list: string) =>
+  list
+    .split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)
+    .map((a) => a.trim())
+    .filter(Boolean);
+
 export const isValidAddress = (raw: string) => EMAIL.test(parseAddress(raw)[1]);
 
 export class Recipients {
