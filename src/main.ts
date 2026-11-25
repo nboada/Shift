@@ -1137,7 +1137,7 @@ function act(action: string, id = selected) {
   if (!t) return;
   if (mailbox === "SCHEDULED") return scheduledAction(action, t.id);
   // Replies need the thread's messages, so open it first.
-  if (["reply", "replyAll", "forward"].includes(action) && t.id !== selected) {
+  if (["reply", "replyAll", "forward", "aiReply"].includes(action) && t.id !== selected) {
     openThread(t.id).then(() => act(action, t.id));
     return;
   }
@@ -1175,6 +1175,8 @@ function act(action: string, id = selected) {
       return reply("all");
     case "forward":
       return reply("forward");
+    case "aiReply":
+      return reply(settings.composer.defaultReply === "all" ? "all" : "reply")?.then(aiDraftReply);
     case "move":
       return openMenu("move", t);
     case "label":
@@ -1547,7 +1549,21 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
         menuPos,
         (bg) => {
           const text = LABEL_COLORS.find((c) => c[1] === bg)![2];
-          void labelAction(invoke("set_label_color", { label: label.id, background: bg, text, accounts: scope }));
+          // Shown at once, then sent to Gmail; if Gmail refuses, the refresh puts the saved colour back.
+          for (const l of [...userLabels, ...[...accountLabels.values()].flat()])
+            if (l.name === label.name) l.color = bg;
+          const dot = document.querySelector<HTMLElement>(
+            `#mailboxes [data-mailbox="${CSS.escape(label.id)}"] .label-dot`,
+          );
+          if (dot) {
+            dot.className = "label-dot";
+            dot.dataset.color = bg.slice(1).toLowerCase();
+          }
+          renderThreads();
+          invoke("set_label_color", { label: label.id, background: bg, text, accounts: scope }).catch((err) => {
+            toast(String(err), { kind: "error" });
+            refresh();
+          });
         },
       );
       return true;
@@ -1721,6 +1737,7 @@ threadList.addEventListener("contextmenu", (e) => {
     { id: "reply", label: "Reply", icon: "arrow-bend-up-left", key: keyLabel("reply") },
     { id: "replyAll", label: "Reply all", icon: "arrow-bend-double-up-left", key: keyLabel("replyAll") },
     { id: "forward", label: "Forward", icon: "arrow-bend-up-right", key: keyLabel("forward") },
+    { id: "aiReply", label: "Draft a reply with AI", icon: "message-ai" },
     "-",
     // Spam and Trash are on their way out: no reading state, pins or labels, just where the email goes next.
     ...(binned
@@ -2466,6 +2483,28 @@ async function aiWrite(run: () => Promise<string>, range: { from: number; to: nu
   }
 }
 
+/** Drafts a reply to the open conversation into the composer, from the user's notes there if any. */
+function aiDraftReply() {
+  const state = compose;
+  if (!state) return;
+  const own = ownText();
+  const name = accountSettings(state.account).name;
+  const conversation = messages
+    .slice(-8)
+    .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
+    .join("\n\n---\n\n");
+  return aiWrite(
+    () =>
+      invoke<string>("ai_draft_reply", {
+        conversation,
+        notes: own.text,
+        me: name ? `${name} <${state.account}>` : state.account,
+        rules: settings.ai.writingRules,
+      }),
+    own,
+  );
+}
+
 $("#ai-write").addEventListener("click", () => {
   const state = compose;
   const anchor = $<HTMLButtonElement>("#ai-write");
@@ -2474,23 +2513,6 @@ $("#ai-write").addEventListener("click", () => {
   const own = ownText();
   const rewrite = (instruction: string) =>
     aiWrite(() => invoke<string>("ai_rewrite", { text: own.text, instruction, rules: settings.ai.writingRules }), own);
-  const draftReply = () => {
-    const name = accountSettings(state.account).name;
-    const conversation = messages
-      .slice(-8)
-      .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
-      .join("\n\n---\n\n");
-    void aiWrite(
-      () =>
-        invoke<string>("ai_draft_reply", {
-          conversation,
-          notes: own.text,
-          me: name ? `${name} <${state.account}>` : state.account,
-          rules: settings.ai.writingRules,
-        }),
-      own,
-    );
-  };
   // Edits only once there's text to edit, rather than a list of greyed-out ones.
   const items: MenuItem[] = [
     ...(state.context && messages.length
@@ -2509,7 +2531,7 @@ $("#ai-write").addEventListener("click", () => {
   ];
   const r = anchor.getBoundingClientRect();
   showMenu(editor.state.selection.empty ? null : "Edit the selection", items, { x: r.left, y: r.bottom + 6 }, (id) => {
-    if (id === "draft") draftReply();
+    if (id === "draft") void aiDraftReply();
     else if (id === "custom") {
       void askText({
         title: "Rewrite with AI",
