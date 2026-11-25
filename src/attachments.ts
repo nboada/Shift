@@ -49,7 +49,12 @@ export function readFile(file: File): Promise<OutFile> {
     const r = new FileReader();
     r.onload = () => {
       const url = String(r.result);
-      resolve({ name: file.name, mime: file.type || "application/octet-stream", data: url.slice(url.indexOf(",") + 1), size: file.size });
+      resolve({
+        name: file.name,
+        mime: file.type || "application/octet-stream",
+        data: url.slice(url.indexOf(",") + 1),
+        size: file.size,
+      });
     };
     r.onerror = () => reject(r.error);
     r.readAsDataURL(file);
@@ -57,8 +62,16 @@ export function readFile(file: File): Promise<OutFile> {
 }
 
 /** One attachment chip: icon, name and size. `data` attributes say which file it is. */
-export function attachmentButton(icon: string, name: string, size: number, data: Record<string, string | number>, removable = false) {
-  const attrs = Object.entries(data).map(([k, v]) => `data-${k}="${esc(String(v))}"`).join(" ");
+export function attachmentButton(
+  icon: string,
+  name: string,
+  size: number,
+  data: Record<string, string | number>,
+  removable = false,
+) {
+  const attrs = Object.entries(data)
+    .map(([k, v]) => `data-${k}="${esc(String(v))}"`)
+    .join(" ");
   // Composer chips only remove; files under a message open on click.
   const [open, close] = removable ? ["<span", "</span>"] : ['<button type="button"', "</button>"];
   return `<span class="attachment" ${attrs}>

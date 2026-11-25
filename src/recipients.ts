@@ -115,7 +115,8 @@ export class Recipients {
     const open = this.suggestions.length > 0;
     if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
-      this.index = e.key === "ArrowDown" ? Math.min(this.index + 1, this.suggestions.length - 1) : Math.max(this.index - 1, 0);
+      this.index =
+        e.key === "ArrowDown" ? Math.min(this.index + 1, this.suggestions.length - 1) : Math.max(this.index - 1, 0);
       this.renderList();
     } else if ((e.key === "Enter" || e.key === "Tab") && open && this.index >= 0) {
       e.preventDefault();
@@ -166,7 +167,7 @@ export class Recipients {
         })
         .join(""),
     );
-    this.input.placeholder = this.chips.length ? "" : this.input.dataset.placeholder ?? "";
+    this.input.placeholder = this.chips.length ? "" : (this.input.dataset.placeholder ?? "");
   }
 
   private renderList() {

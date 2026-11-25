@@ -3,7 +3,10 @@ import { isValidAddress, parseAddress, splitList } from "./recipients";
 
 test("splits address lists without breaking quoted names", () => {
   expect(splitList(`"Doe, Jane" <jane@x.com>, bob@y.com; Al <al@z.com>\nzed@q.io`)).toEqual([
-    `"Doe, Jane" <jane@x.com>`, "bob@y.com", "Al <al@z.com>", "zed@q.io",
+    `"Doe, Jane" <jane@x.com>`,
+    "bob@y.com",
+    "Al <al@z.com>",
+    "zed@q.io",
   ]);
   expect(splitList(" , ")).toEqual([]);
 });

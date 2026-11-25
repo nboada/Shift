@@ -7,8 +7,18 @@ import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { SEND, bindingsFrom, comboOf, formatCombo, keysFor } from "./keys";
 import {
-  ACCOUNT_COLOR_ORDER, accountSettings, applyVisualSettings, flushSettings, loadSettings, onSaveError, onSettingsChange, setAccountSetting, setSetting, settings,
-  signatureFor, stepZoom,
+  ACCOUNT_COLOR_ORDER,
+  accountSettings,
+  applyVisualSettings,
+  flushSettings,
+  loadSettings,
+  onSaveError,
+  onSettingsChange,
+  setAccountSetting,
+  setSetting,
+  settings,
+  signatureFor,
+  stepZoom,
 } from "./settings";
 import { closeSettings, initSettings, openSettings, settingsOpen } from "./settings-ui";
 import { arrange } from "./sidebar";
@@ -25,18 +35,43 @@ import { actionToastOpen, toast } from "./toast";
 import { Menu } from "@tauri-apps/api/menu";
 import AirDatepicker from "air-datepicker";
 import localeEnModule from "air-datepicker/locale/en";
-import { type Attachment, type OutFile, attachmentButton, checkSize, fileIcon, listedAttachments, readFile } from "./attachments";
+import {
+  type Attachment,
+  type OutFile,
+  attachmentButton,
+  checkSize,
+  fileIcon,
+  listedAttachments,
+  readFile,
+} from "./attachments";
 
 type Label = { id: string; name: string; kind: string; unread: number; color: string | null };
 type Thread = {
-  id: string; subject: string; sender: string; snippet: string;
-  date: number; count: number; unread: boolean; starred: boolean; primary: boolean; labels: string;
+  id: string;
+  subject: string;
+  sender: string;
+  snippet: string;
+  date: number;
+  count: number;
+  unread: boolean;
+  starred: boolean;
+  primary: boolean;
+  labels: string;
   /** Address of the account the thread belongs to. */
   account: string;
 };
 type Message = {
-  id: string; sender: string; recipients: string; cc: string; date: number; subject: string;
-  message_id: string; refs: string; html: string | null; text: string | null; attachments: Attachment[];
+  id: string;
+  sender: string;
+  recipients: string;
+  cc: string;
+  date: number;
+  subject: string;
+  message_id: string;
+  refs: string;
+  html: string | null;
+  text: string | null;
+  attachments: Attachment[];
   /** Where replies go when the sender set Reply-To (mailing lists, help desks); empty otherwise. */
   reply_to: string;
 };
@@ -67,7 +102,6 @@ const SYSTEM: [string | null, string, string][] = [
   ["TRASH", "Trash", "trash"],
 ];
 
-
 /** Signed-in Google accounts, oldest first. */
 let accounts: string[] = [];
 /** Which accounts the sidebar and list show; null is "All accounts". */
@@ -78,7 +112,7 @@ const multi = () => accounts.length > 1;
 const defaultAccount = () => {
   if (scope?.length === 1) return scope[0];
   const pick = settings.composer.defaultFrom;
-  return pick && accounts.includes(pick) && (!scope || scope.includes(pick)) ? pick : scope?.[0] ?? accounts[0];
+  return pick && accounts.includes(pick) && (!scope || scope.includes(pick)) ? pick : (scope?.[0] ?? accounts[0]);
 };
 const accountName = (a: string) => accountSettings(a).title || a;
 let mailbox: string | null = "INBOX";
@@ -114,7 +148,10 @@ function dateGroup(ms: number) {
   if (d >= day) return "Today";
   if (d.getTime() >= day.getTime() - 86_400_000) return "Yesterday";
   if (d.getTime() >= day.getTime() - 6 * 86_400_000) return "This week";
-  return d.toLocaleDateString([], { month: "long", ...(d.getFullYear() === day.getFullYear() ? {} : { year: "numeric" }) });
+  return d.toLocaleDateString([], {
+    month: "long",
+    ...(d.getFullYear() === day.getFullYear() ? {} : { year: "numeric" }),
+  });
 }
 
 const setView = (v: "mailboxes" | "list" | "reader") => (app.dataset.view = v);
@@ -133,9 +170,16 @@ const keyLabel = (action: string) => {
 
 // Pairs from Gmail's label palette (it rejects other colours); text colour is what Gmail draws the name in.
 const LABEL_COLORS: [name: string, background: string, text: string][] = [
-  ["Red", "#fb4c2f", "#ffffff"], ["Orange", "#ffad47", "#ffffff"], ["Yellow", "#fad165", "#000000"],
-  ["Green", "#16a766", "#ffffff"], ["Mint", "#43d692", "#ffffff"], ["Teal", "#2da2bb", "#ffffff"],
-  ["Blue", "#4a86e8", "#ffffff"], ["Purple", "#a479e2", "#ffffff"], ["Pink", "#f691b3", "#ffffff"], ["Grey", "#999999", "#ffffff"],
+  ["Red", "#fb4c2f", "#ffffff"],
+  ["Orange", "#ffad47", "#ffffff"],
+  ["Yellow", "#fad165", "#000000"],
+  ["Green", "#16a766", "#ffffff"],
+  ["Mint", "#43d692", "#ffffff"],
+  ["Teal", "#2da2bb", "#ffffff"],
+  ["Blue", "#4a86e8", "#ffffff"],
+  ["Purple", "#a479e2", "#ffffff"],
+  ["Pink", "#f691b3", "#ffffff"],
+  ["Grey", "#999999", "#ffffff"],
 ];
 const isHex = (c: string | null): c is string => !!c && /^#[0-9a-f]{6}$/i.test(c);
 // Gmail colours go through a generated stylesheet (no inline styles); only #rrggbb values get into it.
@@ -143,17 +187,23 @@ function labelColorCss(colors: string[]) {
   const hexes = new Set([...colors, ...LABEL_COLORS.map((c) => c[1])].filter(isHex).map((c) => c.toLowerCase()));
   // Dots take the colour as is; list chips a faded tint of it with the name in the colour, mixed toward the text colour
   // so pale ones (yellow, mint) stay readable.
-  $("#label-colors").textContent = [...hexes].map((h) => `.label-dot[data-color="${h.slice(1)}"] { background: ${h}; }
-.row-label[data-color="${h.slice(1)}"] { background: color-mix(in srgb, ${h} 16%, transparent); color: color-mix(in srgb, ${h} 70%, var(--text)); }`).join("\n");
+  $("#label-colors").textContent = [...hexes]
+    .map(
+      (h) => `.label-dot[data-color="${h.slice(1)}"] { background: ${h}; }
+.row-label[data-color="${h.slice(1)}"] { background: color-mix(in srgb, ${h} 16%, transparent); color: color-mix(in srgb, ${h} 70%, var(--text)); }`,
+    )
+    .join("\n");
 }
 /** A label's Gmail colour, or a plain grey dot when it has none, as in Gmail (a made-up colour looked like a real one). */
 const labelDot = (_name: string, color: string | null) =>
-  isHex(color) ? `<span class="label-dot" data-color="${color.slice(1).toLowerCase()}"></span>` : `<span class="label-dot none"></span>`;
+  isHex(color)
+    ? `<span class="label-dot" data-color="${color.slice(1).toLowerCase()}"></span>`
+    : `<span class="label-dot none"></span>`;
 
 /** Unread Inbox mail across every account in the unified view, on the Dock icon, whichever account is on screen. */
 async function updateDockBadge() {
   const count = settings.inbox.unreadBadge
-    ? (await invoke<Label[]>("labels", { accounts: null })).find((l) => l.id === "INBOX")?.unread ?? 0
+    ? ((await invoke<Label[]>("labels", { accounts: null })).find((l) => l.id === "INBOX")?.unread ?? 0)
     : 0;
   await getCurrentWindow().setBadgeCount(count || undefined);
 }
@@ -161,8 +211,14 @@ async function updateDockBadge() {
 async function renderMailboxes() {
   const labels = await invoke<Label[]>("labels", { accounts: scope });
   userLabels = labels.filter((l) => l.kind === "user");
-  accountLabels = new Map(await Promise.all(accounts.map(async (a) =>
-    [a, (await invoke<Label[]>("labels", { accounts: [a] })).filter((l) => l.kind === "user")] as const)));
+  accountLabels = new Map(
+    await Promise.all(
+      accounts.map(
+        async (a) =>
+          [a, (await invoke<Label[]>("labels", { accounts: [a] })).filter((l) => l.kind === "user")] as const,
+      ),
+    ),
+  );
   const unread = new Map(labels.map((l) => [l.id, l.unread]));
   labelColorCss(labels.map((l) => l.color ?? ""));
   const link = (group: string, id: string | null, name: string, icon: string, count = 0, color: string | null = null) =>
@@ -171,27 +227,49 @@ async function renderMailboxes() {
   const badge = settings.inbox.unreadBadge;
   void updateDockBadge();
   const { order, hidden } = settings.sidebar;
-  const system = arrange(SYSTEM, ([id]) => id ?? "ALL", order, hidden)
-    .map(([id, name, icon]) => link("system", id, name, icon, badge && id === "INBOX" ? unread.get(id) : 0));
-  const user = arrange(userLabels, (l) => l.id, order, hidden).map((l) => link("label", l.id, l.name, "", badge ? l.unread : 0, l.color));
-  $("#mailboxes").innerHTML = system.join("") +
+  const system = arrange(SYSTEM, ([id]) => id ?? "ALL", order, hidden).map(([id, name, icon]) =>
+    link("system", id, name, icon, badge && id === "INBOX" ? unread.get(id) : 0),
+  );
+  const user = arrange(userLabels, (l) => l.id, order, hidden).map((l) =>
+    link("label", l.id, l.name, "", badge ? l.unread : 0, l.color),
+  );
+  $("#mailboxes").innerHTML =
+    system.join("") +
     `<h3><span>Labels</span><button type="button" class="label-add" data-tip="New label" aria-label="New label">${iconHtml("plus")}</button></h3>${user.join("")}`;
 }
 
 function listTitle() {
   if (search) return `Search: ${search}`;
-  return SYSTEM.find(([id]) => id === mailbox)?.[1] ?? document.querySelector(`[data-mailbox="${CSS.escape(mailbox ?? "")}"] span:not(.label-dot)`)?.textContent ?? "";
+  return (
+    SYSTEM.find(([id]) => id === mailbox)?.[1] ??
+    document.querySelector(`[data-mailbox="${CSS.escape(mailbox ?? "")}"] span:not(.label-dot)`)?.textContent ??
+    ""
+  );
 }
 
 const PERSONAL_DOMAINS = new Set([
-  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "icloud.com", "me.com",
-  "mac.com", "yahoo.com", "aol.com", "proton.me", "protonmail.com", "fastmail.com", "bigpond.com",
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "yahoo.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "fastmail.com",
+  "bigpond.com",
 ]);
 
 // shortcut: approximates the registrable domain (handles com.au/co.uk style suffixes); swap in a public-suffix list if logos misfire.
 function siteDomain(domain: string) {
   const parts = domain.split(".");
-  const n = parts.length > 2 && parts.at(-1)!.length === 2 && /^(com|co|org|net|gov|edu|ac)$/.test(parts.at(-2)!) ? 3 : 2;
+  const n =
+    parts.length > 2 && parts.at(-1)!.length === 2 && /^(com|co|org|net|gov|edu|ac)$/.test(parts.at(-2)!) ? 3 : 2;
   return parts.slice(-n).join(".");
 }
 
@@ -199,25 +277,38 @@ function siteDomain(domain: string) {
 function avatar(addr: string) {
   const email = bareEmail(addr);
   const name = displayName(addr) || email;
-  const initials = name.split(/[\s.@_-]+/).filter((w) => /\w/.test(w)).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+  const initials =
+    name
+      .split(/[\s.@_-]+/)
+      .filter((w) => /\w/.test(w))
+      .slice(0, 2)
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase() || "?";
   const color = hash(email) % 8;
   const domain = email.split("@")[1] ?? "";
   const site = domain && !PERSONAL_DOMAINS.has(domain) ? siteDomain(domain) : "";
   const known = site ? logos.get(site) : false;
   // Initials show until a logo has loaded once; after that the domain's logo is drawn straight away.
-  const logo = known === false ? ""
-    : `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(site)}&sz=64" alt="" data-site="${esc(site)}"${known ? "" : ' class="pending"'}>`;
+  const logo =
+    known === false
+      ? ""
+      : `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(site)}&sz=64" alt="" data-site="${esc(site)}"${known ? "" : ' class="pending"'}>`;
   return `<span class="avatar c${color}${known ? " logo" : ""}">${esc(initials)}${logo}</span>`;
 }
 
 /** Which sites have a logo, remembered across launches so the list never waits on the favicon service to decide. */
-const logos = new Map<string, boolean>(Object.entries((() => {
-  try {
-    return JSON.parse(localStorage.getItem("avatar-logos") ?? "{}") as Record<string, boolean>;
-  } catch {
-    return {};
-  }
-})()));
+const logos = new Map<string, boolean>(
+  Object.entries(
+    (() => {
+      try {
+        return JSON.parse(localStorage.getItem("avatar-logos") ?? "{}") as Record<string, boolean>;
+      } catch {
+        return {};
+      }
+    })(),
+  ),
+);
 let logosSave = 0;
 function rememberLogo(site: string, has: boolean) {
   if (logos.get(site) === has) return;
@@ -233,21 +324,29 @@ function rememberLogo(site: string, has: boolean) {
 }
 
 // Google answers unknown domains with a 16px globe, so anything that small falls back to initials.
-document.addEventListener("load", (e) => {
-  const img = e.target;
-  if (!(img instanceof HTMLImageElement) || !img.dataset.site) return;
-  const has = img.naturalWidth >= 32;
-  rememberLogo(img.dataset.site, has);
-  if (!has) return img.remove();
-  img.classList.remove("pending");
-  img.parentElement?.classList.add("logo");
-}, true);
-document.addEventListener("error", (e) => {
-  const img = e.target;
-  if (!(img instanceof HTMLImageElement) || !img.dataset.site) return;
-  rememberLogo(img.dataset.site, false);
-  img.remove();
-}, true);
+document.addEventListener(
+  "load",
+  (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || !img.dataset.site) return;
+    const has = img.naturalWidth >= 32;
+    rememberLogo(img.dataset.site, has);
+    if (!has) return img.remove();
+    img.classList.remove("pending");
+    img.parentElement?.classList.add("logo");
+  },
+  true,
+);
+document.addEventListener(
+  "error",
+  (e) => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || !img.dataset.site) return;
+    rememberLogo(img.dataset.site, false);
+    img.remove();
+  },
+  true,
+);
 
 type Section = "pinned" | "new" | "people" | "notifications" | "seen";
 const SECTIONS: [Section, string, string][] = [
@@ -282,9 +381,17 @@ function renderViewButton() {
 /** The thread's own labels as small chips after the subject: two at most, then "+N". The label being viewed is left out. */
 function rowLabels(t: Thread) {
   const ids = t.labels.split(" ");
-  const own = (accountLabels.get(t.account) ?? []).filter((l) => ids.includes(l.id) && mailbox !== l.id && mailbox !== `name:${l.name}`);
+  const own = (accountLabels.get(t.account) ?? []).filter(
+    (l) => ids.includes(l.id) && mailbox !== l.id && mailbox !== `name:${l.name}`,
+  );
   if (!own.length) return "";
-  const chips = own.slice(0, 2).map((l) => `<span class="row-label"${isHex(l.color) ? ` data-color="${l.color.slice(1).toLowerCase()}"` : ""}>${esc(l.name)}</span>`).join("");
+  const chips = own
+    .slice(0, 2)
+    .map(
+      (l) =>
+        `<span class="row-label"${isHex(l.color) ? ` data-color="${l.color.slice(1).toLowerCase()}"` : ""}>${esc(l.name)}</span>`,
+    )
+    .join("");
   return `<span class="row-labels">${chips}${own.length > 2 ? `<span class="row-label more">+${own.length - 2}</span>` : ""}</span>`;
 }
 
@@ -293,7 +400,8 @@ function rowActions(t: Thread) {
   const button = (action: string, label: string, icon: string) =>
     `<button type="button" class="icon" data-row-action="${action}" data-tip="${esc(keyLabel(action) ? `${label} (${keyLabel(action)})` : label)}" aria-label="${label}">${iconHtml(icon)}</button>`;
   return `<span class="row-actions">${button("reply", "Reply", "arrow-bend-up-left")}${
-    t.labels.split(" ").includes("INBOX") ? button("archive", "Archive", "archive") : ""}${button("trash", "Delete", "trash")}</span>`;
+    t.labels.split(" ").includes("INBOX") ? button("archive", "Archive", "archive") : ""
+  }${button("trash", "Delete", "trash")}</span>`;
 }
 
 function threadRow(t: Thread) {
@@ -324,12 +432,14 @@ function renderThreads() {
   }
   if (!smartInbox()) {
     let last = "";
-    threadList.innerHTML = threads.map((t) => {
-      const group = search || mailbox === "SCHEDULED" ? "" : dateGroup(t.date);
-      const head = group !== last ? `<li class="section">${group}</li>` : "";
-      last = group;
-      return head + threadRow(t);
-    }).join("");
+    threadList.innerHTML = threads
+      .map((t) => {
+        const group = search || mailbox === "SCHEDULED" ? "" : dateGroup(t.date);
+        const head = group !== last ? `<li class="section">${group}</li>` : "";
+        last = group;
+        return head + threadRow(t);
+      })
+      .join("");
     return;
   }
   threadList.innerHTML = SECTIONS.map(([key, title, icon]) => {
@@ -352,8 +462,14 @@ function decodeEntities(s: string) {
 }
 
 type Scheduled = {
-  id: number; account: string; draft_id: string | null; send_at: number; sending: boolean; error: string | null;
-  draft: { to: string }; ui: { fields: Fields; opts: ComposeOptions };
+  id: number;
+  account: string;
+  draft_id: string | null;
+  send_at: number;
+  sending: boolean;
+  error: string | null;
+  draft: { to: string };
+  ui: { fields: Fields; opts: ComposeOptions };
 };
 /** Rows of the Scheduled view by list id; they are emails waiting in this Mac, not Gmail threads. */
 const scheduledRows = new Map<string, Scheduled>();
@@ -372,10 +488,21 @@ async function loadThreads() {
       const id = `${r.account}:${r.id}`;
       scheduledRows.set(id, r);
       return {
-        id, account: r.account, subject: r.ui.fields.subject ?? "", sender: `To: ${r.draft.to}`,
-        snippet: r.sending ? "Sending…" : r.error ? `Couldn't send yet, trying again: ${r.error}` : `Sends ${formatWhen(new Date(r.send_at))}`,
-        date: r.send_at, count: 1,
-        unread: false, starred: false, primary: true, labels: "",
+        id,
+        account: r.account,
+        subject: r.ui.fields.subject ?? "",
+        sender: `To: ${r.draft.to}`,
+        snippet: r.sending
+          ? "Sending…"
+          : r.error
+            ? `Couldn't send yet, trying again: ${r.error}`
+            : `Sends ${formatWhen(new Date(r.send_at))}`,
+        date: r.send_at,
+        count: 1,
+        unread: false,
+        starred: false,
+        primary: true,
+        labels: "",
       };
     });
     return renderThreads();
@@ -448,10 +575,24 @@ function cleanEmail(html: string): { html: string; remote: boolean } {
   const clean = DOMPurify.sanitize(html, {
     WHOLE_DOCUMENT: true,
     ADD_TAGS: ["style"],
-    FORBID_TAGS: ["form", "input", "button", "textarea", "select", "meta", "base", "link", "iframe", "frame", "object", "embed"],
+    FORBID_TAGS: [
+      "form",
+      "input",
+      "button",
+      "textarea",
+      "select",
+      "meta",
+      "base",
+      "link",
+      "iframe",
+      "frame",
+      "object",
+      "embed",
+    ],
   });
   const doc = new DOMParser().parseFromString(clean, "text/html");
-  const remote = !!doc.querySelector(REMOTE) || [...doc.querySelectorAll("style")].some((s) => /url\(/i.test(s.textContent ?? ""));
+  const remote =
+    !!doc.querySelector(REMOTE) || [...doc.querySelectorAll("style")].some((s) => /url\(/i.test(s.textContent ?? ""));
   return { html: doc.documentElement.outerHTML, remote };
 }
 
@@ -465,12 +606,20 @@ function mountEmail(frame: HTMLIFrameElement, html: string, images = settings.ap
   // index.html; this one only tightens it. With remote images off, network loads are blocked whatever the markup.
   const script = new URL("/email-frame.js", location.href).href;
   const csp = `default-src 'none'; script-src ${script}; style-src 'unsafe-inline'; form-action 'none'; ${
-    images ? "img-src data: blob: https: http:; media-src https: http:; font-src data: https: http:" : "img-src data: blob:; font-src data:"}`;
+    images
+      ? "img-src data: blob: https: http:; media-src https: http:; font-src data: https: http:"
+      : "img-src data: blob:; font-src data:"
+  }`;
   frame.setAttribute("sandbox", "allow-scripts");
   // Hidden until it reports its height, so the default 150px frame and the sender's raw fonts never show.
   frame.classList.add("loading");
-  frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script defer src="${script}"${
-    settings.appearance.uniformEmailFont ? " data-even=\"1\"" : ""}></script>` + EMAIL_CSS + clean.html + (settings.appearance.uniformEmailFont ? UNIFORM_FONT_CSS : "");
+  frame.srcdoc =
+    `<meta http-equiv="Content-Security-Policy" content="${csp}"><script defer src="${script}"${
+      settings.appearance.uniformEmailFont ? ' data-even="1"' : ""
+    }></script>` +
+    EMAIL_CSS +
+    clean.html +
+    (settings.appearance.uniformEmailFont ? UNIFORM_FONT_CSS : "");
   // Shown even if the frame's script never reports (it failed on odd markup, or didn't load).
   frame.onload = () => setTimeout(() => frame.classList.remove("loading"), 300);
   return hidden;
@@ -479,7 +628,9 @@ function mountEmail(frame: HTMLIFrameElement, html: string, images = settings.ap
 // Messages from email frames (public/email-frame.js). Only a frame of ours is listened to, matched by its window.
 window.addEventListener("message", (e) => {
   if (!e.data?.shift) return;
-  const frame = [...document.querySelectorAll<HTMLIFrameElement>(".message iframe")].find((f) => f.contentWindow === e.source);
+  const frame = [...document.querySelectorAll<HTMLIFrameElement>(".message iframe")].find(
+    (f) => f.contentWindow === e.source,
+  );
   if (!frame) return;
   const d = e.data as { type: string; height?: number; url?: string } & Partial<KeyboardEventInit>;
   if (d.type === "height" && typeof d.height === "number") {
@@ -493,7 +644,9 @@ window.addEventListener("message", (e) => {
     openUrl(d.url);
   } else if (d.type === "key" && typeof d.key === "string") {
     const { key, code, metaKey, ctrlKey, altKey, shiftKey } = d;
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key, code, metaKey, ctrlKey, altKey, shiftKey, bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key, code, metaKey, ctrlKey, altKey, shiftKey, bubbles: true, cancelable: true }),
+    );
   }
 });
 
@@ -502,7 +655,12 @@ async function showAiLabels(account: string, id: string) {
   const ids = await invoke<string[]>("ai_labels", { account, id }).catch(() => [] as string[]);
   if (!ids.length || selected !== id) return;
   const names = ids.map((l) => accountLabels.get(account)?.find((x) => x.id === l)?.name ?? l);
-  reader.querySelector("h1")?.insertAdjacentHTML("afterend", `<div class="ai-labelled">${iconHtml("message-ai")}<span>Labelled by AI: ${esc(names.join(", "))}</span><button type="button">Undo</button></div>`);
+  reader
+    .querySelector("h1")
+    ?.insertAdjacentHTML(
+      "afterend",
+      `<div class="ai-labelled">${iconHtml("message-ai")}<span>Labelled by AI: ${esc(names.join(", "))}</span><button type="button">Undo</button></div>`,
+    );
   reader.querySelector(".ai-labelled button")!.addEventListener("click", async (e) => {
     (e.currentTarget as HTMLButtonElement).disabled = true;
     try {
@@ -554,13 +712,17 @@ function toggleMessage(header: HTMLElement) {
   }
   const run = el.animate([{ height: `${from}px` }, { height: `${to}px` }], ACCORDION);
   if (opening) {
-    for (const child of el.querySelectorAll(":scope > :not(header)")) child.animate([{ opacity: 0 }, { opacity: 1 }], { ...ACCORDION, duration: 240 });
+    for (const child of el.querySelectorAll(":scope > :not(header)"))
+      child.animate([{ opacity: 0 }, { opacity: 1 }], { ...ACCORDION, duration: 240 });
   }
-  run.finished.then(() => {
-    if (!el.classList.contains("closing")) return;
-    el.classList.remove("closing");
-    el.classList.add("collapsed");
-  }, () => {});
+  run.finished.then(
+    () => {
+      if (!el.classList.contains("closing")) return;
+      el.classList.remove("closing");
+      el.classList.add("collapsed");
+    },
+    () => {},
+  );
 }
 reader.addEventListener("click", (e) => {
   const header = (e.target as Element).closest<HTMLElement>(".message > header[role=button]");
@@ -658,7 +820,10 @@ async function openThread(id: string) {
       const html = m.html;
       const mount = () => {
         if (mountEmail(frame, html)) {
-          frame.insertAdjacentHTML("beforebegin", `<div class="images-bar"><i class="ti ti-photo-off"></i><span>Remote images are hidden to protect your privacy.</span><button type="button">Load images</button></div>`);
+          frame.insertAdjacentHTML(
+            "beforebegin",
+            `<div class="images-bar"><i class="ti ti-photo-off"></i><span>Remote images are hidden to protect your privacy.</span><button type="button">Load images</button></div>`,
+          );
           frame.previousElementSibling!.querySelector("button")!.addEventListener("click", (e) => {
             (e.currentTarget as Element).closest(".images-bar")!.remove();
             mountEmail(frame, html, true);
@@ -682,11 +847,15 @@ async function openThread(id: string) {
       el.append(text);
       reader.append(el);
     }
-    el.insertAdjacentHTML("beforeend", attachmentStrip(m, account) + `<footer class="message-actions">
+    el.insertAdjacentHTML(
+      "beforeend",
+      attachmentStrip(m, account) +
+        `<footer class="message-actions">
         <button class="icon" data-reply="reply" data-msg="${messages.indexOf(m)}" data-tip="Reply" aria-label="Reply"><i class="ti ti-arrow-back-up"></i></button>
         <button class="icon" data-reply="all" data-msg="${messages.indexOf(m)}" data-tip="Reply all" aria-label="Reply all"><i class="ti ti-arrow-back-up-double"></i></button>
         <button class="icon" data-reply="forward" data-msg="${messages.indexOf(m)}" data-tip="Forward" aria-label="Forward"><i class="ti ti-arrow-forward-up"></i></button>
-      </footer>`);
+      </footer>`,
+    );
   }
   reader.scrollTop = 0;
   scrollToLatest();
@@ -704,28 +873,45 @@ function attachmentStrip(m: Message, account: string) {
   const files = listedAttachments(m.attachments, m.html);
   if (!files.length) return "";
   return `<div class="attachments message-files">${files
-    .map((a) => attachmentButton(fileIcon(a.mime, a.filename), a.filename || "attachment", a.size, { account, message: m.id, idx: a.idx }))
+    .map((a) =>
+      attachmentButton(fileIcon(a.mime, a.filename), a.filename || "attachment", a.size, {
+        account,
+        message: m.id,
+        idx: a.idx,
+      }),
+    )
     .join("")}</div>`;
 }
 
 /** Swaps `cid:` image sources for the attachment's bytes once the email has loaded (email-frame.js does the swap). */
 function showInlineImages(frame: HTMLIFrameElement, m: Message, account: string) {
-  const refs = new Set([...(m.html ?? "").matchAll(/cid:([^"'\s)>]+)/gi)].map(([, ref]) => {
-    try {
-      return decodeURIComponent(ref).toLowerCase();
-    } catch {
-      return ref.toLowerCase();
-    }
-  }));
+  const refs = new Set(
+    [...(m.html ?? "").matchAll(/cid:([^"'\s)>]+)/gi)].map(([, ref]) => {
+      try {
+        return decodeURIComponent(ref).toLowerCase();
+      } catch {
+        return ref.toLowerCase();
+      }
+    }),
+  );
   const inline = m.attachments.filter((a) => a.content_id && refs.has(a.content_id.toLowerCase()));
   if (!inline.length) return;
-  frame.addEventListener("load", () => {
-    for (const a of inline) {
-      invoke<string>("attachment_data", { account, message: m.id, idx: a.idx })
-        .then((data) => frame.contentWindow?.postMessage({ type: "cid", cid: a.content_id, src: `data:${a.mime};base64,${data}` }, "*"))
-        .catch(() => {});
-    }
-  }, { once: true });
+  frame.addEventListener(
+    "load",
+    () => {
+      for (const a of inline) {
+        invoke<string>("attachment_data", { account, message: m.id, idx: a.idx })
+          .then((data) =>
+            frame.contentWindow?.postMessage(
+              { type: "cid", cid: a.content_id, src: `data:${a.mime};base64,${data}` },
+              "*",
+            ),
+          )
+          .catch(() => {});
+      }
+    },
+    { once: true },
+  );
 }
 
 reader.addEventListener("click", (e) => {
@@ -801,17 +987,19 @@ function applyChanges(changes: { t: Thread; add: string[]; remove: string[] }[],
     const key = JSON.stringify([c.t.account, c.add, c.remove]);
     groups.set(key, [...(groups.get(key) ?? []), c]);
   }
-  return Promise.all([...groups.values()].map(async (group) => {
-    const [{ t, add, remove }] = group;
-    if (group.length === 1) return modify(t, add, remove, trash);
-    group.forEach((c) => changeLocally(c.t, add, remove));
-    renderThreads();
-    try {
-      await invoke("modify_many", { account: t.account, ids: group.map((c) => c.t.id), add, remove, trash });
-    } catch (e) {
-      toast(`Couldn't update ${group.length} emails: ${e}`);
-    }
-  }));
+  return Promise.all(
+    [...groups.values()].map(async (group) => {
+      const [{ t, add, remove }] = group;
+      if (group.length === 1) return modify(t, add, remove, trash);
+      group.forEach((c) => changeLocally(c.t, add, remove));
+      renderThreads();
+      try {
+        await invoke("modify_many", { account: t.account, ids: group.map((c) => c.t.id), add, remove, trash });
+      } catch (e) {
+        toast(`Couldn't update ${group.length} emails: ${e}`);
+      }
+    }),
+  );
 }
 
 /** Archive/trash: drop the thread from the list and move selection to its neighbour. */
@@ -845,8 +1033,12 @@ function act(action: string, id = selected) {
       return undoable(t, [], ["INBOX"]);
     case "trash":
       if (settings.general.confirmDelete) {
-        ask({ title: "Delete this email?", message: `“${t.subject || "(no subject)"}” will move to Trash.`, confirm: "Delete", danger: true })
-          .then((yes) => yes && act("trashNow", t.id));
+        ask({
+          title: "Delete this email?",
+          message: `“${t.subject || "(no subject)"}” will move to Trash.`,
+          confirm: "Delete",
+          danger: true,
+        }).then((yes) => yes && act("trashNow", t.id));
         return;
       }
       removeAndAdvance(t.id);
@@ -886,7 +1078,8 @@ function pick(id: string, range: boolean) {
   const anchor = pickAnchor ?? selected;
   const ids = threads.map((t) => t.id);
   const [a, b] = [anchor ? ids.indexOf(anchor) : -1, ids.indexOf(id)];
-  if (range && a >= 0) ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((x) => picked.size < PICK_MAX && picked.add(x));
+  if (range && a >= 0)
+    ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((x) => picked.size < PICK_MAX && picked.add(x));
   else if (!picked.has(id) && picked.size >= PICK_MAX) return toast(`You can select up to ${PICK_MAX} emails at once`);
   else {
     if (picked.has(id)) picked.delete(id);
@@ -923,7 +1116,10 @@ function clearPicked() {
 }
 
 const PICK_ACTIONS: [action: string, label: string, icon: string][] = [
-  ["archive", "Archive", "archive"], ["unread", "", ""], ["star", "Pin", "push-pin"], ["spam", "Spam", "warning-octagon"],
+  ["archive", "Archive", "archive"],
+  ["unread", "", ""],
+  ["star", "Pin", "push-pin"],
+  ["spam", "Spam", "warning-octagon"],
 ];
 
 function showPicked() {
@@ -936,7 +1132,8 @@ function showPicked() {
   const list = threads.filter((t) => picked.has(t.id));
   const anyUnread = list.some((t) => t.unread);
   const button = ([action, label, icon]: (typeof PICK_ACTIONS)[number]) => {
-    if (action === "unread") [label, icon] = anyUnread ? ["Mark as read", "envelope-simple-open"] : ["Mark as unread", "envelope-simple"];
+    if (action === "unread")
+      [label, icon] = anyUnread ? ["Mark as read", "envelope-simple-open"] : ["Mark as unread", "envelope-simple"];
     const key = keyLabel(action);
     return `<button type="button" data-pick-action="${action}">${iconHtml(icon)}<span>${label}</span>${key ? `<kbd>${esc(key)}</kbd>` : ""}</button>`;
   };
@@ -977,8 +1174,9 @@ function actOnPicked(action: string) {
       return leave(["SPAM"], ["INBOX"]);
     case "trash":
       if (settings.general.confirmDelete) {
-        void ask({ title: `Delete ${n}?`, message: "They will move to Trash.", confirm: "Delete", danger: true })
-          .then((yes) => yes && actOnPicked("trashNow"));
+        void ask({ title: `Delete ${n}?`, message: "They will move to Trash.", confirm: "Delete", danger: true }).then(
+          (yes) => yes && actOnPicked("trashNow"),
+        );
         return;
       }
       return leave(["TRASH"], ["INBOX"], true);
@@ -1005,7 +1203,19 @@ let menuAnchor: Element | null = null;
 let menuPos = { x: 0, y: 0 };
 
 /** `checked`: a toggle (the Label menu), shown with a check mark when on. */
-type MenuItem = { id: string; label: string; icon: string; key?: string; disabled?: boolean; danger?: boolean; acct?: string; dot?: string; checked?: boolean } | "-";
+type MenuItem =
+  | {
+      id: string;
+      label: string;
+      icon: string;
+      key?: string;
+      disabled?: boolean;
+      danger?: boolean;
+      acct?: string;
+      dot?: string;
+      checked?: boolean;
+    }
+  | "-";
 
 function closeMenu() {
   if (!menu.hidden && menu.contains(document.activeElement)) menuReturn?.focus();
@@ -1017,16 +1227,30 @@ function closeMenu() {
 }
 
 /** Shows `items` at a point, kept inside the window. `pick` returns true to keep the menu open. */
-function showMenu(title: string | null, items: MenuItem[], pos: { x: number; y: number }, pick: (id: string) => boolean | void) {
+function showMenu(
+  title: string | null,
+  items: MenuItem[],
+  pos: { x: number; y: number },
+  pick: (id: string) => boolean | void,
+) {
   menuPos = pos;
   // Re-rendered in place (the Label menu after a toggle): keep focus on the same item.
   const keep = menu.hidden ? null : (document.activeElement as HTMLElement | null)?.dataset?.target;
   if (menu.hidden) menuReturn = document.activeElement as HTMLElement | null;
-  menu.innerHTML = (title ? `<h4>${esc(title)}</h4>` : "") + (items.length
-    ? items.map((x) => x === "-" ? "<hr>" : `<button role="${x.checked === undefined ? "menuitem" : `menuitemcheckbox" aria-checked="${x.checked}`}" data-target="${x.id}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
+  menu.innerHTML =
+    (title ? `<h4>${esc(title)}</h4>` : "") +
+    (items.length
+      ? items
+          .map((x) =>
+            x === "-"
+              ? "<hr>"
+              : `<button role="${x.checked === undefined ? "menuitem" : `menuitemcheckbox" aria-checked="${x.checked}`}" data-target="${x.id}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
         ${x.dot ? labelDot(x.label, x.dot) : x.icon ? iconHtml(x.icon) : ""}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}${
-        x.checked === undefined ? "" : `<i class="ti ti-check menu-check" aria-hidden="true"></i>`}</button>`).join("")
-    : `<p>No labels yet</p>`);
+          x.checked === undefined ? "" : `<i class="ti ti-check menu-check" aria-hidden="true"></i>`
+        }</button>`,
+          )
+          .join("")
+      : `<p>No labels yet</p>`);
   menu.onclick = (e) => {
     const item = (e.target as Element).closest<HTMLButtonElement>("[data-target]");
     if (!item || item.disabled) return;
@@ -1087,16 +1311,29 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
   }
   const has = new Set(t.labels.split(" "));
   const own = accountLabels.get(t.account) ?? [];
-  const items: MenuItem[] = kind === "move"
-    ? [{ id: "INBOX", label: "Inbox", icon: "tray", disabled: has.has("INBOX") },
-        { id: "ARCHIVE", label: "Archive", icon: "archive", disabled: !FOLDERS.some((f) => has.has(f)) },
-        { id: "SPAM", label: "Spam", icon: "warning-octagon", disabled: has.has("SPAM") },
-        { id: "TRASH", label: "Trash", icon: "trash", disabled: has.has("TRASH") }]
-    : [...own.map((l): MenuItem => ({ id: l.id, label: l.name, icon: "", dot: l.color ?? "none", checked: has.has(l.id) })),
-        ...(own.length ? ["-" as const] : []), { id: NEW_LABEL, label: "New label…", icon: "plus" }];
+  const items: MenuItem[] =
+    kind === "move"
+      ? [
+          { id: "INBOX", label: "Inbox", icon: "tray", disabled: has.has("INBOX") },
+          { id: "ARCHIVE", label: "Archive", icon: "archive", disabled: !FOLDERS.some((f) => has.has(f)) },
+          { id: "SPAM", label: "Spam", icon: "warning-octagon", disabled: has.has("SPAM") },
+          { id: "TRASH", label: "Trash", icon: "trash", disabled: has.has("TRASH") },
+        ]
+      : [
+          ...own.map(
+            (l): MenuItem => ({ id: l.id, label: l.name, icon: "", dot: l.color ?? "none", checked: has.has(l.id) }),
+          ),
+          ...(own.length ? ["-" as const] : []),
+          { id: NEW_LABEL, label: "New label…", icon: "plus" },
+        ];
   showMenu(kind === "move" ? "Move to" : "Labels", items, pos, (id) => {
     if (id === NEW_LABEL) {
-      void askText({ title: "New label", message: "Created in Gmail and added to this email.", confirm: "Create", value: "" }).then(async (name) => {
+      void askText({
+        title: "New label",
+        message: "Created in Gmail and added to this email.",
+        confirm: "Create",
+        value: "",
+      }).then(async (name) => {
         if (!name) return;
         try {
           const created = await invoke<string>("create_label", { account: t.account, name });
@@ -1110,14 +1347,23 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
     }
     if (kind === "label") {
       const on = !t.labels.split(" ").includes(id);
-      t.labels = on ? `${t.labels} ${id}`.trim() : t.labels.split(" ").filter((l) => l !== id).join(" ");
+      t.labels = on
+        ? `${t.labels} ${id}`.trim()
+        : t.labels
+            .split(" ")
+            .filter((l) => l !== id)
+            .join(" ");
       modify(t, on ? [id] : [], on ? [] : [id]);
       openMenu("label", t, menuPos);
       return true;
     }
     if (id === "TRASH") return void act("trash", t.id);
     if (mailbox !== null && mailbox !== id) removeAndAdvance(t.id);
-    undoable(t, id === "ARCHIVE" ? [] : [id], FOLDERS.filter((f) => f !== id && has.has(f)));
+    undoable(
+      t,
+      id === "ARCHIVE" ? [] : [id],
+      FOLDERS.filter((f) => f !== id && has.has(f)),
+    );
   });
   menuAnchor = anchor;
 }
@@ -1130,37 +1376,71 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
   closeMenu();
   const id = a.dataset.mailbox || null;
   const label = userLabels.find((l) => l.id === id);
-  const items: MenuItem[] = [{ id: "read", label: "Mark all as read", icon: "envelope-simple-open", disabled: id === "SCHEDULED" || id === "DRAFT" }];
-  if (id === "TRASH" || id === "SPAM") items.push("-", { id: "empty", label: id === "TRASH" ? "Empty Trash" : "Empty Spam", icon: "trash", danger: true });
+  const items: MenuItem[] = [
+    {
+      id: "read",
+      label: "Mark all as read",
+      icon: "envelope-simple-open",
+      disabled: id === "SCHEDULED" || id === "DRAFT",
+    },
+  ];
+  if (id === "TRASH" || id === "SPAM")
+    items.push("-", { id: "empty", label: id === "TRASH" ? "Empty Trash" : "Empty Spam", icon: "trash", danger: true });
   items.push("-", { id: "hide", label: "Hide from sidebar", icon: "eye-slash" });
-  const names = new Map([...SYSTEM.map(([sid, name]) => [sid ?? "ALL", name] as const), ...userLabels.map((l) => [l.id, l.name] as const)]);
+  const names = new Map([
+    ...SYSTEM.map(([sid, name]) => [sid ?? "ALL", name] as const),
+    ...userLabels.map((l) => [l.id, l.name] as const),
+  ]);
   const hidden = settings.sidebar.hidden.filter((k) => names.has(k));
-  if (hidden.length) items.push(...hidden.map((k) => ({ id: `show:${k}`, label: `Show ${names.get(k)}`, icon: "eye" })));
+  if (hidden.length)
+    items.push(...hidden.map((k) => ({ id: `show:${k}`, label: `Show ${names.get(k)}`, icon: "eye" })));
   if (label) {
-    items.push("-", { id: "rename", label: "Rename…", icon: "pencil-simple" }, { id: "color", label: "Colour", icon: "palette" },
-      "-", { id: "delete", label: "Delete label", icon: "trash", danger: true });
+    items.push(
+      "-",
+      { id: "rename", label: "Rename…", icon: "pencil-simple" },
+      { id: "color", label: "Colour", icon: "palette" },
+      "-",
+      { id: "delete", label: "Delete label", icon: "trash", danger: true },
+    );
   }
   showMenu(null, items, { x: e.clientX, y: e.clientY }, (pick) => {
     if (pick === "read") {
       // Gmail marks every unread email in the mailbox, older ones not shown here included.
       const box = a.querySelector("span")?.textContent ?? "this mailbox";
-      void ask({ title: `Mark all of ${box} as read?`, message: `Every unread email in ${box}${inAccounts()} is marked read in Gmail, including older ones not shown here.`, confirm: "Mark as read" })
-        .then((yes) => void (yes && labelAction(invoke("mark_all_read", { label: id, accounts: scope }))));
+      void ask({
+        title: `Mark all of ${box} as read?`,
+        message: `Every unread email in ${box}${inAccounts()} is marked read in Gmail, including older ones not shown here.`,
+        confirm: "Mark as read",
+      }).then((yes) => void (yes && labelAction(invoke("mark_all_read", { label: id, accounts: scope }))));
       return;
     }
     if (pick === "empty") return void emptyMailbox(id!);
     if (pick === "hide") return setSetting("sidebar.hidden", [...settings.sidebar.hidden, id ?? "ALL"]);
-    if (pick.startsWith("show:")) return setSetting("sidebar.hidden", settings.sidebar.hidden.filter((k) => k !== pick.slice(5)));
+    if (pick.startsWith("show:"))
+      return setSetting(
+        "sidebar.hidden",
+        settings.sidebar.hidden.filter((k) => k !== pick.slice(5)),
+      );
     if (!label) return;
     if (pick === "color") {
-      showMenu(label.name, LABEL_COLORS.map(([name, bg]) => ({ id: bg, label: name, icon: "", dot: bg })), menuPos, (bg) => {
-        const text = LABEL_COLORS.find((c) => c[1] === bg)![2];
-        void labelAction(invoke("set_label_color", { label: label.id, background: bg, text, accounts: scope }));
-      });
+      showMenu(
+        label.name,
+        LABEL_COLORS.map(([name, bg]) => ({ id: bg, label: name, icon: "", dot: bg })),
+        menuPos,
+        (bg) => {
+          const text = LABEL_COLORS.find((c) => c[1] === bg)![2];
+          void labelAction(invoke("set_label_color", { label: label.id, background: bg, text, accounts: scope }));
+        },
+      );
       return true;
     }
     if (pick === "rename") {
-      void askText({ title: "Rename label", message: "The label is renamed in Gmail too.", confirm: "Rename", value: label.name }).then((name) => {
+      void askText({
+        title: "Rename label",
+        message: "The label is renamed in Gmail too.",
+        confirm: "Rename",
+        value: label.name,
+      }).then((name) => {
         if (!name || name === label.name) return;
         // A merged label's id is its name, so the open mailbox follows the rename.
         const follow = mailbox === label.id && label.id.startsWith("name:") ? `name:${name}` : undefined;
@@ -1168,8 +1448,21 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
       });
     }
     if (pick === "delete") {
-      void ask({ title: `Delete “${label.name}”?`, message: `The label is removed in Gmail${inAccounts()}. Its emails keep their other labels and stay in All Mail.`, confirm: "Delete", danger: true })
-        .then((yes) => void (yes && labelAction(invoke("delete_label", { label: label.id, accounts: scope }), mailbox === label.id ? "INBOX" : undefined)));
+      void ask({
+        title: `Delete “${label.name}”?`,
+        message: `The label is removed in Gmail${inAccounts()}. Its emails keep their other labels and stay in All Mail.`,
+        confirm: "Delete",
+        danger: true,
+      }).then(
+        (yes) =>
+          void (
+            yes &&
+            labelAction(
+              invoke("delete_label", { label: label.id, accounts: scope }),
+              mailbox === label.id ? "INBOX" : undefined,
+            )
+          ),
+      );
     }
   });
 });
@@ -1193,7 +1486,9 @@ $("#mailboxes").addEventListener("drop", (e) => e.preventDefault());
 $("#mailboxes").addEventListener("dragend", () => {
   if (!draggedMailbox) return;
   draggedMailbox = null;
-  const shown = [...$("#mailboxes").querySelectorAll<HTMLElement>("[data-mailbox]")].map((a) => a.dataset.mailbox || "ALL");
+  const shown = [...$("#mailboxes").querySelectorAll<HTMLElement>("[data-mailbox]")].map(
+    (a) => a.dataset.mailbox || "ALL",
+  );
   setSetting("sidebar.order", [...shown, ...settings.sidebar.order.filter((k) => !shown.includes(k))]);
 });
 
@@ -1205,7 +1500,12 @@ function inAccounts() {
 
 async function emptyMailbox(id: string) {
   const name = id === "TRASH" ? "Trash" : "Spam";
-  const yes = await ask({ title: `Empty ${name}?`, message: `Everything in ${name}${inAccounts()} is deleted for good, in Gmail too. This can't be undone.`, confirm: `Empty ${name}`, danger: true });
+  const yes = await ask({
+    title: `Empty ${name}?`,
+    message: `Everything in ${name}${inAccounts()} is deleted for good, in Gmail too. This can't be undone.`,
+    confirm: `Empty ${name}`,
+    danger: true,
+  });
   if (yes) await labelAction(invoke("empty_mailbox", { label: id, accounts: scope }));
 }
 $("#empty-btn").addEventListener("click", () => mailbox && emptyMailbox(mailbox));
@@ -1229,35 +1529,61 @@ threadList.addEventListener("contextmenu", (e) => {
   li.classList.add("context");
   if (multiPicked() && picked.has(t.id)) {
     const list = threads.filter((x) => picked.has(x.id));
-    return showMenu(`${list.length} emails`, [
-      { id: "unread", label: list.some((x) => x.unread) ? "Mark as read" : "Mark as unread", icon: "envelope-simple-open", key: keyLabel("unread") },
-      { id: "star", label: list.some((x) => !x.starred) ? "Pin" : "Unpin", icon: "push-pin", key: keyLabel("star") },
-      "-",
-      { id: "archive", label: "Archive", icon: "archive", key: keyLabel("archive") },
-      { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
-      { id: "trash", label: "Delete", icon: "trash", key: keyLabel("trash"), danger: true },
-    ], { x: e.clientX, y: e.clientY }, (id) => actOnPicked(id));
+    return showMenu(
+      `${list.length} emails`,
+      [
+        {
+          id: "unread",
+          label: list.some((x) => x.unread) ? "Mark as read" : "Mark as unread",
+          icon: "envelope-simple-open",
+          key: keyLabel("unread"),
+        },
+        { id: "star", label: list.some((x) => !x.starred) ? "Pin" : "Unpin", icon: "push-pin", key: keyLabel("star") },
+        "-",
+        { id: "archive", label: "Archive", icon: "archive", key: keyLabel("archive") },
+        { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
+        { id: "trash", label: "Delete", icon: "trash", key: keyLabel("trash"), danger: true },
+      ],
+      { x: e.clientX, y: e.clientY },
+      (id) => actOnPicked(id),
+    );
   }
   if (mailbox === "SCHEDULED") {
-    return showMenu(null, [
-      { id: "edit", label: "Edit", icon: "pencil-simple" },
-      { id: "sendNow", label: "Send now", icon: "paper-plane-right" },
-      "-",
-      { id: "cancel", label: "Cancel send", icon: "x-circle", key: keyLabel("trash"), danger: true },
-    ], { x: e.clientX, y: e.clientY }, (id) => void scheduledAction(id, t.id));
+    return showMenu(
+      null,
+      [
+        { id: "edit", label: "Edit", icon: "pencil-simple" },
+        { id: "sendNow", label: "Send now", icon: "paper-plane-right" },
+        "-",
+        { id: "cancel", label: "Cancel send", icon: "x-circle", key: keyLabel("trash"), danger: true },
+      ],
+      { x: e.clientX, y: e.clientY },
+      (id) => void scheduledAction(id, t.id),
+    );
   }
   const items: MenuItem[] = [
     { id: "reply", label: "Reply", icon: "arrow-bend-up-left", key: keyLabel("reply") },
     { id: "replyAll", label: "Reply all", icon: "arrow-bend-double-up-left", key: keyLabel("replyAll") },
     { id: "forward", label: "Forward", icon: "arrow-bend-up-right", key: keyLabel("forward") },
     "-",
-    { id: "unread", label: t.unread ? "Mark as read" : "Mark as unread", icon: t.unread ? "envelope-simple-open" : "envelope-simple", key: keyLabel("unread") },
+    {
+      id: "unread",
+      label: t.unread ? "Mark as read" : "Mark as unread",
+      icon: t.unread ? "envelope-simple-open" : "envelope-simple",
+      key: keyLabel("unread"),
+    },
     { id: "star", label: t.starred ? "Unpin" : "Pin", icon: "push-pin", key: keyLabel("star") },
     "-",
     { id: "move", label: "Move to…", icon: "folder", key: keyLabel("move") },
     { id: "label", label: "Label…", icon: "tag", key: keyLabel("label") },
     "-",
-    { id: "archive", label: "Archive", icon: "archive", key: keyLabel("archive"), disabled: !t.labels.split(" ").includes("INBOX") },
+    {
+      id: "archive",
+      label: "Archive",
+      icon: "archive",
+      key: keyLabel("archive"),
+      disabled: !t.labels.split(" ").includes("INBOX"),
+    },
     { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
     { id: "trash", label: "Delete", icon: "trash", key: keyLabel("trash"), danger: true },
   ];
@@ -1299,7 +1625,13 @@ let draftTimer = 0;
 let draftQueue: Promise<unknown> = Promise.resolve();
 
 const subjectInput = composeForm.elements.namedItem("subject") as HTMLInputElement;
-const editor = createEditor($("#compose-body"), $("#format-bar"), () => markTouched(), () => signatureFor(compose?.account).html, renderQuote);
+const editor = createEditor(
+  $("#compose-body"),
+  $("#format-bar"),
+  () => markTouched(),
+  () => signatureFor(compose?.account).html,
+  renderQuote,
+);
 const suggestContacts = (q: string) => invoke<string[]>("suggest_contacts", { query: q }).catch(() => [] as string[]);
 const rcpt = {
   to: new Recipients($("#rcpt-to"), suggestContacts, () => markTouched()),
@@ -1321,8 +1653,12 @@ function renderFromRow() {
   row.hidden = !multi() || !compose || !!compose.context;
   if (row.hidden || !compose) return;
   row.querySelector(".from-choices")!.innerHTML = accounts
-    .map((a) => `<button type="button" role="radio" aria-checked="${a === compose!.account}" class="${a === compose!.account ? "on" : ""}" data-from="${esc(a)}">
-      <span class="account-dot acct-${accountSettings(a).color}"></span>${esc(accountName(a))}</button>`)
+    .map(
+      (
+        a,
+      ) => `<button type="button" role="radio" aria-checked="${a === compose!.account}" class="${a === compose!.account ? "on" : ""}" data-from="${esc(a)}">
+      <span class="account-dot acct-${accountSettings(a).color}"></span>${esc(accountName(a))}</button>`,
+    )
     .join("");
 }
 $("#from-row").addEventListener("click", (e) => {
@@ -1359,16 +1695,31 @@ subjectInput.addEventListener("keydown", (e) => {
 });
 
 const hasContent = () =>
-  !!compose?.touched && !!(compose.attachments.length || editor.getText().trim() || subjectInput.value.trim() || rcpt.to.count || rcpt.cc.count || rcpt.bcc.count);
+  !!compose?.touched &&
+  !!(
+    compose.attachments.length ||
+    editor.getText().trim() ||
+    subjectInput.value.trim() ||
+    rcpt.to.count ||
+    rcpt.cc.count ||
+    rcpt.bcc.count
+  );
 
 /** The message as the backend expects it: HTML from the editor plus a plain-text version. */
 function currentDraft(state: ComposeState): Record<string, unknown> {
   const sigHtml = signatureFor(state.account).html;
-  const sigText = new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
+  const sigText =
+    new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
   return {
-    to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value,
-    body: docToText(editor.state.doc, sigText), html: emailHtml(editor.getHTML(), sigHtml),
-    from_name: accountSettings(state.account).name, ...(state.context ?? {}), attachments: state.attachments,
+    to: rcpt.to.value,
+    cc: rcpt.cc.value,
+    bcc: rcpt.bcc.value,
+    subject: subjectInput.value,
+    body: docToText(editor.state.doc, sigText),
+    html: emailHtml(editor.getHTML(), sigHtml),
+    from_name: accountSettings(state.account).name,
+    ...(state.context ?? {}),
+    attachments: state.attachments,
   };
 }
 
@@ -1377,13 +1728,21 @@ function currentDraft(state: ComposeState): Record<string, unknown> {
  * save reached Gmail.
  */
 /** The composer's fields as typed, for reopening it later. */
-const currentFields = (): Fields =>
-  ({ to: rcpt.to.value, cc: rcpt.cc.value, bcc: rcpt.bcc.value, subject: subjectInput.value, body: editor.getHTML() });
+const currentFields = (): Fields => ({
+  to: rcpt.to.value,
+  cc: rcpt.cc.value,
+  bcc: rcpt.bcc.value,
+  subject: subjectInput.value,
+  body: editor.getHTML(),
+});
 
 /** Schedules an edited scheduled email again for the time it had (`resumeAt`). */
 const resumeSchedule = (state: ComposeState, payload: unknown, fields: Fields) =>
   invoke("schedule_send", {
-    account: state.account, draft: payload, draftId: state.draftId, sendAt: state.resumeAt,
+    account: state.account,
+    draft: payload,
+    draftId: state.draftId,
+    sendAt: state.resumeAt,
     ui: { fields, opts: { title: state.title, context: state.context } },
   });
 
@@ -1441,7 +1800,8 @@ async function closeComposer(discard = false) {
     // Not in Gmail: bring it back rather than lose it, unless another email was opened meanwhile.
     if (compose) return toast("Couldn't save a draft to Gmail; it wasn't kept");
     await openComposer(fields, { ...state, touched: true });
-    $("#compose-error").textContent = "Couldn't save this draft to Gmail, so it's still open. Check your connection and close it again.";
+    $("#compose-error").textContent =
+      "Couldn't save this draft to Gmail, so it's still open. Check your connection and close it again.";
   }
 }
 
@@ -1453,9 +1813,14 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
   }
   const inline = !!opts.inline && !!selected && (!opts.context || opts.context.thread_id === selected);
   compose = {
-    title: opts.title ?? "New Email", context: opts.context ?? null,
-    inline, draftId: opts.draftId ?? null, touched: !!opts.touched, account: opts.account ?? defaultAccount(),
-    attachments: opts.attachments ?? [], resumeAt: opts.resumeAt ?? null,
+    title: opts.title ?? "New Email",
+    context: opts.context ?? null,
+    inline,
+    draftId: opts.draftId ?? null,
+    touched: !!opts.touched,
+    account: opts.account ?? defaultAccount(),
+    attachments: opts.attachments ?? [],
+    resumeAt: opts.resumeAt ?? null,
   };
   renderComposeFiles();
   renderFromRow();
@@ -1465,7 +1830,11 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
   showCcRows(!!fields.cc, !!fields.bcc);
   subjectInput.value = fields.subject ?? "";
   // setContent leaves the selection at the end, which selects the signature node.
-  editor.chain().setContent(fields.body ?? "", { emitUpdate: false }).setTextSelection(0).run();
+  editor
+    .chain()
+    .setContent(fields.body ?? "", { emitUpdate: false })
+    .setTextSelection(0)
+    .run();
   foldReplyQuote(editor);
   $("#compose-title").textContent = compose.title;
   $("#compose-error").textContent = "";
@@ -1484,11 +1853,19 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     $("#compose-body").scrollTop = 0;
   } else rcpt.to.focus();
   // After focusing: focus jumps the scroll and would cut a smooth scroll short.
-  if (inline) composeForm.parentElement!.scrollIntoView({ block: "start", behavior: settings.accessibility.reduceMotion ? "auto" : "smooth" });
+  if (inline)
+    composeForm.parentElement!.scrollIntoView({
+      block: "start",
+      behavior: settings.accessibility.reduceMotion ? "auto" : "smooth",
+    });
 }
 
 /** Splits an address header on commas that aren't inside a quoted display name. */
-const splitAddresses = (list: string) => list.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((a) => a.trim()).filter(Boolean);
+const splitAddresses = (list: string) =>
+  list
+    .split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)
+    .map((a) => a.trim())
+    .filter(Boolean);
 
 /** The account's signature block ("-- " separator for text, the email convention), or "" if it has none. */
 function signatureBlock(account: string) {
@@ -1507,7 +1884,13 @@ function swapSignature(from: string, to: string) {
   const [before, after] = [normal(signatureBlock(from)), normal(signatureBlock(to))];
   const body = editor.getHTML();
   // shortcut: from an account without a signature, the new one is only added to emails without a quote (at the end); place it above the quote if forwards need it.
-  const next = before ? (body.includes(before) ? body.replace(before, () => after) : null) : body.includes("<blockquote") ? null : body + after;
+  const next = before
+    ? body.includes(before)
+      ? body.replace(before, () => after)
+      : null
+    : body.includes("<blockquote")
+      ? null
+      : body + after;
   // Always reset when found, even if unchanged: it rebuilds the HTML signature's preview for the new account.
   if (next !== null) editor.chain().setContent(next, { emitUpdate: false }).setTextSelection(0).run();
 }
@@ -1530,8 +1913,10 @@ function renderQuote(frame: HTMLIFrameElement, html: string) {
   const images = settings.appearance.loadRemoteImages ? "https: http: data:" : "data:";
   frame.setAttribute("sandbox", "allow-same-origin");
   frame.onload = () => (frame.style.height = `${frame.contentDocument?.documentElement.scrollHeight ?? 80}px`);
-  frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${images}">` +
-    EMAIL_CSS + cleanEmail(html).html;
+  frame.srcdoc =
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${images}">` +
+    EMAIL_CSS +
+    cleanEmail(html).html;
 }
 
 /** Replies to or forwards `last`: the newest message, or the one whose own buttons were clicked. */
@@ -1546,7 +1931,10 @@ function reply(kind: "reply" | "all" | "forward", last = messages.at(-1)) {
       `---------- Forwarded message ----------\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}`,
     );
     const opened = openComposer(
-      { subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`, body: signature(account) + quoted(last, header) },
+      {
+        subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`,
+        body: signature(account) + quoted(last, header),
+      },
       { title: "Forward", inline: settings.composer.replyIn === "inline", account },
     );
     return opened.then(() => attachFrom(last, account));
@@ -1616,9 +2004,13 @@ composeForm.addEventListener("submit", async (e) => {
     // quitting or restarting for an update during the countdown still sends it, and Undo cancels the schedule.
     let id: number;
     try {
-      if (!(await saveDraft(state, draft))) throw new Error("Couldn't save it to Drafts, so it wasn't sent. Check your connection and try again");
+      if (!(await saveDraft(state, draft)))
+        throw new Error("Couldn't save it to Drafts, so it wasn't sent. Check your connection and try again");
       id = await invoke<number>("schedule_send", {
-        account: state.account, draft, draftId: state.draftId, sendAt: Date.now() + delay * 1000,
+        account: state.account,
+        draft,
+        draftId: state.draftId,
+        sendAt: Date.now() + delay * 1000,
         ui: { fields, opts: { title: state.title, context: state.context } },
       });
     } catch (err) {
@@ -1627,13 +2019,25 @@ composeForm.addEventListener("submit", async (e) => {
     }
     compose = null;
     detachComposer();
-    const sending = toast(`Sending in ${delay}s…`, { ms: delay * 1000, action: { label: "Undo", run: () => {
-      clearInterval(tick);
-      invoke("reschedule", { account: state.account, id, sendAt: null }).then(() => reopen(), (err) => toast(String(err)));
-    } } });
+    const sending = toast(`Sending in ${delay}s…`, {
+      ms: delay * 1000,
+      action: {
+        label: "Undo",
+        run: () => {
+          clearInterval(tick);
+          invoke("reschedule", { account: state.account, id, sendAt: null }).then(
+            () => reopen(),
+            (err) => toast(String(err)),
+          );
+        },
+      },
+    });
     let left = delay;
     // open: another toast may have replaced this one mid-countdown.
-    const tick = window.setInterval(() => sending.open && left > 1 && sending.setMessage(`Sending in ${--left}s…`), 1000);
+    const tick = window.setInterval(
+      () => sending.open && left > 1 && sending.setMessage(`Sending in ${--left}s…`),
+      1000,
+    );
     return;
   }
   const button = composeForm.querySelector<HTMLButtonElement>("button[type=submit]")!;
@@ -1682,9 +2086,15 @@ function laterAt(): Date | null {
 function updateLater() {
   const at = laterAt();
   const past = !at || at.getTime() <= Date.now();
-  laterPanel.querySelector(".later-summary")!.textContent = at ? (past ? "That time has passed" : `Sends ${formatWhen(at)}`) : "Pick a time";
+  laterPanel.querySelector(".later-summary")!.textContent = at
+    ? past
+      ? "That time has passed"
+      : `Sends ${formatWhen(at)}`
+    : "Pick a time";
   laterPanel.querySelector<HTMLButtonElement>(".later-go")!.disabled = past;
-  laterPanel.querySelectorAll<HTMLElement>("[data-time]").forEach((b) => b.classList.toggle("on", b.dataset.time === laterTime.value));
+  laterPanel
+    .querySelectorAll<HTMLElement>("[data-time]")
+    .forEach((b) => b.classList.toggle("on", b.dataset.time === laterTime.value));
 }
 function openLater(at: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -1699,10 +2109,12 @@ function openLater(at: Date) {
 }
 const closeLater = () => (laterPanel.hidden = true);
 laterTime.addEventListener("input", updateLater);
-laterPanel.querySelectorAll<HTMLElement>("[data-time]").forEach((b) => b.addEventListener("click", () => {
-  laterTime.value = b.dataset.time!;
-  updateLater();
-}));
+laterPanel.querySelectorAll<HTMLElement>("[data-time]").forEach((b) =>
+  b.addEventListener("click", () => {
+    laterTime.value = b.dataset.time!;
+    updateLater();
+  }),
+);
 laterPanel.querySelector(".later-go")!.addEventListener("click", () => {
   const at = laterAt();
   if (at) scheduleSend(at);
@@ -1720,7 +2132,8 @@ laterPanel.addEventListener("keydown", (e) => {
   }
 });
 document.addEventListener("pointerdown", (e) => {
-  if (!laterPanel.hidden && !laterPanel.contains(e.target as Node) && !(e.target as Element).closest("#send-later")) closeLater();
+  if (!laterPanel.hidden && !laterPanel.contains(e.target as Node) && !(e.target as Element).closest("#send-later"))
+    closeLater();
 });
 
 async function scheduleSend(at: Date) {
@@ -1739,16 +2152,26 @@ async function scheduleSend(at: Date) {
   await saveDraft(state, draft);
   try {
     const id = await invoke<number>("schedule_send", {
-      account: state.account, draft, draftId: state.draftId, sendAt: at.getTime(),
+      account: state.account,
+      draft,
+      draftId: state.draftId,
+      sendAt: at.getTime(),
       ui: { fields, opts: { title: state.title, context: state.context } },
     });
     compose = null;
     detachComposer();
     closeLater();
-    toast(`Scheduled for ${formatWhen(at)}`, { ms: 6000, action: { label: "Undo", run: () => {
-      invoke("reschedule", { account: state.account, id, sendAt: null })
-        .then(() => openComposer(fields, { ...state, touched: true, resumeAt: null }));
-    } } });
+    toast(`Scheduled for ${formatWhen(at)}`, {
+      ms: 6000,
+      action: {
+        label: "Undo",
+        run: () => {
+          invoke("reschedule", { account: state.account, id, sendAt: null }).then(() =>
+            openComposer(fields, { ...state, touched: true, resumeAt: null }),
+          );
+        },
+      },
+    });
   } catch (err) {
     submitting.delete(state);
     error(String(err));
@@ -1786,21 +2209,28 @@ const AI_EDITS: [label: string, icon: string, instruction: string][] = [
 /** The selection, or everything above the signature and the quoted original (and its "On …, X wrote:" line). */
 function ownText(): { from: number; to: number; text: string } {
   const { doc, selection } = editor.state;
-  if (!selection.empty) return { from: selection.from, to: selection.to, text: doc.textBetween(selection.from, selection.to, "\n\n") };
+  if (!selection.empty)
+    return { from: selection.from, to: selection.to, text: doc.textBetween(selection.from, selection.to, "\n\n") };
   let to = 0;
   let stop = false;
   doc.forEach((node, offset) => {
     if (stop) return;
     const text = node.textContent.trim();
-    stop = ["signature", "blockquote", "quote"].includes(node.type.name) || text.startsWith("-- ")
-      || /^On .+ wrote:$/s.test(text) || /^-{5,} Forwarded message/.test(text);
+    stop =
+      ["signature", "blockquote", "quote"].includes(node.type.name) ||
+      text.startsWith("-- ") ||
+      /^On .+ wrote:$/s.test(text) ||
+      /^-{5,} Forwarded message/.test(text);
     if (!stop) to = offset + node.nodeSize;
   });
   return { from: 0, to, text: doc.textBetween(0, to, "\n\n").trim() };
 }
 
 /** An email's text for the AI: its plain-text part, or its HTML read as text. */
-const messageText = (m: Message) => (m.text ?? new DOMParser().parseFromString(m.html ?? "", "text/html").body.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+const messageText = (m: Message) =>
+  (m.text ?? new DOMParser().parseFromString(m.html ?? "", "text/html").body.textContent ?? "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
 async function aiWrite(run: () => Promise<string>, range: { from: number; to: number }) {
   const btn = $<HTMLButtonElement>("#ai-write");
@@ -1828,35 +2258,57 @@ $("#ai-write").addEventListener("click", () => {
   if (!state) return;
   if (menuAnchor === anchor && !menu.hidden) return closeMenu();
   const own = ownText();
-  const rewrite = (instruction: string) => aiWrite(() => invoke<string>("ai_rewrite", { text: own.text, instruction, rules: settings.ai.writingRules }), own);
+  const rewrite = (instruction: string) =>
+    aiWrite(() => invoke<string>("ai_rewrite", { text: own.text, instruction, rules: settings.ai.writingRules }), own);
   const draftReply = () => {
     const name = accountSettings(state.account).name;
-    const conversation = messages.slice(-8)
+    const conversation = messages
+      .slice(-8)
       .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
       .join("\n\n---\n\n");
-    void aiWrite(() => invoke<string>("ai_draft_reply", { conversation, notes: own.text, me: name ? `${name} <${state.account}>` : state.account, rules: settings.ai.writingRules }), own);
+    void aiWrite(
+      () =>
+        invoke<string>("ai_draft_reply", {
+          conversation,
+          notes: own.text,
+          me: name ? `${name} <${state.account}>` : state.account,
+          rules: settings.ai.writingRules,
+        }),
+      own,
+    );
   };
   // Edits only once there's text to edit, rather than a list of greyed-out ones.
   const items: MenuItem[] = [
     ...(state.context && messages.length
-      ? [{ id: "draft", label: own.text ? "Draft a reply from my notes" : "Draft a reply", icon: "message-reply" }, ...(own.text ? ["-" as const] : [])]
+      ? [
+          { id: "draft", label: own.text ? "Draft a reply from my notes" : "Draft a reply", icon: "message-reply" },
+          ...(own.text ? ["-" as const] : []),
+        ]
       : []),
     ...(own.text
-      ? [...AI_EDITS.map(([label, icon], i): MenuItem => ({ id: `edit-${i}`, label, icon })), "-" as const,
-        { id: "custom", label: "Custom instruction…", icon: "pencil" }]
+      ? [
+          ...AI_EDITS.map(([label, icon], i): MenuItem => ({ id: `edit-${i}`, label, icon })),
+          "-" as const,
+          { id: "custom", label: "Custom instruction…", icon: "pencil" },
+        ]
       : [{ id: "none", label: "Write something to edit it with AI", icon: "info-circle", disabled: true }]),
   ];
   const r = anchor.getBoundingClientRect();
   showMenu(editor.state.selection.empty ? null : "Edit the selection", items, { x: r.left, y: r.bottom + 6 }, (id) => {
     if (id === "draft") draftReply();
     else if (id === "custom") {
-      void askText({ title: "Rewrite with AI", message: "Say what to change, for example \"Make it sound more confident\".", confirm: "Rewrite", value: "" })
-        .then((instruction) => void (instruction && rewrite(instruction)));
+      void askText({
+        title: "Rewrite with AI",
+        message: 'Say what to change, for example "Make it sound more confident".',
+        confirm: "Rewrite",
+        value: "",
+      }).then((instruction) => void (instruction && rewrite(instruction)));
     } else if (id.startsWith("edit-")) void rewrite(AI_EDITS[Number(id.slice(5))][2]);
   });
   menuAnchor = anchor;
   // The button sits at the bottom of the composer: open upward when there's no room below.
-  if (r.bottom + 6 + menu.offsetHeight > window.innerHeight - 8) menu.style.top = `${Math.max(8, r.top - menu.offsetHeight - 6)}px`;
+  if (r.bottom + 6 + menu.offsetHeight > window.innerHeight - 8)
+    menu.style.top = `${Math.max(8, r.top - menu.offsetHeight - 6)}px`;
 });
 
 /** Opening a scheduled email pauses it while it's edited; closing the composer schedules it again for the same time. */
@@ -1872,7 +2324,12 @@ async function editScheduled(id: string) {
     return toast(String(err));
   }
   await openComposer(r.ui.fields, {
-    ...r.ui.opts, account: r.account, draftId: r.draft_id, attachments: attachments ?? [], touched: true, inline: false,
+    ...r.ui.opts,
+    account: r.account,
+    draftId: r.draft_id,
+    attachments: attachments ?? [],
+    touched: true,
+    inline: false,
     resumeAt: r.send_at,
   });
   toast("Paused while you edit. Closing keeps it scheduled.");
@@ -1884,7 +2341,9 @@ function scheduledAction(action: string, id: string) {
   if (action === "edit") return editScheduled(id);
   if (action === "sendNow") return invoke("reschedule", { account: r.account, id: r.id, sendAt: Date.now() });
   if (action === "cancel" || action === "trash") {
-    return invoke("reschedule", { account: r.account, id: r.id, sendAt: null }).then(() => toast("Send cancelled. The email is in Drafts."));
+    return invoke("reschedule", { account: r.account, id: r.id, sendAt: null }).then(() =>
+      toast("Send cancelled. The email is in Drafts."),
+    );
   }
 }
 
@@ -1896,7 +2355,9 @@ const fileInput = $<HTMLInputElement>("#compose-file");
 function renderComposeFiles() {
   const files = compose?.attachments ?? [];
   composeFiles.hidden = !files.length;
-  composeFiles.innerHTML = files.map((f, i) => attachmentButton(fileIcon(f.mime, f.name), f.name, f.size, { i }, true)).join("");
+  composeFiles.innerHTML = files
+    .map((f, i) => attachmentButton(fileIcon(f.mime, f.name), f.name, f.size, { i }, true))
+    .join("");
 }
 
 async function addComposeFiles(list: Iterable<File>) {
@@ -1922,7 +2383,11 @@ async function addComposeFiles(list: Iterable<File>) {
 function attachFrom(m: Message, account: string) {
   const state = compose;
   const files = forwardAttachments(m, account);
-  if (state) pendingFiles.set(state, files.finally(() => pendingFiles.delete(state)));
+  if (state)
+    pendingFiles.set(
+      state,
+      files.finally(() => pendingFiles.delete(state)),
+    );
   return files;
 }
 
@@ -1942,8 +2407,13 @@ async function openDraft(id: string): Promise<boolean> {
   const earlier = msgs.filter((x) => x.id !== messageId).at(-1);
   await openComposer(
     { to: m.recipients, cc: m.cc, bcc, subject: m.subject, body: m.html ?? textToHtml(m.text ?? "") },
-    { title: "Draft", draftId, account, inline: false,
-      context: earlier ? { thread_id: id, in_reply_to: earlier.message_id, references: m.refs } : null },
+    {
+      title: "Draft",
+      draftId,
+      account,
+      inline: false,
+      context: earlier ? { thread_id: id, in_reply_to: earlier.message_id, references: m.refs } : null,
+    },
   );
   void attachFrom(m, account);
   return true;
@@ -1999,7 +2469,16 @@ composeForm.addEventListener("drop", (e) => {
 
 $("#compose-close").addEventListener("click", () => closeComposer());
 $("#compose-discard").addEventListener("click", async () => {
-  if (hasContent() && !(await ask({ title: "Discard this draft?", message: "It will be deleted from Drafts too.", confirm: "Discard", danger: true }))) return;
+  if (
+    hasContent() &&
+    !(await ask({
+      title: "Discard this draft?",
+      message: "It will be deleted from Drafts too.",
+      confirm: "Discard",
+      danger: true,
+    }))
+  )
+    return;
   closeComposer(true);
 });
 $("#cc-toggle").addEventListener("click", () => {
@@ -2014,8 +2493,11 @@ async function escapeComposer() {
   if (!hasContent()) return closeComposer();
   if (askOpen()) return;
   const choice = await askChoice({
-    title: "Close this email?", message: "Save it to Drafts to finish later, or press Esc again to discard it.",
-    confirm: "Save draft", alt: "Discard", escapeIsAlt: true,
+    title: "Close this email?",
+    message: "Save it to Drafts to finish later, or press Esc again to discard it.",
+    confirm: "Save draft",
+    alt: "Discard",
+    escapeIsAlt: true,
   });
   if (choice === "ok") return closeComposer();
   if (choice === "alt") return closeComposer(true);
@@ -2035,19 +2517,29 @@ $("#mailboxes").addEventListener("click", (e) => {
  * the sidebar merges labels with the same name, so one created in each account shows as one label for all of them. */
 async function newLabel() {
   const list = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
-  const where = list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} accounts`;
+  const where =
+    list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} accounts`;
   const picked = await askTextAndColor({
-    title: "New label", message: accounts.length > 1 ? `Created in Gmail for ${where}.` : "Created in Gmail.", confirm: "Create", value: "",
-    colors: LABEL_COLORS.map(([colorName, bg]) => [colorName, `class="label-dot ask-swatch" data-color="${bg.slice(1)}"`]),
+    title: "New label",
+    message: accounts.length > 1 ? `Created in Gmail for ${where}.` : "Created in Gmail.",
+    confirm: "Create",
+    value: "",
+    colors: LABEL_COLORS.map(([colorName, bg]) => [
+      colorName,
+      `class="label-dot ask-swatch" data-color="${bg.slice(1)}"`,
+    ]),
   });
   if (!picked) return;
   const [, background, text] = LABEL_COLORS.find(([n]) => n === picked.color)!;
   const name = picked.text;
-  const failed = (await Promise.allSettled(list.map(async (account) => {
-    await invoke<string>("create_label", { account, name });
-    await invoke("set_label_color", { label: `name:${name}`, background, text, accounts: [account] });
-  })))
-    .flatMap((r, i) => (r.status === "rejected" ? [`${accountName(list[i])}: ${r.reason}`] : []));
+  const failed = (
+    await Promise.allSettled(
+      list.map(async (account) => {
+        await invoke<string>("create_label", { account, name });
+        await invoke("set_label_color", { label: `name:${name}`, background, text, accounts: [account] });
+      }),
+    )
+  ).flatMap((r, i) => (r.status === "rejected" ? [`${accountName(list[i])}: ${r.reason}`] : []));
   if (failed.length) toast(`Couldn't create the label in ${failed.join("; ")}`);
   await renderMailboxes();
 }
@@ -2072,9 +2564,13 @@ function openMailbox(id: string | null) {
 }
 
 let suppressClick = false;
-threadList.addEventListener("scroll", () => {
-  if (threadList.scrollTop + threadList.clientHeight >= threadList.scrollHeight - 400) loadMore();
-}, { passive: true });
+threadList.addEventListener(
+  "scroll",
+  () => {
+    if (threadList.scrollTop + threadList.clientHeight >= threadList.scrollHeight - 400) loadMore();
+  },
+  { passive: true },
+);
 
 threadList.addEventListener("click", (e) => {
   if (suppressClick) return void (suppressClick = false);
@@ -2104,24 +2600,28 @@ function swipeEnd(li: HTMLElement, dx: number) {
 }
 let wheelSwipe: { li: HTMLElement; dx: number; timer: number } | null = null;
 let swipeCooldown = 0;
-threadList.addEventListener("wheel", (e) => {
-  if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
-  const li = (e.target as Element).closest<HTMLElement>("li[data-id]");
-  if (!li) return;
-  e.preventDefault();
-  // Trackpad momentum keeps sending events after the fingers lift; don't let it start a second swipe.
-  if (Date.now() < swipeCooldown) return;
-  if (wheelSwipe?.li !== li) wheelSwipe = { li, dx: 0, timer: 0 };
-  const s = wheelSwipe;
-  s.dx = Math.max(-160, Math.min(160, s.dx - e.deltaX));
-  swipeShow(li, s.dx);
-  clearTimeout(s.timer);
-  s.timer = window.setTimeout(() => {
-    wheelSwipe = null;
-    swipeCooldown = Date.now() + 400;
-    swipeEnd(li, s.dx);
-  }, 140);
-}, { passive: false });
+threadList.addEventListener(
+  "wheel",
+  (e) => {
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    const li = (e.target as Element).closest<HTMLElement>("li[data-id]");
+    if (!li) return;
+    e.preventDefault();
+    // Trackpad momentum keeps sending events after the fingers lift; don't let it start a second swipe.
+    if (Date.now() < swipeCooldown) return;
+    if (wheelSwipe?.li !== li) wheelSwipe = { li, dx: 0, timer: 0 };
+    const s = wheelSwipe;
+    s.dx = Math.max(-160, Math.min(160, s.dx - e.deltaX));
+    swipeShow(li, s.dx);
+    clearTimeout(s.timer);
+    s.timer = window.setTimeout(() => {
+      wheelSwipe = null;
+      swipeCooldown = Date.now() + 400;
+      swipeEnd(li, s.dx);
+    }, 140);
+  },
+  { passive: false },
+);
 threadList.addEventListener("pointerdown", (e) => {
   if (e.pointerType !== "touch") return;
   const li = (e.target as Element).closest<HTMLElement>("li[data-id]");
@@ -2150,10 +2650,12 @@ threadList.addEventListener("pointerdown", (e) => {
   li.addEventListener("pointercancel", up, { once: true });
 });
 
-document.querySelectorAll<HTMLElement>("[data-action]").forEach((b) => b.addEventListener("click", () => act(b.dataset.action!)));
-document.querySelectorAll<HTMLElement>("[data-back]").forEach((b) =>
-  b.addEventListener("click", () => setView(b.dataset.back as "mailboxes" | "list")),
-);
+document
+  .querySelectorAll<HTMLElement>("[data-action]")
+  .forEach((b) => b.addEventListener("click", () => act(b.dataset.action!)));
+document
+  .querySelectorAll<HTMLElement>("[data-back]")
+  .forEach((b) => b.addEventListener("click", () => setView(b.dataset.back as "mailboxes" | "list")));
 
 // Live search: results from the local cache on every keystroke, sender suggestions underneath. Return also
 // asks Gmail, which finds mail that isn't stored on this Mac. Emptying the field goes back to the mailbox.
@@ -2175,8 +2677,13 @@ function renderSuggest(form: HTMLFormElement) {
   box.className = "suggest";
   box.setAttribute("role", "listbox");
   box.innerHTML = suggestions
-    .map((s, i) => `<button type="button" role="option" data-i="${i}" aria-selected="${i === suggestIndex}" class="${i === suggestIndex ? "on" : ""}">
-        ${avatar(s)}<span class="from-chip"><em>from:</em> ${esc(displayName(s) || bareEmail(s))}</span><small>${esc(bareEmail(s))}</small></button>`)
+    .map(
+      (
+        s,
+        i,
+      ) => `<button type="button" role="option" data-i="${i}" aria-selected="${i === suggestIndex}" class="${i === suggestIndex ? "on" : ""}">
+        ${avatar(s)}<span class="from-chip"><em>from:</em> ${esc(displayName(s) || bareEmail(s))}</span><small>${esc(bareEmail(s))}</small></button>`,
+    )
     .join("");
   // pointerdown + preventDefault keeps focus in the field, so blur doesn't close the list before the pick lands.
   box.addEventListener("pointerdown", (e) => {
@@ -2232,7 +2739,8 @@ searchInputs.forEach((input) => {
     if (!suggestions.length) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      suggestIndex = e.key === "ArrowDown" ? Math.min(suggestIndex + 1, suggestions.length - 1) : Math.max(suggestIndex - 1, -1);
+      suggestIndex =
+        e.key === "ArrowDown" ? Math.min(suggestIndex + 1, suggestions.length - 1) : Math.max(suggestIndex - 1, -1);
       renderSuggest(form);
     } else if (e.key === "Enter" && suggestIndex >= 0) {
       e.preventDefault();
@@ -2245,32 +2753,36 @@ searchInputs.forEach((input) => {
   input.addEventListener("blur", () => window.setTimeout(closeSuggest, 120));
 });
 
-document.querySelectorAll<HTMLFormElement>(".search").forEach((form) => form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const input = form.querySelector("input")!;
-  searchInputs.forEach((i) => i !== input && (i.value = input.value));
-  const value = input.value.trim();
-  clearTimeout(liveTimer);
-  liveSeq++;
-  closeSuggest();
-  if (!value) return;
-  search = value;
-  clearReader();
-  try {
-    threads = await invoke<Thread[]>("search_local", { query: value, accounts: scope });
-    renderThreads();
-    $("#list-title").textContent = `Searching Gmail for “${value}”…`;
-    await loadThreads();
-  } catch (err) {
-    // Offline or Gmail error: keep the local results that are already showing.
-    renderThreads();
-    toast(`Showing results from this Mac only: ${err}`);
-  }
-}));
+document.querySelectorAll<HTMLFormElement>(".search").forEach((form) =>
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = form.querySelector("input")!;
+    searchInputs.forEach((i) => i !== input && (i.value = input.value));
+    const value = input.value.trim();
+    clearTimeout(liveTimer);
+    liveSeq++;
+    closeSuggest();
+    if (!value) return;
+    search = value;
+    clearReader();
+    try {
+      threads = await invoke<Thread[]>("search_local", { query: value, accounts: scope });
+      renderThreads();
+      $("#list-title").textContent = `Searching Gmail for “${value}”…`;
+      await loadThreads();
+    } catch (err) {
+      // Offline or Gmail error: keep the local results that are already showing.
+      renderThreads();
+      toast(`Showing results from this Mac only: ${err}`);
+    }
+  }),
+);
 
 $("#sync-btn").addEventListener("click", () => invoke("sync_now"));
 
-$("#view-btn").addEventListener("click", () => setSetting("inbox.view", settings.inbox.view === "smart" ? "list" : "smart"));
+$("#view-btn").addEventListener("click", () =>
+  setSetting("inbox.view", settings.inbox.view === "smart" ? "list" : "smart"),
+);
 
 async function signOut(account: string) {
   const waiting = (await invoke<unknown[]>("scheduled", { accounts: [account] })).length;
@@ -2341,10 +2853,28 @@ function paletteCommands(): Command[] {
     ? [
         { label: "Archive", icon: "archive", key: k("archive"), group: "Email", run: () => act("archive") },
         { label: "Delete", icon: "trash", key: k("trash"), group: "Email", run: () => act("trash") },
-        { label: thread.unread ? "Mark as read" : "Mark as unread", icon: "envelope-simple", key: k("unread"), group: "Email", run: () => act("unread") },
-        { label: thread.starred ? "Unpin" : "Pin", icon: "push-pin", key: k("star"), group: "Email", run: () => act("star") },
+        {
+          label: thread.unread ? "Mark as read" : "Mark as unread",
+          icon: "envelope-simple",
+          key: k("unread"),
+          group: "Email",
+          run: () => act("unread"),
+        },
+        {
+          label: thread.starred ? "Unpin" : "Pin",
+          icon: "push-pin",
+          key: k("star"),
+          group: "Email",
+          run: () => act("star"),
+        },
         { label: "Reply", icon: "arrow-bend-up-left", key: k("reply"), group: "Email", run: () => act("reply") },
-        { label: "Reply all", icon: "arrow-bend-double-up-left", key: k("replyAll"), group: "Email", run: () => act("replyAll") },
+        {
+          label: "Reply all",
+          icon: "arrow-bend-double-up-left",
+          key: k("replyAll"),
+          group: "Email",
+          run: () => act("replyAll"),
+        },
         { label: "Forward", icon: "arrow-bend-up-right", key: k("forward"), group: "Email", run: () => act("forward") },
         { label: "Move to…", icon: "folder", key: k("move"), group: "Email", run: () => act("move") },
         { label: "Label…", icon: "tag", key: k("label"), group: "Email", run: () => act("label") },
@@ -2352,35 +2882,95 @@ function paletteCommands(): Command[] {
       ]
     : [];
   const switchTo: Command[] = multi()
-    ? [null, ...accounts].map((a): Command => ({
-        label: a ? `Switch to ${accountName(a)}` : "Switch to All accounts", icon: "user-circle", group: "Accounts", run: () => setScope(a ? [a] : null),
-      }))
+    ? [null, ...accounts].map(
+        (a): Command => ({
+          label: a ? `Switch to ${accountName(a)}` : "Switch to All accounts",
+          icon: "user-circle",
+          group: "Accounts",
+          run: () => setScope(a ? [a] : null),
+        }),
+      )
     : [];
   const go: Command[] = [
-    ...SYSTEM.map(([id, name, icon]): Command => ({ label: `Go to ${name}`, icon, group: "Go to", run: () => openMailbox(id) })),
-    ...userLabels.map((l): Command => ({ label: `Go to ${l.name}`, icon: "tag", group: "Go to", run: () => openMailbox(l.id) })),
+    ...SYSTEM.map(
+      ([id, name, icon]): Command => ({ label: `Go to ${name}`, icon, group: "Go to", run: () => openMailbox(id) }),
+    ),
+    ...userLabels.map(
+      (l): Command => ({ label: `Go to ${l.name}`, icon: "tag", group: "Go to", run: () => openMailbox(l.id) }),
+    ),
   ];
   const sections: [string, string, string][] = [
-    ["general", "General", "gear-six"], ["appearance", "Appearance", "palette"], ["accounts", "Accounts", "user-circle"],
-    ["ai", "AI", "message-ai"], ["inbox", "Inbox", "tray"], ["composer", "Composer", "pencil-simple-line"],
-    ["accessibility", "Accessibility", "text-aa"], ["swipes", "Swipes", "hand-swipe-left"], ["shortcuts", "Keyboard shortcuts", "keyboard"],
+    ["general", "General", "gear-six"],
+    ["appearance", "Appearance", "palette"],
+    ["accounts", "Accounts", "user-circle"],
+    ["ai", "AI", "message-ai"],
+    ["inbox", "Inbox", "tray"],
+    ["composer", "Composer", "pencil-simple-line"],
+    ["accessibility", "Accessibility", "text-aa"],
+    ["swipes", "Swipes", "hand-swipe-left"],
+    ["shortcuts", "Keyboard shortcuts", "keyboard"],
   ];
   return [
     ...email,
-    { label: "New email", icon: "pencil-simple-line", key: k("compose"), group: "Mail", run: () => $("#compose-btn").click() },
+    {
+      label: "New email",
+      icon: "pencil-simple-line",
+      key: k("compose"),
+      group: "Mail",
+      run: () => $("#compose-btn").click(),
+    },
     { label: "Check for mail", icon: "arrows-clockwise", key: k("sync"), group: "Mail", run: () => invoke("sync_now") },
-        { label: "Clean up Inbox with AI", icon: "message-ai", group: "Mail", run: () => void openCleanup() },
-    { label: settings.inbox.view === "smart" ? "Switch to plain list" : "Switch to Smart Inbox", icon: "stack", group: "Mail", run: () => $("#view-btn").click() },
+    { label: "Clean up Inbox with AI", icon: "message-ai", group: "Mail", run: () => void openCleanup() },
+    {
+      label: settings.inbox.view === "smart" ? "Switch to plain list" : "Switch to Smart Inbox",
+      icon: "stack",
+      group: "Mail",
+      run: () => $("#view-btn").click(),
+    },
     ...go,
     ...switchTo,
     { label: "Add a Google account", icon: "user-plus", group: "Accounts", run: () => addAccount() },
-    ...sections.map(([id, name, icon]): Command => ({ label: `Settings: ${name}`, icon, group: "Settings", run: () => openSettings(id) })),
-    { label: "Use light appearance", icon: "sun", group: "Appearance", run: () => setSetting("appearance.theme", "light") },
-    { label: "Use dark appearance", icon: "moon", group: "Appearance", run: () => setSetting("appearance.theme", "dark") },
-    { label: "Match system appearance", icon: "desktop", group: "Appearance", run: () => setSetting("appearance.theme", "system") },
+    ...sections.map(
+      ([id, name, icon]): Command => ({
+        label: `Settings: ${name}`,
+        icon,
+        group: "Settings",
+        run: () => openSettings(id),
+      }),
+    ),
+    {
+      label: "Use light appearance",
+      icon: "sun",
+      group: "Appearance",
+      run: () => setSetting("appearance.theme", "light"),
+    },
+    {
+      label: "Use dark appearance",
+      icon: "moon",
+      group: "Appearance",
+      run: () => setSetting("appearance.theme", "dark"),
+    },
+    {
+      label: "Match system appearance",
+      icon: "desktop",
+      group: "Appearance",
+      run: () => setSetting("appearance.theme", "system"),
+    },
     { label: "Zoom in", icon: "magnifying-glass-plus", key: k("zoomIn"), group: "Appearance", run: () => stepZoom(1) },
-    { label: "Zoom out", icon: "magnifying-glass-minus", key: k("zoomOut"), group: "Appearance", run: () => stepZoom(-1) },
-    { label: "Actual size", icon: "magnifying-glass", key: k("zoomReset"), group: "Appearance", run: () => stepZoom(0) },
+    {
+      label: "Zoom out",
+      icon: "magnifying-glass-minus",
+      key: k("zoomOut"),
+      group: "Appearance",
+      run: () => stepZoom(-1),
+    },
+    {
+      label: "Actual size",
+      icon: "magnifying-glass",
+      key: k("zoomReset"),
+      group: "Appearance",
+      run: () => stepZoom(0),
+    },
   ];
 }
 
@@ -2388,17 +2978,21 @@ function renderPalette() {
   const q = paletteInput.value.trim();
   const found = rank(paletteCommands(), q);
   // Typing always offers a mail search too, after the matching commands.
-  if (q) found.push({ label: `Search mail for “${q}”`, icon: "magnifying-glass", group: "Search", run: () => searchFor(q) });
+  if (q)
+    found.push({ label: `Search mail for “${q}”`, icon: "magnifying-glass", group: "Search", run: () => searchFor(q) });
   paletteItems = found;
   paletteIndex = Math.min(paletteIndex, Math.max(found.length - 1, 0));
   let lastGroup = "";
   paletteList.innerHTML = found.length
-    ? found.map((c, i) => {
-        const head = !q && c.group !== lastGroup ? `<li class="palette-group" role="presentation">${esc(c.group)}</li>` : "";
-        lastGroup = c.group;
-        return `${head}<li role="option" id="pc-${i}" data-i="${i}" aria-selected="${i === paletteIndex}" class="${i === paletteIndex ? "on" : ""}">
+    ? found
+        .map((c, i) => {
+          const head =
+            !q && c.group !== lastGroup ? `<li class="palette-group" role="presentation">${esc(c.group)}</li>` : "";
+          lastGroup = c.group;
+          return `${head}<li role="option" id="pc-${i}" data-i="${i}" aria-selected="${i === paletteIndex}" class="${i === paletteIndex ? "on" : ""}">
           ${iconHtml(c.icon)}<span>${esc(c.label)}</span>${c.key ? `<kbd>${esc(c.key)}</kbd>` : ""}</li>`;
-      }).join("")
+        })
+        .join("")
     : `<li class="palette-empty">No matching commands</li>`;
   paletteInput.setAttribute("aria-activedescendant", `pc-${paletteIndex}`);
   paletteList.querySelector(".on")?.scrollIntoView({ block: "nearest" });
@@ -2608,15 +3202,18 @@ document.addEventListener("pointerover", (e) => {
   if (!el || !menu.hidden) return;
   tipTarget = el;
   // A visible tooltip is already "warm", so moving along a toolbar switches instantly.
-  tipTimer = window.setTimeout(() => {
-    const [, label, key] = el.dataset.tip!.match(/^(.*?)(?: \((.+)\))?$/)!;
-    tooltip.innerHTML = esc(label) + (key ? ` <kbd>${esc(key.toUpperCase())}</kbd>` : "");
-    tooltip.showPopover();
-    const r = el.getBoundingClientRect();
-    const below = r.bottom + 8 + tooltip.offsetHeight < window.innerHeight;
-    tooltip.style.top = `${below ? r.bottom + 8 : r.top - 8 - tooltip.offsetHeight}px`;
-    tooltip.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - tooltip.offsetWidth / 2, window.innerWidth - tooltip.offsetWidth - 8))}px`;
-  }, Date.now() - tipHiddenAt < 300 ? 0 : 450);
+  tipTimer = window.setTimeout(
+    () => {
+      const [, label, key] = el.dataset.tip!.match(/^(.*?)(?: \((.+)\))?$/)!;
+      tooltip.innerHTML = esc(label) + (key ? ` <kbd>${esc(key.toUpperCase())}</kbd>` : "");
+      tooltip.showPopover();
+      const r = el.getBoundingClientRect();
+      const below = r.bottom + 8 + tooltip.offsetHeight < window.innerHeight;
+      tooltip.style.top = `${below ? r.bottom + 8 : r.top - 8 - tooltip.offsetHeight}px`;
+      tooltip.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - tooltip.offsetWidth / 2, window.innerWidth - tooltip.offsetWidth - 8))}px`;
+    },
+    Date.now() - tipHiddenAt < 300 ? 0 : 450,
+  );
 });
 document.addEventListener("pointerdown", hideTip);
 document.addEventListener("keydown", hideTip);
@@ -2625,7 +3222,11 @@ document.querySelectorAll<HTMLElement>("[data-tip]").forEach((el) => {
 });
 
 // Tooltips show each button's current first key, so remapped shortcuts stay truthful.
-const TIP_ACTIONS: Record<string, string> = { "compose-btn": "compose", "sync-btn": "sync", "settings-btn": "settings" };
+const TIP_ACTIONS: Record<string, string> = {
+  "compose-btn": "compose",
+  "sync-btn": "sync",
+  "settings-btn": "settings",
+};
 $("#palette-hint").addEventListener("click", () => openPalette());
 
 function updateShortcutTips() {
@@ -2645,7 +3246,11 @@ function updateShortcutTips() {
 /** Sidebar footer: the accounts being shown, which opens the account picker when there are several. */
 function renderAccountFooter() {
   const one = scope?.length === 1 ? scope[0] : !multi() ? accounts[0] : null;
-  $("#account-email").textContent = one ? accountName(one) : scope ? `${scope.length} accounts` : `All accounts (${accounts.length})`;
+  $("#account-email").textContent = one
+    ? accountName(one)
+    : scope
+      ? `${scope.length} accounts`
+      : `All accounts (${accounts.length})`;
   $("#account-dot").className = `account-dot ${one ? `acct-${accountSettings(one).color}` : ""}`;
   $("#account-dot").hidden = !one;
   $("#account-all").hidden = !!one;
@@ -2659,7 +3264,13 @@ function openAccountMenu() {
   const items: MenuItem[] = [
     { id: "", label: "All accounts", icon: "users", checked: !scope },
     "-",
-    ...accounts.map((a) => ({ id: a, label: accountName(a), icon: "", acct: accountSettings(a).color, checked: shown.includes(a) })),
+    ...accounts.map((a) => ({
+      id: a,
+      label: accountName(a),
+      icon: "",
+      acct: accountSettings(a).color,
+      checked: shown.includes(a),
+    })),
   ];
   const r = btn.getBoundingClientRect();
   showMenu(null, items, { x: r.left, y: r.top }, (id) => {
@@ -2678,7 +3289,9 @@ function openAccountMenu() {
   menuAnchor = btn;
 }
 
-$("#account-btn").addEventListener("click", () => (menuAnchor === $("#account-btn") && !menu.hidden ? closeMenu() : openAccountMenu()));
+$("#account-btn").addEventListener("click", () =>
+  menuAnchor === $("#account-btn") && !menu.hidden ? closeMenu() : openAccountMenu(),
+);
 
 onSettingsChange((path) => {
   applyVisualSettings();
@@ -2712,7 +3325,9 @@ function start(list: string[]) {
 listen("mail-changed", refresh);
 // Counted, since a manual sync can overlap the timed one.
 let syncs = 0;
-listen<boolean>("syncing", (e) => $("#sync-btn").classList.toggle("spinning", (syncs = Math.max(0, syncs + (e.payload ? 1 : -1))) > 0));
+listen<boolean>("syncing", (e) =>
+  $("#sync-btn").classList.toggle("spinning", (syncs = Math.max(0, syncs + (e.payload ? 1 : -1))) > 0),
+);
 // Undo send and Send later both go out through the scheduled queue.
 listen("scheduled-sent", () => toast("Email sent"));
 // A clicked new-mail notification: its email (or, for several, the Inbox), in a view that includes its account.
@@ -2743,7 +3358,11 @@ onSaveError((err) => toast(`Couldn't save your settings: ${err}`));
 // ⌘Q: the backend waits (up to 5 s) for this before quitting.
 listen("before-quit", () => void saveBeforeQuit().finally(() => invoke("quit_now")));
 listen<string>("update-ready", (e) =>
-  toast(`Shift ${e.payload} is ready`, { ms: 10 * 60_000, action: { label: "Restart", run: () => void saveBeforeQuit().finally(() => invoke("restart_app")) } }));
+  toast(`Shift ${e.payload} is ready`, {
+    ms: 10 * 60_000,
+    action: { label: "Restart", run: () => void saveBeforeQuit().finally(() => invoke("restart_app")) },
+  }),
+);
 // Shown once per distinct error every 10 minutes (sync retries every tick), and never over an Undo or Restart toast.
 const syncErrorShown = new Map<string, number>();
 listen<string>("sync-error", (e) => {

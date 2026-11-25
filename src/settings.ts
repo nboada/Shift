@@ -15,7 +15,15 @@ export const DEFAULT_WRITING_RULES = `- Write in a natural, direct and specific 
 
 export const DEFAULTS = {
   general: { syncSeconds: 30, markReadOnOpen: true, confirmDelete: false },
-  appearance: { theme: "system" as "system" | "light" | "dark", density: "comfortable" as "comfortable" | "compact", showAvatars: true, snippetLines: 2, layout: "split" as "split" | "wide", uniformEmailFont: true, loadRemoteImages: false },
+  appearance: {
+    theme: "system" as "system" | "light" | "dark",
+    density: "comfortable" as "comfortable" | "compact",
+    showAvatars: true,
+    snippetLines: 2,
+    layout: "split" as "split" | "wide",
+    uniformEmailFont: true,
+    loadRemoteImages: false,
+  },
   notifications: { enabled: true, sound: true, onlyPeople: false },
   scheduling: { laterTodayHours: 3, morning: "09:00", weekendDay: "saturday", nextWeekDay: "monday" },
   inbox: { view: "smart" as "smart" | "list", pinnedOnTop: true, splitUnread: true, unreadBadge: true },
@@ -38,15 +46,29 @@ export const DEFAULTS = {
   onboarding: { done: false },
   /** Keyed by email address, so each account keeps its own options. */
   accounts: {} as Record<string, Partial<AccountSettings>>,
-  ai: { provider: "anthropic", model: "claude-sonnet-5-5", customModel: "", baseUrl: "", autoLabel: false, labelRules: {} as Record<string, string>, writingRules: DEFAULT_WRITING_RULES,
+  ai: {
+    provider: "anthropic",
+    model: "claude-sonnet-5-5",
+    customModel: "",
+    baseUrl: "",
+    autoLabel: false,
+    labelRules: {} as Record<string, string>,
+    writingRules: DEFAULT_WRITING_RULES,
     // Per kind of job; an empty provider means "same as the default above".
-    tasks: { writing: { provider: "", model: "" }, sorting: { provider: "", model: "" } } },
+    tasks: { writing: { provider: "", model: "" }, sorting: { provider: "", model: "" } },
+  },
 };
 
 export type Settings = typeof DEFAULTS;
 
 /** Absent `signature` means the account uses the default one from Settings → Composer. */
-export type AccountSettings = { name: string; title: string; color: string; unified: boolean; signature?: SignatureSettings };
+export type AccountSettings = {
+  name: string;
+  title: string;
+  color: string;
+  unified: boolean;
+  signature?: SignatureSettings;
+};
 export type SignatureSettings = { mode: "text" | "html"; text: string; html: string };
 
 /** The signature for mail from `account`: its own if it has one, else the default. */
@@ -124,11 +146,13 @@ export function flushSettings() {
   clearTimeout(saveTimer);
   if (!dirty) return saving;
   dirty = false;
-  saving = saving.then(() => invoke<void>("set_settings", { value: settings })).catch((err) => {
-    // Still unsaved: the next change or the flush before quitting tries again.
-    dirty = true;
-    saveError(err);
-  });
+  saving = saving
+    .then(() => invoke<void>("set_settings", { value: settings }))
+    .catch((err) => {
+      // Still unsaved: the next change or the flush before quitting tries again.
+      dirty = true;
+      saveError(err);
+    });
   return saving;
 }
 
@@ -154,25 +178,63 @@ export const ZOOM_STEPS = [75, 85, 90, 100, 110, 125, 150];
 
 export function stepZoom(dir: -1 | 0 | 1) {
   const z = settings.accessibility.zoom;
-  const next = dir === 0 ? 100 : dir > 0 ? ZOOM_STEPS.find((s) => s > z) ?? z : [...ZOOM_STEPS].reverse().find((s) => s < z) ?? z;
+  const next =
+    dir === 0
+      ? 100
+      : dir > 0
+        ? (ZOOM_STEPS.find((s) => s > z) ?? z)
+        : ([...ZOOM_STEPS].reverse().find((s) => s < z) ?? z);
   setSetting("accessibility.zoom", next);
 }
 
-export type Provider = { id: string; name: string; models: string[]; needsKey: boolean; baseUrl?: string; keyUrl?: string };
+export type Provider = {
+  id: string;
+  name: string;
+  models: string[];
+  needsKey: boolean;
+  baseUrl?: string;
+  keyUrl?: string;
+};
 
 // Model lists checked against each provider's docs on 2026-11-24; "Custom model…" covers anything newer.
 export const AI_PROVIDERS: Provider[] = [
-  { id: "anthropic", name: "Anthropic (Claude)", needsKey: true, keyUrl: "https://console.anthropic.com/settings/keys",
-    models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"] },
-  { id: "openai", name: "OpenAI", needsKey: true, keyUrl: "https://platform.openai.com/api-keys",
-    models: ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna"] },
-  { id: "google", name: "Google Gemini", needsKey: true, keyUrl: "https://aistudio.google.com/apikey",
-    models: ["gemini-4-carbon", "gemini-4-neon", "gemini-4-hydrogen", "gemini-4-argon", "gemini-3.8-flash"] },
-  { id: "xai", name: "xAI (Grok)", needsKey: true, keyUrl: "https://console.x.ai",
-    models: ["grok-4.7"] },
-  { id: "mistral", name: "Mistral", needsKey: true, keyUrl: "https://console.mistral.ai/api-keys",
-    models: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"] },
-  { id: "openrouter", name: "OpenRouter", needsKey: true, baseUrl: "https://openrouter.ai/api/v1", keyUrl: "https://openrouter.ai/keys", models: [] },
+  {
+    id: "anthropic",
+    name: "Anthropic (Claude)",
+    needsKey: true,
+    keyUrl: "https://console.anthropic.com/settings/keys",
+    models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"],
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    needsKey: true,
+    keyUrl: "https://platform.openai.com/api-keys",
+    models: ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna"],
+  },
+  {
+    id: "google",
+    name: "Google Gemini",
+    needsKey: true,
+    keyUrl: "https://aistudio.google.com/apikey",
+    models: ["gemini-4-carbon", "gemini-4-neon", "gemini-4-hydrogen", "gemini-4-argon", "gemini-3.8-flash"],
+  },
+  { id: "xai", name: "xAI (Grok)", needsKey: true, keyUrl: "https://console.x.ai", models: ["grok-4.7"] },
+  {
+    id: "mistral",
+    name: "Mistral",
+    needsKey: true,
+    keyUrl: "https://console.mistral.ai/api-keys",
+    models: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    needsKey: true,
+    baseUrl: "https://openrouter.ai/api/v1",
+    keyUrl: "https://openrouter.ai/keys",
+    models: [],
+  },
   { id: "ollama", name: "Ollama (local)", needsKey: false, baseUrl: "http://localhost:11434", models: [] },
   { id: "custom", name: "Custom (OpenAI-compatible)", needsKey: true, baseUrl: "", models: [] },
 ];

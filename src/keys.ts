@@ -3,7 +3,9 @@ export type KeyLike = Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKe
 /** "cmd+shift+r", "shift+r", "#", "ArrowDown". Shift only counts on letters, since it already changes symbols (3 → #). */
 export function comboOf(e: KeyLike) {
   const letter = /^[a-z]$/i.test(e.key);
-  const mods = [e.ctrlKey && "ctrl", e.altKey && "alt", e.metaKey && "cmd", e.shiftKey && letter && "shift"].filter(Boolean);
+  const mods = [e.ctrlKey && "ctrl", e.altKey && "alt", e.metaKey && "cmd", e.shiftKey && letter && "shift"].filter(
+    Boolean,
+  );
   return [...mods, letter ? e.key.toLowerCase() : e.key].join("+");
 }
 
@@ -78,8 +80,16 @@ export function bindingsFrom(overrides: Record<string, string[]>): Record<string
 }
 
 const SYMBOLS: Record<string, string> = {
-  ArrowDown: "↓", ArrowUp: "↑", ArrowLeft: "←", ArrowRight: "→",
-  Backspace: "⌫", Delete: "⌦", Enter: "↩", Escape: "Esc", " ": "Space", Tab: "⇥",
+  ArrowDown: "↓",
+  ArrowUp: "↑",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+  Backspace: "⌫",
+  Delete: "⌦",
+  Enter: "↩",
+  Escape: "Esc",
+  " ": "Space",
+  Tab: "⇥",
 };
 
 /** Mac-style label: "cmd+shift+r" → "⇧⌘R". */
@@ -88,7 +98,10 @@ export function formatCombo(combo: string) {
   const key = parts.pop()!;
   const mods = new Set(parts);
   return (
-    (mods.has("ctrl") ? "⌃" : "") + (mods.has("alt") ? "⌥" : "") + (mods.has("shift") ? "⇧" : "") + (mods.has("cmd") ? "⌘" : "") +
+    (mods.has("ctrl") ? "⌃" : "") +
+    (mods.has("alt") ? "⌥" : "") +
+    (mods.has("shift") ? "⇧" : "") +
+    (mods.has("cmd") ? "⌘" : "") +
     (SYMBOLS[key] ?? key.toUpperCase())
   );
 }

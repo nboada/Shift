@@ -25,9 +25,15 @@ swatches.addEventListener("click", (e) => {
  * `askText` plus a row of colour swatches. `colors` are [name, swatch HTML attributes] pairs; resolves the text and
  * the picked colour's name, or null when cancelled or left empty.
  */
-export async function askTextAndColor(opts: Ask & { value: string; colors: [name: string, attrs: string][] }): Promise<{ text: string; color: string } | null> {
-  swatches.innerHTML = opts.colors.map(([name, attrs], i) =>
-    `<button type="button" role="radio" aria-label="${name}" aria-checked="${i === 0}" data-name="${name}" ${attrs}></button>`).join("");
+export async function askTextAndColor(
+  opts: Ask & { value: string; colors: [name: string, attrs: string][] },
+): Promise<{ text: string; color: string } | null> {
+  swatches.innerHTML = opts.colors
+    .map(
+      ([name, attrs], i) =>
+        `<button type="button" role="radio" aria-label="${name}" aria-checked="${i === 0}" data-name="${name}" ${attrs}></button>`,
+    )
+    .join("");
   swatches.hidden = false;
   const text = await askText(opts);
   swatches.hidden = true;
@@ -53,7 +59,15 @@ export const ask = (opts: Ask) => choose(opts).then((c) => c === "ok");
 /** `ask` with a third button left of Cancel: resolves "ok", "alt", or null when cancelled. */
 export const askChoice = (opts: Choice) => choose(opts);
 
-function choose({ title, message, confirm, cancel = "Cancel", danger = false, alt, escapeIsAlt = false }: Ask & { alt?: string; escapeIsAlt?: boolean }): Promise<"ok" | "alt" | null> {
+function choose({
+  title,
+  message,
+  confirm,
+  cancel = "Cancel",
+  danger = false,
+  alt,
+  escapeIsAlt = false,
+}: Ask & { alt?: string; escapeIsAlt?: boolean }): Promise<"ok" | "alt" | null> {
   dialog.querySelector("h3")!.textContent = title;
   dialog.querySelector("p")!.textContent = message;
   const ok = dialog.querySelector<HTMLButtonElement>("[data-ok]")!;
