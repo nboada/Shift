@@ -427,6 +427,10 @@ function threadRow(t: Thread) {
       </li>`;
 }
 
+const PAGE = 80;
+let drawn = PAGE;
+let drawnFor = "";
+
 function renderThreads() {
   $("#list-title").textContent = listTitle();
   const emptyBtn = $("#empty-btn");
@@ -440,9 +444,14 @@ function renderThreads() {
     threadList.innerHTML = `<li class="empty">${search ? "No results" : "No messages"}</li>`;
     return;
   }
+  // Only the rows near the top are drawn, more as the list scrolls: a mailbox of a thousand threads redrawn on every
+  // open, archive or sync took a few hundred ms each time.
+  const key = `${mailbox}|${search}|${scope?.join(",") ?? ""}`;
+  if (key !== drawnFor) [drawn, drawnFor] = [PAGE, key];
+  const visible = threads.slice(0, Math.max(drawn, threads.findIndex((t) => t.id === selected) + PAGE / 2));
   if (!smartInbox()) {
     let last = "";
-    threadList.innerHTML = threads
+    threadList.innerHTML = visible
       .map((t) => {
         const group = search || mailbox === "SCHEDULED" ? "" : dateGroup(t.date);
         const head = group !== last ? `<li class="section">${group}</li>` : "";
@@ -453,7 +462,7 @@ function renderThreads() {
     return;
   }
   threadList.innerHTML = SECTIONS.map(([key, title, icon]) => {
-    const rows = threads.filter((t) => sectionOf(t) === key);
+    const rows = visible.filter((t) => sectionOf(t) === key);
     return rows.length ? `<li class="section">${iconHtml(icon)}${title}</li>${rows.map(threadRow).join("")}` : "";
   }).join("");
 }
@@ -2577,7 +2586,10 @@ let suppressClick = false;
 threadList.addEventListener(
   "scroll",
   () => {
-    if (threadList.scrollTop + threadList.clientHeight >= threadList.scrollHeight - 400) loadMore();
+    if (threadList.scrollTop + threadList.clientHeight < threadList.scrollHeight - 400) return;
+    if (drawn >= threads.length) return loadMore();
+    drawn += PAGE;
+    renderThreads();
   },
   { passive: true },
 );
