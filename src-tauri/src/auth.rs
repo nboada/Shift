@@ -60,12 +60,32 @@ fn random_token() -> String {
     URL_SAFE_NO_PAD.encode(buf)
 }
 
+/// A Keychain item. On iOS, the `keyring` crate has no default store, so this uses the data-protection keychain
+/// directly, with items readable after the first unlock so a background sync can sign in.
+pub fn keychain_entry(service: &str, user: &str) -> Result<keyring_core::Entry> {
+    #[cfg(target_os = "ios")]
+    {
+        static STORE: std::sync::Once = std::sync::Once::new();
+        STORE.call_once(|| {
+            if let Ok(store) = apple_native_keyring_store::protected::Store::new() {
+                keyring_core::set_default_store(store);
+            }
+        });
+        let policy = std::collections::HashMap::from([("access-policy", "after-first-unlock")]);
+        Ok(keyring_core::Entry::new_with_modifiers(
+            service, user, &policy,
+        )?)
+    }
+    #[cfg(not(target_os = "ios"))]
+    Ok(keyring::Entry::new(service, user)?.inner)
+}
+
 /// One Keychain item per account, so each Google account keeps its own refresh token.
-fn keychain(email: &str) -> Result<keyring::Entry> {
-    Ok(keyring::Entry::new(
+fn keychain(email: &str) -> Result<keyring_core::Entry> {
+    keychain_entry(
         KEYCHAIN_SERVICE,
         &format!("{LEGACY_KEYCHAIN_USER}:{}", email.to_lowercase()),
-    )?)
+    )
 }
 
 pub fn store_refresh(email: &str, refresh: &str) -> Result<()> {
@@ -102,7 +122,7 @@ pub fn forget(email: &str) {
 
 /// Moves a token saved by the single-account version to this account's own Keychain item.
 pub fn migrate_legacy(email: &str) {
-    let Ok(old) = keyring::Entry::new(KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_USER) else {
+    let Ok(old) = keychain_entry(KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_USER) else {
         return;
     };
     if let Ok(token) = old.get_password()

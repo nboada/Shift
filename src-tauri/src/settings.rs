@@ -57,7 +57,7 @@ pub fn notifications(dir: &Path) -> Notifications {
     }
 }
 
-fn ai_entry(provider: &str) -> Result<keyring::Entry> {
+fn ai_entry(provider: &str) -> Result<keyring_core::Entry> {
     // Provider ids come from the UI; keep them to a safe charset before naming a Keychain item.
     if provider.is_empty()
         || provider.len() > 32
@@ -67,10 +67,7 @@ fn ai_entry(provider: &str) -> Result<keyring::Entry> {
     {
         bail!("invalid provider id");
     }
-    Ok(keyring::Entry::new(
-        KEYCHAIN_SERVICE,
-        &format!("ai-{provider}"),
-    )?)
+    crate::auth::keychain_entry(KEYCHAIN_SERVICE, &format!("ai-{provider}"))
 }
 
 pub fn set_ai_key(provider: &str, key: &str) -> Result<()> {

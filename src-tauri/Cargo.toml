@@ -38,7 +38,7 @@ mail-send = { version = "0.7.0", default-features = false, features = ["aws_lc_r
 async-imap = { version = "0.12.0", default-features = false, features = ["runtime-tokio"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
 rustls-platform-verifier = "0.7.1"
-keyring = "4.2.0"
+keyring-core = "1.1"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 encoding_rs = "0.8"
@@ -47,6 +47,7 @@ jiff = "1.0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 auto-launch = "0.6"
+keyring = "4.2.0"
 tauri-plugin-window-state = "2"
 
 # iOS has only the data-protection keychain, which keyring reaches through this feature.
