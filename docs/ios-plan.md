@@ -28,7 +28,7 @@ Tried on 2026-11-25:
 ### 1. Running in the simulator (about a day)
 
 - Done: running on the simulator, demo mode via the `demo` feature, the list below the notch, hover-only row actions hidden on touch screens.
-- **Bring the app back up to date.** The sync loop is a tokio task, and iOS suspends the app in the background. On returning to the foreground, sync right away (Tauri's `RunEvent::Resumed`) instead of waiting for the next tick.
+- **Bring the app back up to date:** done. `RunEvent::Resumed` starts a sync when the app returns to the foreground.
 
 ### 2. Phone UI pass (2–4 days)
 
@@ -54,7 +54,7 @@ The one-column layout exists; this is about touch.
 - **Google sign-in:** done. The iOS OAuth client (`GOOGLE_IOS_CLIENT_ID`, no secret) through the system sheet (`tauri-plugin-web-auth`, ASWebAuthenticationSession); tokens go to the data-protection Keychain, readable after first unlock.
 - **IMAP accounts:** they work as they are (password in the Keychain; plain TCP + TLS is allowed on iOS).
 - **Attachments:** done. On iOS a tap hands the file to the share sheet (`navigator.share`), which previews it and offers Save to Files and other apps; no native code.
-- **Notifications:** ask for permission on first launch after sign-in. Tapping a notification opens the email; the existing `open-from-notification` event already does this, without the desktop window calls.
+- **Notifications:** permission is asked once there's an account (`ask_to_notify`). Still to check: tapping a notification opens the email (`open-from-notification`).
 - **Push (decision 1):** register for remote notifications (a Swift plugin hands the APNs device token to Rust), send it with the account's watch to the relay, and renew `users.watch` every few days. A push wakes the app for one `sync` with a time limit, then a local notification as today. An APNs key (.p8) from the developer account goes to the relay as a Worker secret.
 - **Keychain:** items stay readable after first unlock (`kSecAttrAccessibleAfterFirstUnlock`), so background refresh can sign in.
 - **Storage:** IMAP accounts keep raw messages. On a phone, cap the window (`imap::WINDOW`) or keep bodies only for recent mail. Gmail accounts already fetch bodies on demand.

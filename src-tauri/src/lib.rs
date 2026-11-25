@@ -3276,6 +3276,11 @@ pub fn run() {
                     app.exit(0);
                 });
             }
+            // iOS suspends the app, sync loop included, while it's in the background: catch up on return.
+            #[cfg(mobile)]
+            if let tauri::RunEvent::Resumed = event {
+                spawn_sync(app);
+            }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event
                 && let Some(window) = app.get_webview_window("main")
