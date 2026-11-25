@@ -1218,6 +1218,9 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
   .search.search-list { display: flex; }
   .search.search-top { display: none; }
   .action-group button { width: 34px; }
+  /* each message already ends with Reply, Reply all and Forward */
+  .reply-group { display: none; }
+  .reader-pane .actions { gap: 8px; }
 }
 
 /* ---- settings-driven variants ---- */
