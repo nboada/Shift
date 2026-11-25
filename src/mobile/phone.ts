@@ -1,12 +1,11 @@
 // The iPhone interface: mailboxes → conversation list → conversation on a navigation stack, on the shared mail core.
-// main.ts mounts it instead of the desktop panes and lends it the composer until the phone has its own sheet.
+// main.ts mounts it instead of the desktop panes.
 import "./mobile.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { type MailCore, type Message, type Thread, SECTIONS, SYSTEM } from "../core/mail";
+import { type MailCore, type Thread, SECTIONS, SYSTEM } from "../core/mail";
 import { ask } from "../dialog";
 import {
-  type ReplyKind,
   avatar,
   dateGroup,
   decodeEntities,
@@ -24,16 +23,9 @@ import { type SwipeAction, accountSettings, onSettingsChange, settings } from ".
 import { openSettings } from "../settings-ui";
 import { arrange } from "../sidebar";
 import { toast } from "../toast";
+import { actionSheet } from "./sheet";
 import { type Page, barButton, createStack } from "./stack";
-
-export type PhoneHost = {
-  mail: MailCore;
-  compose: () => void;
-  reply: (kind: ReplyKind, m?: Message) => void;
-  /** Reopens a draft in the composer; false when it isn't one after all. */
-  openDraft: (id: string) => Promise<boolean>;
-  editScheduled: (id: string) => void;
-};
+import { createComposeSheet } from "./compose-sheet";
 
 /** Rows drawn at a time; more as the list nears its end. */
 const PAGE = 60;
@@ -55,10 +47,8 @@ const FOLDERS = ["INBOX", "SPAM", "TRASH"];
 /** Icons are decoration here: every control already has a name, so VoiceOver skips the glyph. */
 const icon = (name: string) => `<i class="${iconClass(name)}" aria-hidden="true"></i>`;
 
-type Item = { label: string; icon: string; run: () => void; danger?: boolean; disabled?: boolean; checked?: boolean };
-
-export function mountPhone(host: PhoneHost) {
-  const { mail } = host;
+export function mountPhone(mail: MailCore) {
+  const host = createComposeSheet(mail);
   document.documentElement.classList.add("phone-ui");
   const root = document.createElement("div");
   root.className = "phone";
@@ -141,7 +131,7 @@ export function mountPhone(host: PhoneHost) {
       "beforeend",
       `<footer class="m-toolbar"><span class="m-status" aria-live="polite"></span>${barButton("compose", "pencil-simple-line", "New email")}</footer>`,
     );
-    page.el.querySelector("[data-act=compose]")!.addEventListener("click", () => host.compose());
+    page.el.querySelector("[data-act=compose]")!.addEventListener("click", () => void host.write());
     page.onClose = () => {
       if (list === page) list = null;
     };
@@ -495,30 +485,6 @@ export function mountPhone(host: PhoneHost) {
         },
       })),
     );
-  }
-
-  /** A sheet of choices from the bottom of the screen, with Cancel; tapping outside closes it too. */
-  function actionSheet(title: string, items: Item[]) {
-    document.querySelector("dialog.m-sheet")?.remove();
-    const d = document.createElement("dialog");
-    d.className = "m-sheet";
-    d.setAttribute("aria-label", title);
-    d.innerHTML = `<div class="m-sheet-group"><h2>${esc(title)}</h2>${items
-      .map(
-        (x, i) =>
-          `<button type="button" data-i="${i}" class="${x.danger ? "quiet-danger" : ""}" ${x.disabled ? "disabled" : ""} ${x.checked === undefined ? "" : `role="menuitemcheckbox" aria-checked="${x.checked}"`}>${icon(x.icon)}<span>${esc(x.label)}</span>${x.checked ? icon("check") : ""}</button>`,
-      )
-      .join("")}</div><div class="m-sheet-group"><button type="button" class="m-sheet-cancel">Cancel</button></div>`;
-    d.addEventListener("click", (e) => {
-      const b = (e.target as Element).closest<HTMLButtonElement>("button");
-      if (e.target === d || b?.classList.contains("m-sheet-cancel")) return d.close();
-      if (!b || b.disabled) return;
-      d.close();
-      items[Number(b.dataset.i)].run();
-    });
-    d.addEventListener("close", () => d.remove());
-    document.body.append(d);
-    d.showModal();
   }
 
   // ---- Conversation
