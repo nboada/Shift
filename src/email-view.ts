@@ -8,17 +8,14 @@ import type { Label, MailCore, Message, Thread } from "./core/mail";
 import { inviteCard, isCalendarFile } from "./invite";
 import { IS_IOS } from "./platform";
 import { FOLD_CSS } from "./quote";
+import { bareEmail, displayName } from "./recipients";
 import { accountSettings, settings } from "./settings";
 import { toast } from "./toast";
 
 export const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-export const displayName = (addr: string) => {
-  const m = addr.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>/);
-  return (m ? m[1] || m[2] : addr).trim();
-};
-export const bareEmail = (addr: string) => (addr.match(/<([^>]+)>/)?.[1] ?? addr).trim().toLowerCase();
+export { bareEmail, displayName };
 
 export function shortDate(ms: number) {
   const d = new Date(ms);

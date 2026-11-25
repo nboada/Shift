@@ -27,16 +27,18 @@ import { createEditor, foldReplyQuote } from "./editor";
 import { generateHTML, generateJSON } from "@tiptap/core";
 import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
 import { addImapAccount } from "./imap-signin";
-import { Recipients, isValidAddress, splitList } from "./recipients";
+import { Recipients } from "./recipients";
 import { rank } from "./palette-match";
 import { formatWhen, quickTimes } from "./schedule";
 import { actionToastOpen, toast } from "./toast";
 import { Menu } from "@tauri-apps/api/menu";
 import AirDatepicker from "air-datepicker";
 import localeEnModule from "air-datepicker/locale/en";
-import { type OutFile, attachmentButton, checkSize, fileIcon, readFile } from "./attachments";
+import { attachmentButton, fileIcon } from "./attachments";
 import { type Fields, type Label, type Message, type Thread, SECTIONS, SYSTEM, createMailCore } from "./core/mail";
+import { AI_EDITS, type ComposeState, type Content, createComposer, ownText, signatureBlock } from "./core/composer";
 import {
+  type ReplyKind,
   EMAIL_CSS,
   LABEL_COLORS,
   avatar,
@@ -285,7 +287,7 @@ async function openThread(id: string) {
   picked.clear();
   pickAnchor = id;
   delete app.dataset.picked;
-  if (compose?.inline) closeComposer();
+  if (compose.state?.inline) void compose.close();
   app.dataset.open = "";
   const opening = mail.openThread(id, show);
   setView("reader");
@@ -307,7 +309,7 @@ async function openThread(id: string) {
 wireReader(reader, mail, reply);
 
 function clearReader() {
-  if (compose?.inline) closeComposer();
+  if (compose.state?.inline) void compose.close();
   mail.closeThread();
   delete app.dataset.open;
   delete app.dataset.picked;
@@ -466,7 +468,7 @@ const PICK_ACTIONS: [action: string, label: string, icon: string][] = [
 ];
 
 function showPicked() {
-  if (compose?.inline) closeComposer();
+  if (compose.state?.inline) void compose.close();
   mail.closeThread();
   app.dataset.open = "";
   app.dataset.picked = "";
@@ -1024,47 +1026,27 @@ document.addEventListener("pointerdown", (e) => {
   if (!menu.hidden && !menu.contains(e.target as Node) && !menuAnchor?.contains(e.target as Node)) closeMenu();
 });
 
-// ---- Composer: replies open inline under the thread, new emails in a resizable window.
-// Drafts save to Gmail Drafts as you type, so closing never loses work and drafts reach your other devices.
-
-type ReplyContext = { thread_id: string; in_reply_to: string; references: string };
-
-type ComposeOptions = {
-  title?: string;
-  context?: ReplyContext | null;
-  inline?: boolean;
-  draftId?: string | null;
-  touched?: boolean;
-  /** Which account sends it. Replies use the thread's account. */
-  account?: string;
-  attachments?: OutFile[];
-  /** A scheduled email being edited: its send time, which closing the composer keeps. */
-  resumeAt?: number | null;
-  /** The Drafts row it was opened from, dropped from the list when the draft is discarded. */
-  thread?: string | null;
-};
-type ComposeState = Required<ComposeOptions>;
-
-let compose: ComposeState | null = null;
-let draftTimer = 0;
-let draftQueue: Promise<unknown> = Promise.resolve();
+// ---- Composer: replies open inline under the thread, new emails in a resizable window. Drafts save to Gmail Drafts as
+// you type, so closing never loses work and drafts reach your other devices. What it does is in core/composer.ts,
+// shared with the phone; this is the Mac's view of it.
 
 const subjectInput = composeForm.elements.namedItem("subject") as HTMLInputElement;
 const editor = createEditor(
   $("#compose-body"),
   $("#format-bar"),
-  () => markTouched(),
-  () => signatureFor(compose?.account).html,
+  () => compose.touch(),
+  () => signatureFor(compose.state?.account).html,
   renderQuote,
 );
 const suggestContacts = (q: string) => invoke<string[]>("suggest_contacts", { query: q }).catch(() => [] as string[]);
 const rcpt = {
-  to: new Recipients($("#rcpt-to"), suggestContacts, () => markTouched()),
-  cc: new Recipients($("#rcpt-cc"), suggestContacts, () => markTouched()),
-  bcc: new Recipients($("#rcpt-bcc"), suggestContacts, () => markTouched()),
+  to: new Recipients($("#rcpt-to"), suggestContacts, () => compose.touch()),
+  cc: new Recipients($("#rcpt-cc"), suggestContacts, () => compose.touch()),
+  bcc: new Recipients($("#rcpt-bcc"), suggestContacts, () => compose.touch()),
 };
 
 const draftStatus = (text: string) => ($("#draft-status").textContent = text);
+const composeError = (text: string) => ($("#compose-error").textContent = text);
 
 function showCcRows(cc: boolean, bcc: boolean) {
   composeForm.querySelector<HTMLElement>('[data-row="cc"]')!.hidden = !cc;
@@ -1075,43 +1057,30 @@ function showCcRows(cc: boolean, bcc: boolean) {
 /** "From" chips, shown only with several accounts and not on replies (they belong to their thread's account). */
 function renderFromRow() {
   const row = $("#from-row");
-  row.hidden = !multi() || !compose || !!compose.context;
-  if (row.hidden || !compose) return;
+  const state = compose.state;
+  row.hidden = !multi() || !state || !!state.context;
+  if (row.hidden || !state) return;
   row.querySelector(".from-choices")!.innerHTML = mail.accounts
     .map(
       (
         a,
-      ) => `<button type="button" role="radio" aria-checked="${a === compose!.account}" class="${a === compose!.account ? "on" : ""}" data-from="${esc(a)}">
+      ) => `<button type="button" role="radio" aria-checked="${a === state.account}" class="${a === state.account ? "on" : ""}" data-from="${esc(a)}">
       <span class="account-dot acct-${accountSettings(a).color}"></span>${esc(accountName(a))}</button>`,
     )
     .join("");
 }
 $("#from-row").addEventListener("click", (e) => {
   const b = (e.target as Element).closest<HTMLElement>("[data-from]");
-  if (!b || !compose || b.dataset.from === compose.account) return;
-  const state = compose;
+  const state = compose.state;
+  if (!b || !state || b.dataset.from === state.account) return;
   const prev = state.account;
-  // A Gmail draft lives in one account: delete it there (after any save already queued), so the next save creates it in the new one.
-  draftQueue = draftQueue.then(() => {
-    const id = state.draftId;
-    state.draftId = null;
-    if (id) return invoke("delete_draft", { account: prev, draftId: id }).catch(() => {});
-  });
-  state.account = b.dataset.from!;
+  compose.setAccount(b.dataset.from!);
   swapSignature(prev, state.account);
   renderFromRow();
-  markTouched();
+  compose.touch();
 });
 
-function markTouched() {
-  if (!compose) return;
-  compose.touched = true;
-  clearTimeout(draftTimer);
-  // drafts.update replaces the whole message, so every save re-uploads the files; with big ones, save less often.
-  const bytes = compose.attachments.reduce((n, f) => n + f.size, 0);
-  draftTimer = window.setTimeout(() => saveDraft(), bytes > 1_000_000 ? 15_000 : 1500);
-}
-subjectInput.addEventListener("input", markTouched);
+subjectInput.addEventListener("input", () => compose.touch());
 // Tab into the body lands on the first line. Left to the browser, focus can select the signature block instead.
 subjectInput.addEventListener("keydown", (e) => {
   if (e.key !== "Tab" || e.shiftKey) return;
@@ -1119,39 +1088,6 @@ subjectInput.addEventListener("keydown", (e) => {
   editor.commands.focus("start");
 });
 
-const hasContent = () =>
-  !!compose?.touched &&
-  !!(
-    compose.attachments.length ||
-    editor.getText().trim() ||
-    subjectInput.value.trim() ||
-    rcpt.to.count ||
-    rcpt.cc.count ||
-    rcpt.bcc.count
-  );
-
-/** The message as the backend expects it: HTML from the editor plus a plain-text version. */
-function currentDraft(state: ComposeState): Record<string, unknown> {
-  const sigHtml = signatureFor(state.account).html;
-  const sigText =
-    new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
-  return {
-    to: rcpt.to.value,
-    cc: rcpt.cc.value,
-    bcc: rcpt.bcc.value,
-    subject: subjectInput.value,
-    body: docToText(editor.state.doc, sigText),
-    html: emailHtml(editor.getHTML(), sigHtml),
-    from_name: accountSettings(state.account).name,
-    ...(state.context ?? {}),
-    attachments: state.attachments,
-  };
-}
-
-/**
- * Saves are queued, so a slow save can't race the next one into creating a duplicate draft. Resolves to whether this
- * save reached Gmail.
- */
 /** The composer's fields as typed, for reopening it later. */
 const currentFields = (): Fields => ({
   to: rcpt.to.value,
@@ -1161,36 +1097,17 @@ const currentFields = (): Fields => ({
   body: editor.getHTML(),
 });
 
-/** Schedules an edited scheduled email again for the time it had (`resumeAt`). */
-const resumeSchedule = (state: ComposeState, payload: unknown, fields: Fields) =>
-  invoke("schedule_send", {
-    account: state.account,
-    draft: payload,
-    draftId: state.draftId,
-    sendAt: state.resumeAt,
-    ui: { fields, opts: { title: state.title, context: state.context } },
-  });
-
-function saveDraft(state = compose, payload = state && currentDraft(state)): Promise<boolean> {
-  clearTimeout(draftTimer);
-  if (!state || !payload) return draftQueue.then(() => true);
-  draftStatus("Saving…");
-  // The account is fixed now; the draft id is read when the save runs, after the saves queued before it.
-  const account = state.account;
-  const saved = draftQueue.then(() =>
-    invoke<string>("save_draft", { account, draft: payload, draftId: state.draftId })
-      .then((id) => {
-        state.draftId = id;
-        if (compose === state) draftStatus("Saved");
-        return true;
-      })
-      .catch(() => {
-        if (compose === state) draftStatus("Not saved — will retry");
-        return false;
-      }),
-  );
-  draftQueue = saved;
-  return saved;
+/** What's in the composer, with the email as sent: HTML from the editor plus a plain-text version. */
+function readComposer(): Content {
+  const sigHtml = signatureFor(compose.state?.account).html;
+  const sigText =
+    new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
+  return {
+    fields: currentFields(),
+    text: docToText(editor.state.doc, sigText),
+    html: emailHtml(editor.getHTML(), sigHtml),
+    typed: !!editor.getText().trim(),
+  };
 }
 
 /** Takes the form out of the reader / window and parks it back in the (closed) dialog. */
@@ -1199,39 +1116,6 @@ function detachComposer() {
   if (composer.open) composer.close();
   composer.append(composeForm);
   host?.remove();
-}
-
-/** Closes the composer, keeping the draft (default) or deleting it. */
-async function closeComposer(discard = false) {
-  const state = compose;
-  if (!state) return;
-  const keep = !discard && hasContent();
-  const payload = keep ? currentDraft(state) : null;
-  const fields = currentFields();
-  compose = null;
-  detachComposer();
-  if (discard) {
-    if (state.thread && mail.mailbox === "DRAFT") {
-      mail.threads = mail.threads.filter((t) => t.id !== state.thread);
-      renderThreads();
-    }
-    await draftQueue;
-    if (state.draftId) invoke("delete_draft", { account: state.account, draftId: state.draftId }).catch(() => {});
-  } else if (keep) {
-    if (await saveDraft(state, payload)) {
-      if (!state.resumeAt) return showDraftPill(fields, state);
-      if (state.resumeAt <= Date.now()) return toast("Its send time passed while you edited, so it's in Drafts");
-      return resumeSchedule(state, payload, fields).then(
-        () => toast(`Still scheduled for ${formatWhen(new Date(state.resumeAt!))}`),
-        (err) => toast(`Couldn't schedule it again, so it's in Drafts: ${err}`),
-      );
-    }
-    // Not in Gmail: bring it back rather than lose it, unless another email was opened meanwhile.
-    if (compose) return toast(`Couldn't save a draft ${inMail()}; it wasn't kept`, { kind: "error" });
-    await openComposer(fields, { ...state, touched: true });
-    $("#compose-error").textContent =
-      `Couldn't save this draft ${inMail()}, so it's still open. Check your connection and close it again.`;
-  }
 }
 
 // The last draft closed with "keep": a corner card that reopens it, until dismissed or another email is written.
@@ -1250,7 +1134,7 @@ function reopenPillDraft() {
   const d = pillDraft;
   if (!d) return;
   hideDraftPill();
-  void openComposer(d.fields, { ...d.state, touched: false });
+  void compose.open(d.fields, { ...d.state, touched: false });
 }
 draftPill.addEventListener("click", (e) => {
   if ((e.target as Element).closest("#draft-pill-close")) return hideDraftPill();
@@ -1263,27 +1147,7 @@ draftPill.addEventListener("keydown", (e) => {
   }
 });
 
-async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
-  hideDraftPill();
-  if (compose) {
-    await closeComposer();
-    // Its draft couldn't be saved, so it came back open: keep it rather than replace it.
-    if (compose) return;
-  }
-  // The phone has no reader pane to reply inside.
-  const inline =
-    !IS_IOS && !!opts.inline && !!mail.selected && (!opts.context || opts.context.thread_id === mail.selected);
-  compose = {
-    title: opts.title ?? "New Email",
-    context: opts.context ?? null,
-    inline,
-    draftId: opts.draftId ?? null,
-    touched: !!opts.touched,
-    account: opts.account ?? defaultAccount(),
-    attachments: opts.attachments ?? [],
-    resumeAt: opts.resumeAt ?? null,
-    thread: opts.thread ?? null,
-  };
+function showComposer(fields: Fields, state: ComposeState) {
   renderComposeFiles();
   renderFromRow();
   rcpt.to.set(fields.to ?? "");
@@ -1298,10 +1162,8 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     .setTextSelection(0)
     .run();
   foldReplyQuote(editor);
-  $("#compose-title").textContent = compose.title;
-  $("#compose-error").textContent = "";
-  draftStatus(compose.draftId ? "Saved" : "");
-  if (inline) {
+  $("#compose-title").textContent = state.title;
+  if (state.inline) {
     const host = document.createElement("section");
     host.className = "message compose-inline";
     host.append(composeForm);
@@ -1310,34 +1172,37 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     composer.append(composeForm);
     composer.showModal();
   }
-  if (fields.to || opts.context) {
+  if (fields.to || state.context) {
     editor.commands.focus("start");
     $("#compose-body").scrollTop = 0;
   } else rcpt.to.focus();
   // After focusing: focus jumps the scroll and would cut a smooth scroll short.
-  if (inline)
+  if (state.inline)
     composeForm.parentElement!.scrollIntoView({
       block: "start",
       behavior: settings.accessibility.reduceMotion ? "auto" : "smooth",
     });
 }
 
-/** Splits an address header on commas that aren't inside a quoted display name. */
-const splitAddresses = (list: string) =>
-  list
-    .split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)
-    .map((a) => a.trim())
-    .filter(Boolean);
-
-/** The account's signature block ("-- " separator for text, the email convention), or "" if it has none. */
-function signatureBlock(account: string) {
-  const sig = signatureFor(account);
-  if (sig.mode === "html") return sig.html.trim() ? "<p></p><div data-signature></div>" : "";
-  return sig.text.trim() ? `<p></p>${textToHtml(`-- \n${sig.text.trim()}`)}` : "";
-}
-
-/** An empty line to write on, then the account's signature. */
-const signature = (account: string) => "<p></p>" + signatureBlock(account);
+const compose = createComposer(mail, {
+  opening: hideDraftPill,
+  show: showComposer,
+  hide: detachComposer,
+  read: readComposer,
+  status: draftStatus,
+  error: composeError,
+  files: renderComposeFiles,
+  busy: (on) => (composeForm.querySelector<HTMLButtonElement>("button[type=submit]")!.disabled = on),
+  kept: showDraftPill,
+  discarded: (thread) => {
+    if (mail.mailbox !== "DRAFT") return;
+    mail.threads = mail.threads.filter((t) => t.id !== thread);
+    renderThreads();
+  },
+  quote: quoted,
+  toast,
+  where: inMail,
+});
 
 /** After a From change: the new account's signature replaces the old one, unless the old block no longer appears as inserted (edited). */
 function swapSignature(from: string, to: string) {
@@ -1357,11 +1222,10 @@ function swapSignature(from: string, to: string) {
   if (next !== null) editor.chain().setContent(next, { emitUpdate: false }).setTextSelection(0).run();
 }
 
-/** The original message for a reply or forward: its HTML where there is some, quoted under a header line. */
-// shortcut: styles in the original's <head> and inline (cid:) images are left out of the quote; carry them as inline
-// MIME parts with their Content-IDs, and scope the styles, if forwards need them.
 /** The quoted email for a reply or forward, whole: cleaned of anything active, its inline (cid:) images dropped since
  *  they don't travel with the reply, and a text version for the plain-text part. */
+// shortcut: styles in the original's <head> and inline (cid:) images are left out of the quote; carry them as inline
+// MIME parts with their Content-IDs, and scope the styles, if forwards need them.
 function quoted(m: Message, header: string) {
   const body = m.html ? new DOMParser().parseFromString(cleanEmail(m.html).html, "text/html").body : null;
   body?.querySelectorAll('img[src^="cid:" i]').forEach((img) => img.remove());
@@ -1381,141 +1245,13 @@ function renderQuote(frame: HTMLIFrameElement, html: string) {
     cleanEmail(html).html;
 }
 
-/** Replies to or forwards `last`: the newest message, or the one whose own buttons were clicked. */
-function reply(kind: "reply" | "all" | "forward", last = mail.messages.at(-1)) {
-  if (!last || !mail.selected) return;
-  const thread = mail.threads.find((t) => t.id === mail.selected);
-  const account = thread?.account ?? defaultAccount();
-  const notMe = (a: string) => !mail.accounts.includes(bareEmail(a));
-  const when = new Date(last.date).toLocaleString();
-  if (kind === "forward") {
-    const header = textToHtml(
-      `---------- Forwarded message ----------\nFrom: ${last.sender}\nDate: ${when}\nSubject: ${last.subject}\nTo: ${last.recipients}`,
-    );
-    const opened = openComposer(
-      {
-        subject: /^fwd?:/i.test(last.subject) ? last.subject : `Fwd: ${last.subject}`,
-        body: signature(account) + quoted(last, header),
-      },
-      { title: "Forward", inline: settings.composer.replyIn === "inline", account },
-    );
-    return opened.then(() => attachFrom(last, account));
-  }
-  const mine = !notMe(last.sender);
-  const primary = mine ? splitAddresses(last.recipients) : [last.reply_to || last.sender];
-  const others = kind === "all" ? [...splitAddresses(last.recipients), ...splitAddresses(last.cc)] : [];
-  const cc = [...new Set(others.filter((a) => notMe(a) && !primary.some((p) => bareEmail(p) === bareEmail(a))))];
-  const header = textToHtml(`On ${when}, ${displayName(last.sender)} wrote:`);
-  return openComposer(
-    {
-      to: primary.join(", "),
-      cc: cc.join(", "),
-      subject: /^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`,
-      body: signature(account) + (settings.composer.quoteOriginal ? quoted(last, header) : ""),
-    },
-    {
-      title: kind === "all" ? "Reply all" : "Reply",
-      context: { thread_id: mail.selected, in_reply_to: last.message_id, references: last.refs },
-      inline: settings.composer.replyIn === "inline",
-      account,
-    },
-  );
+function reply(kind: ReplyKind, last?: Message) {
+  return compose.reply(kind, last);
 }
 
-function recipientProblem() {
-  const all = [rcpt.to.value, rcpt.cc.value, rcpt.bcc.value].flatMap(splitList);
-  if (!all.length) return "Add at least one recipient";
-  const bad = all.find((a) => !isValidAddress(a));
-  return bad ? `Check this address: ${bad}` : "";
-}
-
-/** Composers being sent or scheduled: a second ⌘↩ or click during the first must not send the email twice. */
-const submitting = new WeakSet<ComposeState>();
-/** A forward's files still downloading; Send and Send later wait for them so the email doesn't go out without them. */
-const pendingFiles = new WeakMap<ComposeState, Promise<void>>();
-
-/** Waits for a forward's files, saying so while it does. */
-async function filesReady(state: ComposeState) {
-  const pending = pendingFiles.get(state);
-  if (!pending) return;
-  $("#compose-error").textContent = "Attaching files…";
-  await pending;
-  $("#compose-error").textContent = "";
-}
-
-composeForm.addEventListener("submit", async (e) => {
+composeForm.addEventListener("submit", (e) => {
   e.preventDefault();
-  const state = compose;
-  if (!state || submitting.has(state)) return;
-  const error = (msg: string) => ($("#compose-error").textContent = msg);
-  const problem = recipientProblem();
-  if (problem) return error(problem);
-  submitting.add(state);
-  await filesReady(state);
-  if (compose !== state) return void submitting.delete(state);
-  const draft = currentDraft(state);
-  const fields = currentFields();
-  // Let any pending save finish first, so it can't recreate the draft after it's been sent.
-  clearTimeout(draftTimer);
-  await draftQueue;
-  const send = () => invoke("send", { account: state.account, draft, draftId: state.draftId });
-  const reopen = (msg = "") => openComposer(fields, { ...state, touched: true }).then(() => error(msg));
-  const delay = settings.composer.undoSendSeconds;
-  if (delay > 0) {
-    // Undo send goes through the scheduled queue, due in `delay` seconds: it's saved in Drafts and on this Mac, so
-    // quitting or restarting for an update during the countdown still sends it, and Undo cancels the schedule.
-    let id: number;
-    try {
-      if (!(await saveDraft(state, draft)))
-        throw new Error("Couldn't save it to Drafts, so it wasn't sent. Check your connection and try again");
-      id = await invoke<number>("schedule_send", {
-        account: state.account,
-        draft,
-        draftId: state.draftId,
-        sendAt: Date.now() + delay * 1000,
-        ui: { fields, opts: { title: state.title, context: state.context } },
-      });
-    } catch (err) {
-      submitting.delete(state);
-      return error(err instanceof Error ? err.message : String(err));
-    }
-    compose = null;
-    detachComposer();
-    const sending = toast(`Sending in ${delay}s…`, {
-      ms: delay * 1000,
-      action: {
-        label: "Undo",
-        run: () => {
-          clearInterval(tick);
-          invoke("reschedule", { account: state.account, id, sendAt: null }).then(
-            () => reopen(),
-            (err) => toast(String(err)),
-          );
-        },
-      },
-    });
-    let left = delay;
-    // open: another toast may have replaced this one mid-countdown.
-    const tick = window.setInterval(
-      () => sending.open && left > 1 && sending.setMessage(`Sending in ${--left}s…`),
-      1000,
-    );
-    return;
-  }
-  const button = composeForm.querySelector<HTMLButtonElement>("button[type=submit]")!;
-  button.disabled = true;
-  try {
-    await send();
-    compose = null;
-    detachComposer();
-    toast("Message sent", { kind: "success" });
-  } catch (err) {
-    // Still open: the user can fix the problem and send again.
-    submitting.delete(state);
-    error(String(err));
-  } finally {
-    button.disabled = false;
-  }
+  void compose.send();
 });
 
 // ---- Send later: the clock next to Send, and the Scheduled view.
@@ -1598,47 +1334,7 @@ document.addEventListener("pointerdown", (e) => {
     closeLater();
 });
 
-async function scheduleSend(at: Date) {
-  const state = compose;
-  if (!state || submitting.has(state)) return;
-  const error = (msg: string) => ($("#compose-error").textContent = msg);
-  const problem = recipientProblem();
-  if (problem) return error(problem);
-  if (at.getTime() <= Date.now()) return error("Pick a time in the future");
-  submitting.add(state);
-  await filesReady(state);
-  if (compose !== state) return void submitting.delete(state);
-  const draft = currentDraft(state);
-  const fields = currentFields();
-  // Saved to Gmail Drafts first, so the email is safe there (and visible on other devices) until it goes out.
-  await saveDraft(state, draft);
-  try {
-    const id = await invoke<number>("schedule_send", {
-      account: state.account,
-      draft,
-      draftId: state.draftId,
-      sendAt: at.getTime(),
-      ui: { fields, opts: { title: state.title, context: state.context } },
-    });
-    compose = null;
-    detachComposer();
-    closeLater();
-    toast(`Scheduled for ${formatWhen(at)}`, {
-      ms: 6000,
-      action: {
-        label: "Undo",
-        run: () => {
-          invoke("reschedule", { account: state.account, id, sendAt: null }).then(() =>
-            openComposer(fields, { ...state, touched: true, resumeAt: null }),
-          );
-        },
-      },
-    });
-  } catch (err) {
-    submitting.delete(state);
-    error(String(err));
-  }
-}
+const scheduleSend = (at: Date) => void compose.schedule(at).then((ok) => ok && closeLater());
 
 $("#send-later").addEventListener("click", async () => {
   const times = quickTimes(new Date(), settings.scheduling);
@@ -1660,40 +1356,6 @@ $("#send-later").addEventListener("click", async () => {
 // ---- Write with AI: the AI button next to Send later. Edits the selection, or the part of the email the user
 // wrote; in a reply it can also draft the reply, using what's typed so far as notes.
 
-const AI_EDITS: [label: string, icon: string, instruction: string][] = [
-  ["Improve writing", "wand", "Improve the writing: clearer and more natural, same meaning, roughly the same length."],
-  ["Make shorter", "arrows-diagonal-minimize-2", "Make it shorter and more direct, keeping everything important."],
-  ["Make friendlier", "mood-smile", "Make it warmer and friendlier."],
-  ["Make more formal", "tie", "Make it more formal and professional."],
-  ["Fix spelling & grammar", "text-spellcheck", "Fix spelling, grammar and punctuation only. Change nothing else."],
-];
-
-/** The selection, or everything above the signature and the quoted original (and its "On …, X wrote:" line). */
-function ownText(): { from: number; to: number; text: string } {
-  const { doc, selection } = editor.state;
-  if (!selection.empty)
-    return { from: selection.from, to: selection.to, text: doc.textBetween(selection.from, selection.to, "\n\n") };
-  let to = 0;
-  let stop = false;
-  doc.forEach((node, offset) => {
-    if (stop) return;
-    const text = node.textContent.trim();
-    stop =
-      ["signature", "blockquote", "quote"].includes(node.type.name) ||
-      text.startsWith("-- ") ||
-      /^On .+ wrote:$/s.test(text) ||
-      /^-{5,} Forwarded message/.test(text);
-    if (!stop) to = offset + node.nodeSize;
-  });
-  return { from: 0, to, text: doc.textBetween(0, to, "\n\n").trim() };
-}
-
-/** An email's text for the AI: its plain-text part, or its HTML read as text. */
-const messageText = (m: Message) =>
-  (m.text ?? new DOMParser().parseFromString(m.html ?? "", "text/html").body.textContent ?? "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
 async function aiWrite(run: () => Promise<string>, range: { from: number; to: number }) {
   const btn = $<HTMLButtonElement>("#ai-write");
   btn.disabled = true;
@@ -1704,7 +1366,7 @@ async function aiWrite(run: () => Promise<string>, range: { from: number; to: nu
     if (!text) throw new Error("The AI returned nothing");
     editor.chain().focus().insertContentAt(range, textToHtml(text)).run();
     draftStatus("");
-    markTouched();
+    compose.touch();
   } catch (e) {
     draftStatus("");
     toast(String(e), { kind: "error" });
@@ -1716,34 +1378,18 @@ async function aiWrite(run: () => Promise<string>, range: { from: number; to: nu
 
 /** Drafts a reply to the open conversation into the composer, from the user's notes there if any. */
 function aiDraftReply() {
-  const state = compose;
-  if (!state) return;
-  const own = ownText();
-  const name = accountSettings(state.account).name;
-  const conversation = mail.messages
-    .slice(-8)
-    .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
-    .join("\n\n---\n\n");
-  return aiWrite(
-    () =>
-      invoke<string>("ai_draft_reply", {
-        conversation,
-        notes: own.text,
-        me: name ? `${name} <${state.account}>` : state.account,
-        rules: settings.ai.writingRules,
-      }),
-    own,
-  );
+  if (!compose.state) return;
+  const own = ownText(editor);
+  return aiWrite(() => compose.aiReply(own.text), own);
 }
 
 $("#ai-write").addEventListener("click", () => {
-  const state = compose;
+  const state = compose.state;
   const anchor = $<HTMLButtonElement>("#ai-write");
   if (!state) return;
   if (menuAnchor === anchor && !menu.hidden) return closeMenu();
-  const own = ownText();
-  const rewrite = (instruction: string) =>
-    aiWrite(() => invoke<string>("ai_rewrite", { text: own.text, instruction, rules: settings.ai.writingRules }), own);
+  const own = ownText(editor);
+  const rewrite = (instruction: string) => aiWrite(() => compose.aiRewrite(own.text, instruction), own);
   // Edits only once there's text to edit, rather than a list of greyed-out ones.
   const items: MenuItem[] = [
     ...(state.context && mail.messages.length
@@ -1778,40 +1424,17 @@ $("#ai-write").addEventListener("click", () => {
     menu.style.top = `${Math.max(8, r.top - menu.offsetHeight - 6)}px`;
 });
 
-/** Opening a scheduled email pauses it while it's edited; closing the composer schedules it again for the same time. */
-async function editScheduled(id: string) {
-  const r = mail.scheduledRows.get(id);
-  if (!r) return;
-  // One step in the backend, so it can't be sent between reading it and taking it off the schedule.
-  let attachments: OutFile[] | null;
-  try {
-    attachments = await invoke<OutFile[] | null>("take_scheduled", { account: r.account, id: r.id });
-  } catch (err) {
-    mail.refresh();
-    return toast(String(err), { kind: "error" });
-  }
-  await openComposer(r.ui.fields, {
-    ...(r.ui.opts as ComposeOptions),
-    account: r.account,
-    draftId: r.draft_id,
-    attachments: attachments ?? [],
-    touched: true,
-    inline: false,
-    resumeAt: r.send_at,
-  });
-  toast("Paused while you edit. Closing keeps it scheduled.");
+function editScheduled(id: string) {
+  return compose.editScheduled(id);
 }
-
 function scheduledAction(action: string, id: string) {
-  const r = mail.scheduledRows.get(id);
-  if (!r) return;
-  if (action === "edit") return editScheduled(id);
-  if (action === "sendNow") return invoke("reschedule", { account: r.account, id: r.id, sendAt: Date.now() });
-  if (action === "cancel" || action === "trash") {
-    return invoke("reschedule", { account: r.account, id: r.id, sendAt: null }).then(() =>
-      toast("Send cancelled. The email is in Drafts."),
-    );
-  }
+  return compose.scheduledAction(action, id);
+}
+function openDraft(id: string) {
+  return compose.openDraft(id, (bcc) => {
+    rcpt.bcc.set(bcc);
+    showCcRows(!!rcpt.cc.value, true);
+  });
 }
 
 // ---- Composer attachments: the paperclip, drag and drop, and removable chips.
@@ -1820,126 +1443,21 @@ const composeFiles = $("#compose-files");
 const fileInput = $<HTMLInputElement>("#compose-file");
 
 function renderComposeFiles() {
-  const files = compose?.attachments ?? [];
+  const files = compose.state?.attachments ?? [];
   composeFiles.hidden = !files.length;
   composeFiles.innerHTML = files
     .map((f, i) => attachmentButton(fileIcon(f.mime, f.name), f.name, f.size, { i }, true))
     .join("");
 }
 
-async function addComposeFiles(list: Iterable<File>) {
-  const state = compose;
-  if (!state) return;
-  for (const file of list) {
-    const tooBig = checkSize(state.attachments, file.size);
-    if (tooBig) {
-      $("#compose-error").textContent = tooBig;
-      break;
-    }
-    const f = await readFile(file).catch(() => null);
-    if (compose !== state) return;
-    if (!f) continue;
-    state.attachments.push(f);
-    renderComposeFiles();
-    markTouched();
-  }
-}
-
-/** Adds the forwarded message's files (including inline images) to the composer as they download. */
-/** Adds `m`'s files to the open composer (a forward, a reopened draft). Send waits for them (`pendingFiles`). */
-function attachFrom(m: Message, account: string) {
-  const state = compose;
-  const files = forwardAttachments(m, account);
-  if (state)
-    pendingFiles.set(
-      state,
-      files.finally(() => pendingFiles.delete(state)),
-    );
-  return files;
-}
-
-/**
- * Drafts: reopens the Gmail draft in the composer to keep editing it (saves update the same draft). False when it
- * can't be found, for example in demo mode or once sent, so the email opens read-only instead.
- */
-/**
- * Opens a Drafts row in the composer straight from the cache; the Gmail draft id and Bcc (which the cache doesn't
- * keep) are looked up meanwhile, queued ahead of any save so an early save replaces this draft instead of adding one.
- */
-async function openDraft(id: string): Promise<boolean> {
-  const account = mail.threads.find((t) => t.id === id)?.account ?? defaultAccount();
-  const lookup = invoke<[string, string, string] | null>("find_draft", { account, thread: id }).catch(() => null);
-  const msgs = await invoke<Message[]>("thread", { account, id }).catch(() => [] as Message[]);
-  // The draft is the newest message in its conversation; a reply draft answers the one before it.
-  const m = msgs.at(-1);
-  if (!m) return false;
-  const earlier = msgs.at(-2);
-  await openComposer(
-    { to: m.recipients, cc: m.cc, subject: m.subject, body: m.html ?? textToHtml(m.text ?? "") },
-    {
-      title: "Draft",
-      account,
-      inline: false,
-      thread: id,
-      context: earlier ? { thread_id: id, in_reply_to: earlier.message_id, references: m.refs } : null,
-    },
-  );
-  const state = compose;
-  if (!state) return true;
-  draftQueue = draftQueue.then(async () => {
-    const found = await lookup;
-    if (!found) {
-      if (compose === state)
-        $("#compose-error").textContent = `Couldn't find this draft ${inMail()}; saving makes a new one.`;
-      return;
-    }
-    const [draftId, , bcc] = found;
-    state.draftId = draftId;
-    if (compose !== state) return;
-    draftStatus("Saved");
-    if (bcc && !rcpt.bcc.value) {
-      rcpt.bcc.set(bcc);
-      showCcRows(!!rcpt.cc.value, true);
-      // A save made before the Bcc arrived went out without it.
-      if (state.touched) markTouched();
-    }
-  });
-  void attachFrom(m, account);
-  return true;
-}
-
-async function forwardAttachments(m: Message, account: string) {
-  const state = compose;
-  for (const a of m.attachments) {
-    const name = a.filename || "attachment";
-    // Same 25 MB limit as files added by hand, checked before downloading; smaller files after it can still fit.
-    const tooBig = checkSize(state?.attachments ?? [], a.size);
-    if (tooBig) {
-      $("#compose-error").textContent = `${name} wasn't attached. ${tooBig}`;
-      continue;
-    }
-    const data = await invoke<string>("attachment_data", { account, message: m.id, idx: a.idx }).catch(() => null);
-    if (compose !== state || !state) return;
-    if (data === null) {
-      toast(`Couldn't attach ${name}`, { kind: "error" });
-      continue;
-    }
-    state.attachments.push({ name, mime: a.mime, data, size: a.size });
-    renderComposeFiles();
-  }
-}
-
 $("#compose-attach").addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", () => {
-  addComposeFiles([...(fileInput.files ?? [])]);
+  void compose.addFiles([...(fileInput.files ?? [])]);
   fileInput.value = "";
 });
 composeFiles.addEventListener("click", (e) => {
   const el = (e.target as Element).closest<HTMLElement>(".attachment-remove");
-  if (!el || !compose) return;
-  compose.attachments.splice(Number(el.closest<HTMLElement>(".attachment")!.dataset.i), 1);
-  renderComposeFiles();
-  markTouched();
+  if (el) compose.removeFile(Number(el.closest<HTMLElement>(".attachment")!.dataset.i));
 });
 composeForm.addEventListener("dragover", (e) => {
   if (!e.dataTransfer?.types.includes("Files")) return;
@@ -1953,13 +1471,13 @@ composeForm.addEventListener("drop", (e) => {
   composeForm.classList.remove("dropping");
   if (!e.dataTransfer?.files.length) return;
   e.preventDefault();
-  addComposeFiles([...e.dataTransfer.files]);
+  void compose.addFiles([...e.dataTransfer.files]);
 });
 
-$("#compose-close").addEventListener("click", () => closeComposer());
+$("#compose-close").addEventListener("click", () => compose.close());
 $("#compose-discard").addEventListener("click", async () => {
   if (
-    hasContent() &&
+    compose.hasContent() &&
     !(await ask({
       title: "Discard this draft?",
       message: "It will be deleted from Drafts too.",
@@ -1968,7 +1486,7 @@ $("#compose-discard").addEventListener("click", async () => {
     }))
   )
     return;
-  closeComposer(true);
+  void compose.close(true);
 });
 $("#cc-toggle").addEventListener("click", () => {
   showCcRows(true, true);
@@ -1986,13 +1504,13 @@ const outsideComposer = (e: MouseEvent) => {
 };
 composer.addEventListener("pointerdown", (e) => (pressedOutside = outsideComposer(e)));
 composer.addEventListener("click", (e) => {
-  if (pressedOutside && outsideComposer(e) && !askOpen()) void closeComposer();
+  if (pressedOutside && outsideComposer(e) && !askOpen()) void compose.close();
   pressedOutside = false;
 });
 
 /** Escape: closes an empty composer, otherwise asks whether to keep the draft. A second Escape discards it. */
 async function escapeComposer() {
-  if (!hasContent()) return closeComposer();
+  if (!compose.hasContent()) return compose.close();
   if (askOpen()) return;
   const choice = await askChoice({
     title: "Close this email?",
@@ -2001,11 +1519,11 @@ async function escapeComposer() {
     alt: "Discard",
     escapeIsAlt: true,
   });
-  if (choice === "ok") return closeComposer();
-  if (choice === "alt") return closeComposer(true);
+  if (choice === "ok") return compose.close();
+  if (choice === "alt") return compose.close(true);
   editor.commands.focus();
 }
-$("#compose-btn").addEventListener("click", () => openComposer({ body: signature(defaultAccount()) }));
+$("#compose-btn").addEventListener("click", () => void compose.write());
 
 $("#mailboxes").addEventListener("click", (e) => {
   // Real links (href="#") so they're focusable and work with Return and VoiceOver; never navigate.
@@ -2846,11 +2364,11 @@ function start(list: string[]) {
     startOnboarding({ accounts: () => mail.accounts, addAccount, keyLabel });
 }
 
-/** The iPhone gets its own screens on the same core (src/mobile), loaded only there; the composer stays this one. */
+/** The iPhone gets its own screens on the same core (src/mobile), loaded only there. */
 let phone: Promise<{ reset: () => void }> | null = null;
 async function showPhone() {
   phone ??= import("./mobile/phone").then((m) =>
-    m.mountPhone({ mail, compose: () => void openComposer(), reply, openDraft, editScheduled }),
+    m.mountPhone({ mail, compose: () => void compose.write(), reply, openDraft, editScheduled }),
   );
   (await phone).reset();
 }
@@ -2877,7 +2395,7 @@ mail.subscribe((e) => {
       if (
         open &&
         open.count !== mail.messages.length &&
-        !compose?.inline &&
+        !compose.state?.inline &&
         mail.mailbox !== "DRAFT" &&
         mail.mailbox !== "SCHEDULED"
       )
@@ -2920,14 +2438,7 @@ listen("open-settings", () => openSettings());
 /** Saves an open draft before Shift quits or restarts, so the last few seconds of typing aren't lost. */
 const saveBeforeQuit = async () => {
   await flushSettings();
-  const state = compose;
-  if (!state || !hasContent()) return;
-  const payload = currentDraft(state);
-  const fields = currentFields();
-  // A scheduled email open for editing goes back on its schedule, as closing the composer would.
-  if ((await saveDraft(state, payload)) && state.resumeAt && state.resumeAt > Date.now()) {
-    await resumeSchedule(state, payload, fields).catch(() => {});
-  }
+  await compose.flush();
 };
 onSaveError((err) => toast(`Couldn't save your settings: ${err}`, { kind: "error" }));
 // ⌘Q: the backend waits (up to 5 s) for this before quitting.
