@@ -3,6 +3,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime};
+#[cfg(not(target_os = "ios"))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -29,6 +30,13 @@ struct TokenResponse {
 
 fn client() -> Result<(String, String)> {
     let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    // iOS has its own OAuth client: no secret, and a custom-scheme redirect instead of loopback.
+    if cfg!(target_os = "ios") {
+        let id = option_env!("GOOGLE_IOS_CLIENT_ID")
+            .map(String::from)
+            .context("GOOGLE_IOS_CLIENT_ID is not set (see README)")?;
+        return Ok((id, String::new()));
+    }
     let id = get("GOOGLE_CLIENT_ID")
         .or(option_env!("GOOGLE_CLIENT_ID").map(String::from))
         .context("GOOGLE_CLIENT_ID is not set (see README)")?;
@@ -37,6 +45,13 @@ fn client() -> Result<(String, String)> {
         .or(option_env!("GOOGLE_CLIENT_SECRET").map(String::from))
         .unwrap_or_default();
     Ok((id, secret))
+}
+
+#[cfg(any(test, target_os = "ios"))]
+/// An iOS client's redirect scheme: its client ID reversed (`com.googleusercontent.apps.<number>-<hash>`).
+pub fn ios_redirect_scheme(client_id: &str) -> String {
+    let prefix = client_id.trim_end_matches(".apps.googleusercontent.com");
+    format!("com.googleusercontent.apps.{prefix}")
 }
 
 fn random_token() -> String {
@@ -105,6 +120,7 @@ fn into_token(r: &TokenResponse) -> Token {
     }
 }
 
+#[cfg(not(target_os = "ios"))]
 /// The path of an HTTP request's first line, read until its line break (a request can arrive in several reads).
 /// None for a connection that sends nothing usable within a few seconds.
 async fn read_request_path(sock: &mut tokio::net::TcpStream) -> Option<String> {
@@ -125,9 +141,88 @@ async fn read_request_path(sock: &mut tokio::net::TcpStream) -> Option<String> {
     line.split_whitespace().nth(1).map(String::from)
 }
 
+/// One sign-in attempt: the PKCE verifier and the `state` the redirect must echo.
+struct Pkce {
+    verifier: String,
+    state: String,
+}
+
+impl Pkce {
+    fn new() -> Self {
+        Self {
+            verifier: random_token(),
+            state: random_token(),
+        }
+    }
+
+    fn auth_url(&self, client_id: &str, redirect: &str) -> Result<reqwest::Url> {
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(self.verifier.as_bytes()));
+        Ok(reqwest::Url::parse_with_params(
+            AUTH_URL,
+            &[
+                ("client_id", client_id),
+                ("redirect_uri", redirect),
+                ("response_type", "code"),
+                ("scope", SCOPE),
+                ("code_challenge", &challenge),
+                ("code_challenge_method", "S256"),
+                ("state", &self.state),
+                ("access_type", "offline"),
+                // select_account: adding a second account must not silently reuse the browser's current login.
+                ("prompt", "consent select_account"),
+            ],
+        )?)
+    }
+
+    /// Checks the redirect's `state` and trades its code for tokens: the access token and the refresh token.
+    async fn finish(
+        &self,
+        http: &reqwest::Client,
+        (client_id, secret): (&str, &str),
+        redirect: &str,
+        params: &reqwest::Url,
+    ) -> Result<(Token, String)> {
+        let param = |k: &str| {
+            params
+                .query_pairs()
+                .find(|(q, _)| q == k)
+                .map(|(_, v)| v.into_owned())
+        };
+        if param("state").as_deref() != Some(&self.state) {
+            bail!("OAuth state mismatch");
+        }
+        let Some(code) = param("code") else {
+            bail!("sign-in cancelled: {}", param("error").unwrap_or_default());
+        };
+        let mut form = vec![
+            ("client_id", client_id),
+            ("code", &code),
+            ("code_verifier", &self.verifier),
+            ("grant_type", "authorization_code"),
+            ("redirect_uri", redirect),
+        ];
+        if !secret.is_empty() {
+            form.push(("client_secret", secret));
+        }
+        let resp: TokenResponse = http
+            .post(TOKEN_URL)
+            .form(&form)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let refresh = resp
+            .refresh_token
+            .clone()
+            .context("Google returned no refresh token")?;
+        Ok((into_token(&resp), refresh))
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
 /// Desktop loopback OAuth flow with PKCE. Opens the system browser and waits for the redirect.
 /// Returns the access token and the refresh token; the caller stores the latter once it knows the account.
-// shortcut: loopback redirect only works on desktop; iOS/Android need a custom-scheme deep link.
 pub async fn sign_in(
     http: &reqwest::Client,
     open: impl FnOnce(&str) -> Result<()>,
@@ -135,26 +230,8 @@ pub async fn sign_in(
     let (client_id, secret) = client()?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let redirect = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
-    let verifier = random_token();
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-    let state = random_token();
-
-    let url = reqwest::Url::parse_with_params(
-        AUTH_URL,
-        &[
-            ("client_id", client_id.as_str()),
-            ("redirect_uri", &redirect),
-            ("response_type", "code"),
-            ("scope", SCOPE),
-            ("code_challenge", &challenge),
-            ("code_challenge_method", "S256"),
-            ("state", &state),
-            ("access_type", "offline"),
-            // select_account: adding a second account must not silently reuse the browser's current login.
-            ("prompt", "consent select_account"),
-        ],
-    )?;
-    open(url.as_str())?;
+    let pkce = Pkce::new();
+    open(pkce.auth_url(&client_id, &redirect)?.as_str())?;
 
     // Browsers open speculative or extra connections (favicon, preconnect), so keep accepting until the redirect
     // itself arrives: the request that carries `state`.
@@ -181,39 +258,44 @@ pub async fn sign_in(
             .await;
         break params;
     };
-    let param = |k: &str| {
-        params
-            .query_pairs()
-            .find(|(q, _)| q == k)
-            .map(|(_, v)| v.into_owned())
-    };
-    if param("state").as_deref() != Some(&state) {
-        bail!("OAuth state mismatch");
-    }
-    let Some(code) = param("code") else {
-        bail!("sign-in cancelled: {}", param("error").unwrap_or_default());
-    };
+    pkce.finish(http, (&client_id, &secret), &redirect, &params)
+        .await
+}
 
-    let resp: TokenResponse = http
-        .post(TOKEN_URL)
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("client_secret", &secret),
-            ("code", &code),
-            ("code_verifier", &verifier),
-            ("grant_type", "authorization_code"),
-            ("redirect_uri", &redirect),
-        ])
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    let refresh = resp
-        .refresh_token
-        .clone()
-        .context("Google returned no refresh token")?;
-    Ok((into_token(&resp), refresh))
+#[cfg(target_os = "ios")]
+/// iOS flow: `authenticate(url, scheme)` shows the system sign-in sheet (ASWebAuthenticationSession) and returns
+/// the URL Google redirected to. iOS doesn't let an app listen on loopback for this.
+pub async fn sign_in_with_sheet(
+    http: &reqwest::Client,
+    authenticate: impl FnOnce(String, String) -> Result<String> + Send + 'static,
+) -> Result<(Token, String)> {
+    let (client_id, secret) = client()?;
+    let scheme = ios_redirect_scheme(&client_id);
+    let redirect = format!("{scheme}:/oauthredirect");
+    let pkce = Pkce::new();
+    let url = pkce.auth_url(&client_id, &redirect)?.to_string();
+    // The sheet blocks its thread until the user finishes or cancels.
+    let callback = tokio::task::spawn_blocking(move || authenticate(url, scheme)).await??;
+    let params = reqwest::Url::parse(&callback).context("sign-in returned no address")?;
+    pkce.finish(http, (&client_id, &secret), &redirect, &params)
+        .await
+}
+
+fn refresh_form<'a>(
+    client_id: &'a str,
+    secret: &'a str,
+    refresh: &'a str,
+) -> Vec<(&'a str, &'a str)> {
+    let mut form = vec![
+        ("client_id", client_id),
+        ("refresh_token", refresh),
+        ("grant_type", "refresh_token"),
+    ];
+    // iOS clients have no secret, and Google refuses an empty one.
+    if !secret.is_empty() {
+        form.push(("client_secret", secret));
+    }
+    form
 }
 
 pub async fn refresh(http: &reqwest::Client, email: &str) -> Result<Token> {
@@ -223,12 +305,7 @@ pub async fn refresh(http: &reqwest::Client, email: &str) -> Result<Token> {
         .with_context(|| format!("{email} is signed out; sign in again"))?;
     let resp = http
         .post(TOKEN_URL)
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("client_secret", &secret),
-            ("refresh_token", &refresh),
-            ("grant_type", "refresh_token"),
-        ])
+        .form(&refresh_form(&client_id, &secret, &refresh))
         .send()
         .await?;
     if !resp.status().is_success() {
@@ -245,4 +322,26 @@ pub async fn refresh(http: &reqwest::Client, email: &str) -> Result<Token> {
         );
     }
     Ok(into_token(&resp.json::<TokenResponse>().await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ios_redirect_scheme_reverses_the_client_id() {
+        assert_eq!(
+            ios_redirect_scheme("123-abc.apps.googleusercontent.com"),
+            "com.googleusercontent.apps.123-abc"
+        );
+    }
+
+    #[test]
+    fn refresh_form_leaves_out_an_empty_secret() {
+        assert!(
+            !refresh_form("id", "", "token")
+                .iter()
+                .any(|(k, _)| *k == "client_secret")
+        );
+    }
 }

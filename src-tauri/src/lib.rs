@@ -1307,10 +1307,26 @@ fn status(s: tauri::State<State>) -> Status {
 /// Browser sign-in for a new (or re-authorised) Google account; returns its address.
 #[tauri::command]
 async fn add_account(app: AppHandle, s: tauri::State<'_, State>) -> R<String> {
+    #[cfg(not(target_os = "ios"))]
     let (token, refresh) = auth::sign_in(&s.http, |url| {
         Ok(tauri_plugin_opener::open_url(url, None::<&str>)?)
     })
     .await?;
+    #[cfg(target_os = "ios")]
+    let (token, refresh) = {
+        use tauri_plugin_web_auth::{AuthenticateRequest, WebAuthExt};
+        let sheet = app.clone();
+        auth::sign_in_with_sheet(&s.http, move |url, callback_scheme| {
+            Ok(sheet
+                .web_auth()
+                .authenticate(AuthenticateRequest {
+                    url,
+                    callback_scheme,
+                })?
+                .callback_url)
+        })
+        .await?
+    };
     let (email, _) = Gmail {
         http: &s.http,
         token: &token.access,
@@ -3018,6 +3034,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
+    #[cfg(target_os = "ios")]
+    let builder = builder.plugin(tauri_plugin_web_auth::init());
     // The updater, window size and position, and the app menu are Mac-only; iOS has none of them.
     #[cfg(desktop)]
     let builder = builder

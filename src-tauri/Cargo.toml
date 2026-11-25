@@ -41,17 +41,19 @@ rustls-platform-verifier = "0.7.1"
 keyring = "4.2.0"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
-auto-launch = "0.6"
 encoding_rs = "0.8"
 jiff = "1.0.2"
-tauri-plugin-window-state = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+auto-launch = "0.6"
+tauri-plugin-window-state = "2"
 
 # iOS has only the data-protection keychain, which keyring reaches through this feature.
 [target.'cfg(target_os = "ios")'.dependencies]
 apple-native-keyring-store = { version = "1.0.3", features = ["protected"] }
+# Google sign-in through the system sheet (ASWebAuthenticationSession); iOS refuses the desktop loopback redirect.
+tauri-plugin-web-auth = "=1.0.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

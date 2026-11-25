@@ -3,7 +3,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../.env.local");
     if let Ok(env) = std::fs::read_to_string("../.env.local") {
         for (k, v) in env.lines().filter_map(|l| l.split_once('=')) {
-            if k.trim().starts_with("GOOGLE_CLIENT_") {
+            if k.trim().starts_with("GOOGLE_") {
                 println!("cargo:rustc-env={}={}", k.trim(), v.trim());
             }
         }
