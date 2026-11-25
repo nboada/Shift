@@ -14,6 +14,8 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "status",
             "add_account",
+            "guess_imap",
+            "add_imap_account",
             "sign_out",
             "sync_now",
             "labels",

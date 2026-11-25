@@ -43,7 +43,13 @@ const SWIPE_ACTIONS: [string, string][] = [
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-type Ctx = { accounts: () => string[]; onAddAccount: () => Promise<void>; onSignOut: (email: string) => void };
+type Ctx = {
+  accounts: () => string[];
+  isImap: (email: string) => boolean;
+  onAddAccount: () => Promise<void>;
+  onAddImap: () => Promise<void>;
+  onSignOut: (email: string) => void;
+};
 let ctx: Ctx;
 let current = "general";
 let accountOpen: string | null = null;
@@ -265,7 +271,7 @@ const render: Record<string, () => string> = {
       const a = accountSettings(email);
       return `<button class="account-row" data-cmd="open-account" data-email="${esc(email)}">
         <span class="account-avatar acct-${a.color}">${esc((a.title || email).charAt(0).toUpperCase())}</span>
-        <span class="setting-text"><strong>${esc(a.title || email)}</strong><span>${a.title ? `${esc(email)} · ` : ""}Gmail</span></span>
+        <span class="setting-text"><strong>${esc(a.title || email)}</strong><span>${a.title ? `${esc(email)} · ` : ""}${ctx.isImap(email) ? "IMAP" : "Gmail"}</span></span>
         <i class="ti ti-chevron-right"></i>
       </button>`;
     });
@@ -277,7 +283,12 @@ const render: Record<string, () => string> = {
           "Add a Google account",
           `<button class="secondary" data-cmd="add-account"><i class="ti ti-plus"></i> Add account</button>`,
           "Sign in with Google in your browser. Mail is stored on this Mac.",
-        ),
+        ) +
+          row(
+            "Add another email account",
+            `<button class="secondary" data-cmd="add-imap"><i class="ti ti-plus"></i> Add account</button>`,
+            "iCloud, Fastmail, Yahoo or your own domain, with its email address and password.",
+          ),
       )
     );
   },
@@ -950,6 +961,9 @@ export function initSettings(c: Ctx) {
         });
         return show("accounts");
       }
+      case "add-imap":
+        await ctx.onAddImap();
+        return show("accounts");
       case "open-account":
         accountOpen = b.dataset.email!;
         return show("accounts");

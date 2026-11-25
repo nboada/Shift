@@ -12,6 +12,8 @@
     "opener:default",
     "allow-status",
     "allow-add-account",
+    "allow-guess-imap",
+    "allow-add-imap-account",
     "allow-sign-out",
     "allow-sync-now",
     "allow-labels",
