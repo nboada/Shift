@@ -356,6 +356,24 @@ fn now_ms() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
+/// iOS shows notifications only after the user allows them; macOS asks on its own at the first one. Asked once
+/// there's an account, so the prompt doesn't greet a first launch. iOS remembers the answer and doesn't ask again.
+fn ask_to_notify(app: &AppHandle) {
+    #[cfg(mobile)]
+    {
+        use tauri_plugin_notification::NotificationExt;
+        let app = app.clone();
+        // The request waits for the user's answer, which the main thread has to show.
+        std::thread::spawn(move || {
+            if let Err(e) = app.notification().request_permission() {
+                eprintln!("couldn't ask to send notifications: {e}");
+            }
+        });
+    }
+    #[cfg(desktop)]
+    let _ = app;
+}
+
 /// Shows a notification for Inbox mail that arrived since the last one (the `notified_at` watermark).
 fn notify_new_mail(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
     use tauri_plugin_notification::NotificationExt;
@@ -1348,6 +1366,7 @@ async fn add_account(app: AppHandle, s: tauri::State<'_, State>) -> R<String> {
         }
     };
     *account.token.lock().await = Some(token);
+    ask_to_notify(&app);
     spawn_sync(&app);
     Ok(email)
 }
@@ -1386,6 +1405,7 @@ async fn add_imap_account(
         accounts.retain(|x| !x.email.eq_ignore_ascii_case(&email));
         accounts.push(a);
     }
+    ask_to_notify(&app);
     spawn_sync(&app);
     Ok(email)
 }
@@ -3138,6 +3158,9 @@ pub fn run() {
                     .read_timeout(Duration::from_secs(300))
                     .build()?,
             });
+            if !app.state::<State>().all().is_empty() {
+                ask_to_notify(app.handle());
+            }
             let handle = app.handle().clone();
             // shortcut: polls history on an interval; Gmail push (users.watch) needs a Pub/Sub backend.
             tauri::async_runtime::spawn(async move {
