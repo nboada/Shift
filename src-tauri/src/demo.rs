@@ -47,19 +47,14 @@ fn thread(id: &str, subject: &str, labels: &[&str], msgs: &[Msg]) -> gmail::Thre
 }
 
 /// (filename, MIME type, bytes, Content-ID for an inline image).
-type File = (
-    &'static str,
-    &'static str,
-    &'static [u8],
-    Option<&'static str>,
-);
+type File<'a> = (&'a str, &'a str, &'a [u8], Option<&'a str>);
 
 const WIREFRAMES: &[u8] = include_bytes!("demo-files/wireframes.png");
 const LOGO: &[u8] = include_bytes!("demo-files/logo.png");
 const CONTRACT: &[u8] = include_bytes!("demo-files/contract.pdf");
 
 /// Wraps message `msg`'s body in multipart/mixed with `files` after it. Bytes go inline, so nothing is fetched.
-fn attach(t: &mut gmail::Thread, msg: usize, files: &[File]) {
+fn attach(t: &mut gmail::Thread, msg: usize, files: &[File<'_>]) {
     let m = &mut t.messages[msg];
     let payload = m.payload.take().expect("demo payload");
     let mut parts = vec![gmail::Part {
@@ -93,6 +88,25 @@ fn attach(t: &mut gmail::Thread, msg: usize, files: &[File]) {
         parts,
         ..Default::default()
     });
+}
+
+/// An invite for tomorrow, so the reader shows an upcoming event with Yes, Maybe and No.
+fn sprint_planning() -> String {
+    let hour = jiff::Timestamp::now().as_second() / 3600 * 3600;
+    let at = |s: i64| {
+        jiff::Timestamp::from_second(s)
+            .map(|t| t.strftime("%Y%m%dT%H%M%SZ").to_string())
+            .unwrap_or_default()
+    };
+    format!(
+        "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:sprint-planning@demo\r\nSEQUENCE:0\r\n\
+         DTSTART:{}\r\nDTEND:{}\r\nSUMMARY:Sprint planning\r\nLOCATION:Google Meet\r\n\
+         ORGANIZER;CN=Maya Chen:mailto:maya@northwind.example\r\n\
+         ATTENDEE;PARTSTAT=ACCEPTED;CN=Maya Chen:mailto:maya@northwind.example\r\n\
+         ATTENDEE;PARTSTAT=NEEDS-ACTION;CN=Alex Rivera:mailto:{EMAIL}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        at(hour + 26 * 3600),
+        at(hour + 27 * 3600)
+    )
 }
 
 fn strip_tags(s: &str) -> String {
@@ -483,6 +497,17 @@ pub fn seed(conn: &mut Connection) -> Result<()> {
                 "Hi Alex, your tax return has been lodged. Copies attached for your records.",
             )],
         ),
+        thread(
+            "t21",
+            "Invitation: Sprint planning",
+            &["INBOX", "UNREAD"],
+            &[(
+                "Maya Chen <maya@northwind.example>",
+                ME,
+                1.0,
+                "Maya Chen has invited you to Sprint planning.\n\nJoin with Google Meet: meet.example/abc-defg-hij",
+            )],
+        ),
     ];
     for t in &mut threads {
         match t.id.as_str() {
@@ -492,6 +517,14 @@ pub fn seed(conn: &mut Connection) -> Result<()> {
                 &[("Homepage wireframes v2.png", "image/png", WIREFRAMES, None)],
             ),
             "t05" => attach(t, 0, &[("logo.png", "image/png", LOGO, Some("logo@demo"))]),
+            "t21" => {
+                let ics = sprint_planning();
+                attach(
+                    t,
+                    0,
+                    &[("invite.ics", "text/calendar", ics.as_bytes(), None)],
+                );
+            }
             "t14" => attach(
                 t,
                 0,
@@ -520,7 +553,11 @@ mod tests {
         let mut c = db::open(std::path::Path::new(":memory:")).unwrap();
         seed(&mut c).unwrap();
         let inbox = db::threads(&c, Some("INBOX")).unwrap();
-        assert_eq!(inbox.len(), 15);
+        assert_eq!(inbox.len(), 16);
+        assert!(
+            db::messages(&c, "t21").unwrap()[0].invite.is_some(),
+            "the invite has its event"
+        );
         assert_eq!(db::threads(&c, Some("TRASH")).unwrap().len(), 1);
         assert_eq!(db::messages(&c, "t08").unwrap().len(), 4);
         assert!(
