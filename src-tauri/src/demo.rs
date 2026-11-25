@@ -233,8 +233,18 @@ pub fn seed(conn: &mut Connection) -> Result<()> {
     db::set_meta(conn, "email", EMAIL)?;
     db::set_meta(conn, "history_id", "demo")?;
     let mut labels = system_labels();
-    labels.push(label("Label_clients", "Clients", "user"));
-    labels.push(label("Label_receipts", "Receipts", "user"));
+    // Colours from the label colour picker's palette (LABEL_COLORS in main.ts).
+    for (id, name, color) in [
+        ("Label_clients", "Clients", "#4a86e8"),
+        ("Label_receipts", "Receipts", "#16a766"),
+    ] {
+        labels.push(gmail::Label {
+            color: Some(gmail::LabelColor {
+                background: color.into(),
+            }),
+            ..label(id, name, "user")
+        });
+    }
     db::replace_labels(conn, &labels)?;
 
     let mut threads = [
