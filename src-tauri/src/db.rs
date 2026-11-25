@@ -168,7 +168,10 @@ pub fn claim(conn: &Connection, id: i64, now: i64) -> Result<bool> {
 
 /// Gives a claimed row back after a failed send, with why, so the next tick retries it and the list says so.
 pub fn release(conn: &Connection, id: i64, error: &str) -> Result<()> {
-    conn.execute("UPDATE scheduled SET sending = 0, error = ?2 WHERE id = ?1", params![id, error])?;
+    conn.execute(
+        "UPDATE scheduled SET sending = 0, error = ?2 WHERE id = ?1",
+        params![id, error],
+    )?;
     Ok(())
 }
 
@@ -201,7 +204,11 @@ pub fn scheduled(conn: &Connection, due_by: Option<i64>) -> Result<Vec<Scheduled
 pub fn take_scheduled(conn: &mut Connection, id: i64) -> Result<serde_json::Value> {
     let tx = conn.transaction()?;
     let row: Option<(String, bool)> = tx
-        .query_row("SELECT draft, sending FROM scheduled WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row(
+            "SELECT draft, sending FROM scheduled WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .optional()?;
     let Some((draft, sending)) = row else {
         anyhow::bail!("It has already been sent");
@@ -225,7 +232,11 @@ pub fn reschedule(conn: &Connection, id: i64, send_at: Option<i64>) -> Result<()
         )?,
         None => conn.execute("DELETE FROM scheduled WHERE id = ?1 AND sending = 0", [id])?,
     };
-    let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM scheduled WHERE id = ?1)", [id], |r| r.get(0))?;
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM scheduled WHERE id = ?1)",
+        [id],
+        |r| r.get(0),
+    )?;
     if changed == 0 && exists {
         anyhow::bail!("It's already being sent");
     }
@@ -242,7 +253,13 @@ pub struct PendingOp {
     pub trash: bool,
 }
 
-pub fn add_pending(conn: &Connection, thread: &str, add: &[String], remove: &[String], trash: bool) -> Result<()> {
+pub fn add_pending(
+    conn: &Connection,
+    thread: &str,
+    add: &[String],
+    remove: &[String],
+    trash: bool,
+) -> Result<()> {
     conn.execute(
         "INSERT INTO pending_ops (thread_id, add_labels, remove_labels, trash) VALUES (?1, ?2, ?3, ?4)",
         params![thread, serde_json::to_string(add)?, serde_json::to_string(remove)?, trash],
@@ -252,10 +269,21 @@ pub fn add_pending(conn: &Connection, thread: &str, add: &[String], remove: &[St
 
 /// Pending changes, oldest first, so they reach Gmail in the order the user made them.
 pub fn pending_ops(conn: &Connection) -> Result<Vec<PendingOp>> {
-    let mut st = conn.prepare("SELECT seq, thread_id, add_labels, remove_labels, trash FROM pending_ops ORDER BY seq")?;
+    let mut st = conn.prepare(
+        "SELECT seq, thread_id, add_labels, remove_labels, trash FROM pending_ops ORDER BY seq",
+    )?;
     let rows = st.query_map([], |r| {
-        let list = |i| r.get::<_, String>(i).map(|s| serde_json::from_str(&s).unwrap_or_default());
-        Ok(PendingOp { seq: r.get(0)?, thread: r.get(1)?, add: list(2)?, remove: list(3)?, trash: r.get(4)? })
+        let list = |i| {
+            r.get::<_, String>(i)
+                .map(|s| serde_json::from_str(&s).unwrap_or_default())
+        };
+        Ok(PendingOp {
+            seq: r.get(0)?,
+            thread: r.get(1)?,
+            add: list(2)?,
+            remove: list(3)?,
+            trash: r.get(4)?,
+        })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
@@ -267,8 +295,12 @@ pub fn done_pending(conn: &Connection, seq: i64) -> Result<()> {
 
 /// Whether `thread` has changes not yet in Gmail: a fetch of it would undo them on screen, so it waits.
 pub fn has_pending(conn: &Connection, thread: &str) -> bool {
-    conn.query_row("SELECT EXISTS(SELECT 1 FROM pending_ops WHERE thread_id = ?1)", [thread], |r| r.get(0))
-        .unwrap_or(false)
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pending_ops WHERE thread_id = ?1)",
+        [thread],
+        |r| r.get(0),
+    )
+    .unwrap_or(false)
 }
 
 /// Drops a scheduled row after its send finished (sent, or its draft gone), whether or not it was claimed.
@@ -414,7 +446,10 @@ pub fn message_ids(conn: &Connection, threads: &[String]) -> Result<Vec<String>>
     let mut stmt = conn.prepare_cached("SELECT id FROM messages WHERE thread_id = ?1")?;
     let mut out = Vec::new();
     for t in threads {
-        out.extend(stmt.query_map([t], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?);
+        out.extend(
+            stmt.query_map([t], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()?,
+        );
     }
     Ok(out)
 }
@@ -533,7 +568,9 @@ pub fn labels(conn: &Connection) -> Result<Vec<LabelRow>> {
     let mut out: Vec<LabelRow> = rows.collect::<Result<_, _>>()?;
     // The cache holds recent mail only: add the unread Inbox threads Gmail has beyond it (worked out by the sync),
     // so reading one here still lowers the count at once.
-    let extra: i64 = get_meta(conn, "inbox_unread_extra")?.and_then(|v| v.parse().ok()).unwrap_or(0);
+    let extra: i64 = get_meta(conn, "inbox_unread_extra")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     if let Some(inbox) = out.iter_mut().find(|l| l.id == "INBOX") {
         inbox.unread += extra;
     }
@@ -914,10 +951,30 @@ mod tests {
     fn one_trashed_message_keeps_the_conversation_in_the_inbox() {
         let mut c = Connection::open_in_memory().unwrap();
         c.execute_batch(SCHEMA).unwrap();
-        upsert_thread(&mut c, &convo("part", &[&["INBOX", "UNREAD"], &["TRASH"]]), false).unwrap();
-        upsert_thread(&mut c, &convo("all", &[&["TRASH", "INBOX"], &["TRASH"]]), false).unwrap();
-        let ids = |c: &Connection, l: &str| threads(c, Some(l)).unwrap().into_iter().map(|t| t.id).collect::<Vec<_>>();
-        assert_eq!(ids(&c, "INBOX"), ["part"], "a fully trashed thread leaves the Inbox, a partly trashed one stays");
+        upsert_thread(
+            &mut c,
+            &convo("part", &[&["INBOX", "UNREAD"], &["TRASH"]]),
+            false,
+        )
+        .unwrap();
+        upsert_thread(
+            &mut c,
+            &convo("all", &[&["TRASH", "INBOX"], &["TRASH"]]),
+            false,
+        )
+        .unwrap();
+        let ids = |c: &Connection, l: &str| {
+            threads(c, Some(l))
+                .unwrap()
+                .into_iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(&c, "INBOX"),
+            ["part"],
+            "a fully trashed thread leaves the Inbox, a partly trashed one stays"
+        );
         assert_eq!(ids(&c, "TRASH").len(), 2, "both show in Trash");
         // Undoing a delete brings the conversation back.
         change_labels(&mut c, "all", &["INBOX".into()], &["TRASH".into()]).unwrap();
@@ -933,19 +990,34 @@ mod tests {
         {
             // The cache as written before `live`: no column, labels merged across a thread's messages.
             let c = Connection::open(&path).unwrap();
-            c.execute_batch(&SCHEMA.replace(", live INTEGER NOT NULL DEFAULT 1", "")).unwrap();
+            c.execute_batch(&SCHEMA.replace(", live INTEGER NOT NULL DEFAULT 1", ""))
+                .unwrap();
             c.execute_batch("INSERT INTO threads (id, subject, sender, snippet, date, count) VALUES ('t', '', '', '', 1, 2), ('u', '', '', '', 1, 1);
                 INSERT INTO thread_labels VALUES ('INBOX', 't'), ('TRASH', 't'), ('INBOX', 'u');").unwrap();
         }
         let c = open(&path).unwrap();
-        assert_eq!(threads(&c, Some("INBOX")).unwrap().len(), 1, "unaffected thread still listed");
-        assert_eq!(get_meta(&c, "backfill").unwrap().as_deref(), Some(r#"["t"]"#), "the trashed one is re-fetched");
-        let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(
+            threads(&c, Some("INBOX")).unwrap().len(),
+            1,
+            "unaffected thread still listed"
+        );
+        assert_eq!(
+            get_meta(&c, "backfill").unwrap().as_deref(),
+            Some(r#"["t"]"#),
+            "the trashed one is re-fetched"
+        );
+        let version: i64 = c
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(version, VERSION);
         set_meta(&c, "backfill", "[]").unwrap();
         drop(c);
         let c = open(&path).unwrap();
-        assert_eq!(get_meta(&c, "backfill").unwrap().as_deref(), Some("[]"), "an upgraded cache isn't upgraded again");
+        assert_eq!(
+            get_meta(&c, "backfill").unwrap().as_deref(),
+            Some("[]"),
+            "an upgraded cache isn't upgraded again"
+        );
         drop(c);
         let _ = std::fs::remove_file(&path);
     }
@@ -982,8 +1054,13 @@ mod tests {
 
     #[test]
     fn only_a_damaged_file_counts_as_corrupt() {
-        let path = std::env::temp_dir().join(format!("shift-corrupt-{}.sqlite3", std::process::id()));
-        std::fs::write(&path, b"definitely not sqlite, long enough to have a header").unwrap();
+        let path =
+            std::env::temp_dir().join(format!("shift-corrupt-{}.sqlite3", std::process::id()));
+        std::fs::write(
+            &path,
+            b"definitely not sqlite, long enough to have a header",
+        )
+        .unwrap();
         assert!(is_corrupt(&open(&path).unwrap_err()));
         let _ = std::fs::remove_file(&path);
         assert!(!is_corrupt(&anyhow::anyhow!("database is locked")));
@@ -998,15 +1075,28 @@ mod tests {
         assert!(!claim(&c, id, 50).unwrap(), "not due yet");
         assert!(claim(&c, id, 100).unwrap());
         assert!(!claim(&c, id, 100).unwrap(), "only one sender gets it");
-        assert!(reschedule(&c, id, None).is_err(), "cancel refused while sending");
+        assert!(
+            reschedule(&c, id, None).is_err(),
+            "cancel refused while sending"
+        );
         assert!(scheduled(&c, None).unwrap()[0].sending);
         release(&c, id, "Gmail API 400: invalid To").unwrap();
         let row = &scheduled(&c, None).unwrap()[0];
-        assert!(!row.sending && row.error.as_deref() == Some("Gmail API 400: invalid To"), "the Outbox shows why");
+        assert!(
+            !row.sending && row.error.as_deref() == Some("Gmail API 400: invalid To"),
+            "the Outbox shows why"
+        );
         reschedule(&c, id, Some(200)).unwrap();
-        assert_eq!(scheduled(&c, None).unwrap()[0].error, None, "a new time clears the old failure");
+        assert_eq!(
+            scheduled(&c, None).unwrap()[0].error,
+            None,
+            "a new time clears the old failure"
+        );
         reschedule(&c, id, None).unwrap();
-        assert!(scheduled(&c, None).unwrap().is_empty(), "cancelled once released");
+        assert!(
+            scheduled(&c, None).unwrap().is_empty(),
+            "cancelled once released"
+        );
         reschedule(&c, id, None).unwrap(); // gone already: nothing to refuse
     }
 
