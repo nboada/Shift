@@ -1550,6 +1550,8 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
         // A merged label's id is its name, so the open mailbox follows the rename.
         const follow = mailbox === label.id && label.id.startsWith("name:") ? `name:${name}` : undefined;
         void labelAction(invoke("rename_label", { label: label.id, name, accounts: scope }), follow);
+        for (const key of ["needsReply", "waiting"] as const)
+          if (settings.inbox.followUps[key] === label.name) setSetting(`inbox.followUps.${key}`, name);
       });
     }
     if (pick === "delete") {

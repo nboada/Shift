@@ -26,7 +26,14 @@ export const DEFAULTS = {
   },
   notifications: { enabled: true, sound: true, onlyPeople: false },
   scheduling: { laterTodayHours: 3, morning: "09:00", weekendDay: "saturday", nextWeekDay: "monday" },
-  inbox: { view: "smart" as "smart" | "list", pinnedOnTop: true, splitUnread: true, unreadBadge: true },
+  inbox: {
+    view: "smart" as "smart" | "list",
+    pinnedOnTop: true,
+    splitUnread: true,
+    unreadBadge: true,
+    /** Label names; with both set, a new message moves a conversation between them (see `move_follow_ups`). */
+    followUps: { needsReply: "", waiting: "" },
+  },
   composer: {
     signature: "",
     signatureMode: "text" as "text" | "html",

@@ -565,6 +565,19 @@ pub fn delete_label(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// When a thread's latest message arrived (ms), if it's cached.
+pub fn thread_date(conn: &Connection, id: &str) -> Result<Option<i64>> {
+    Ok(conn
+        .query_row("SELECT date FROM threads WHERE id = ?1", [id], |r| r.get(0))
+        .optional()?)
+}
+
+pub fn thread_label_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
+    let mut st = conn.prepare_cached("SELECT label_id FROM thread_labels WHERE thread_id = ?1")?;
+    let rows = st.query_map([id], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 pub fn label_id(conn: &Connection, name: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT id FROM labels WHERE name = ?1", [name], |r| {
