@@ -167,7 +167,6 @@ button.primary:disabled { opacity: 0.6; }
 .signin-points li { display: flex; align-items: center; gap: 10px; }
 .signin-points i { color: var(--brand); font-size: 17px; }
 #signin-other { display: block; margin: 14px auto 0; }
-@media (hover: none) { .pointer-only { display: none; } }
 @media (max-width: 760px) {
   .signin-card { padding: 24px; }
   .signin-points { width: auto; }
