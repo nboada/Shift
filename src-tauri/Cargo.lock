@@ -63,6 +63,7 @@ name = "app"
 version = "0.3.2"
 dependencies = [
  "anyhow",
+ "apple-native-keyring-store",
  "async-imap",
  "auto-launch",
  "base64 0.23.1",
