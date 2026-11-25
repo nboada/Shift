@@ -1,6 +1,6 @@
 import { Editor, Extension } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { Menu } from "@tauri-apps/api/menu";
 import { Quote, Signature, extensions, hasMessage } from "./compose";
@@ -121,6 +121,19 @@ export function createEditor(
           // ⌘↩ sends (the app's keydown handler); without this the hard-break extension would also insert a line.
           "Mod-Enter": () => true,
           "Mod-k": () => (openLink(), true),
+          // ⌘A selects what you wrote, not the signature or quote below it; a second ⌘A selects everything.
+          "Mod-a": ({ editor }) => {
+            const { doc, selection } = editor.state;
+            let end = -1;
+            doc.forEach((node, offset) => {
+              if (end < 0 && (node.type.name === "signature" || node.type.name === "quote")) end = offset;
+            });
+            if (end <= 0) return false;
+            const own = TextSelection.between(doc.resolve(0), doc.resolve(end), -1);
+            if (selection.from === own.from && selection.to === own.to) return false;
+            editor.view.dispatch(editor.state.tr.setSelection(own));
+            return true;
+          },
         }),
       }),
     ],
