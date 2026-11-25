@@ -31,7 +31,7 @@ import DOMPurify from "dompurify";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
 import { formatWhen, quickTimes } from "./schedule";
-import { type Invite, inviteCard } from "./invite";
+import { type Invite, inviteCard, isCalendarFile } from "./invite";
 import { actionToastOpen, toast } from "./toast";
 import { Menu } from "@tauri-apps/api/menu";
 import AirDatepicker from "air-datepicker";
@@ -915,7 +915,7 @@ async function openThread(id: string) {
 // ---- Attachments in the reader
 
 function attachmentStrip(m: Message, account: string) {
-  const files = listedAttachments(m.attachments, m.html);
+  const files = listedAttachments(m.attachments, m.html).filter((a) => !(m.invite && isCalendarFile(a)));
   if (!files.length) return "";
   return `<div class="attachments message-files">${files
     .map((a) =>
@@ -983,7 +983,9 @@ reader.addEventListener("click", async (e) => {
       status: b.dataset.rsvp,
       fromName: accountSettings(account).name,
     });
-    toast(`Sent “${b.textContent}” to ${m.invite?.organizer.name || m.invite?.organizer.email}`, { kind: "success" });
+    toast(`Sent “${b.textContent?.trim()}” to ${m.invite?.organizer.name || m.invite?.organizer.email}`, {
+      kind: "success",
+    });
   } catch (err) {
     press(before);
     toast(`Couldn't send your answer: ${err}`, { kind: "error" });

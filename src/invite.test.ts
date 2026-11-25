@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { type Invite, inviteCard, inviteWhen } from "./invite";
+import { type Invite, inviteCard, inviteLength, inviteTile, inviteWhen, isCalendarFile } from "./invite";
 
 const at = (iso: string) => Date.parse(iso);
 const invite = (over: Partial<Invite> = {}): Invite => ({
@@ -15,28 +15,45 @@ const invite = (over: Partial<Invite> = {}): Invite => ({
   status: "NEEDS-ACTION",
   ...over,
 });
-const sydney = { locale: "en-AU", timeZone: "Australia/Sydney" };
+// 9 am on Monday 30 November in Sydney.
+const sydney = { locale: "en-AU", timeZone: "Australia/Sydney", now: at("2026-11-29T22:00:00Z") };
 
-test("a timed event shows its day once when it starts and ends the same day", () => {
-  expect(inviteWhen(invite(), sydney)).toBe("Tue, 1 Dec 2026, 10:00 am – 11:00 am");
+test("an event tomorrow says so, with its times", () => {
+  expect(inviteWhen(invite(), sydney)).toBe("Tomorrow · 10:00 am – 11:00 am");
+});
+
+test("a later event shows its date, and the year only when it isn't this one", () => {
+  const later = { ...sydney, now: at("2026-11-20T00:00:00Z") };
+  expect(inviteWhen(invite(), later)).toBe("Tue, 1 Dec · 10:00 am – 11:00 am");
+  const lastYear = { ...sydney, now: at("2025-11-20T00:00:00Z") };
+  expect(inviteWhen(invite(), lastYear)).toBe("Tue, 1 Dec 2026 · 10:00 am – 11:00 am");
 });
 
 test("an event over midnight shows both days", () => {
   expect(inviteWhen(invite({ end: at("2026-12-01T14:00:00Z") }), sydney)).toBe(
-    "Tue, 1 Dec 2026, 10:00 am – Wed, 2 Dec 2026, 1:00 am",
+    "Tomorrow, 10:00 am – Wed, 2 Dec, 1:00 am",
   );
 });
 
 test("all-day events show their dates wherever the reader is, ending on the last day", () => {
   const i = invite({ all_day: true, start: at("2026-12-24T00:00:00Z"), end: at("2026-12-26T00:00:00Z") });
-  expect(inviteWhen(i, { locale: "en-AU", timeZone: "America/Los_Angeles" })).toBe(
-    "Thu, 24 Dec 2026 – Fri, 25 Dec 2026",
-  );
-  expect(inviteWhen({ ...i, end: at("2026-12-25T00:00:00Z") }, sydney)).toBe("Thu, 24 Dec 2026");
+  expect(inviteWhen(i, { ...sydney, timeZone: "America/Los_Angeles" })).toBe("Thu, 24 Dec – Fri, 25 Dec · All day");
+  expect(inviteWhen({ ...i, end: at("2026-12-25T00:00:00Z") }, sydney)).toBe("Thu, 24 Dec · All day");
+});
+
+test("lengths read like a calendar", () => {
+  expect(inviteLength(invite())).toBe("1 hr");
+  expect(inviteLength(invite({ end: at("2026-12-01T00:30:00Z") }))).toBe("1 hr 30 min");
+  expect(inviteLength(invite({ end: at("2026-11-30T23:45:00Z") }))).toBe("45 min");
+  expect(inviteLength(invite({ all_day: true }))).toBe("");
+});
+
+test("the date tile shows the local month and day", () => {
+  expect(inviteTile(invite(), sydney)).toEqual({ month: "Dec", day: "1" });
 });
 
 test("the user's answer is the pressed button", () => {
-  const html = inviteCard(invite({ status: "TENTATIVE" }), 2);
+  const html = inviteCard(invite({ status: "TENTATIVE" }), 2, sydney);
   expect(html).toContain('data-rsvp="TENTATIVE" data-msg="2" aria-pressed="true"');
   expect(html).toContain('data-rsvp="ACCEPTED" data-msg="2" aria-pressed="false"');
 });
@@ -52,11 +69,17 @@ test("cancelled events and answers have no buttons", () => {
 });
 
 test("event text is escaped", () => {
-  const html = inviteCard(invite({ summary: "<img src=x onerror=alert(1)>", location: "From <b>" }), 0);
+  const html = inviteCard(invite({ summary: "<img src=x onerror=alert(1)>", location: "<b>" }), 0);
   expect(html).not.toContain("<img");
   expect(html).not.toContain("<b>");
 });
 
 test("no event, no card", () => {
   expect(inviteCard(null, 0)).toBe("");
+});
+
+test("the invite's .ics file is recognised", () => {
+  expect(isCalendarFile({ mime: "application/ics", filename: "invite.ics" })).toBe(true);
+  expect(isCalendarFile({ mime: "application/octet-stream", filename: "Meeting.ICS" })).toBe(true);
+  expect(isCalendarFile({ mime: "application/pdf", filename: "a.pdf" })).toBe(false);
 });
