@@ -1593,41 +1593,60 @@ async fn push_change(
     remove: &[String],
     trash: bool,
 ) -> anyhow::Result<()> {
-    if db::has_pending(&a.db(), id) {
-        return db::add_pending(&a.db(), id, add, remove, trash);
-    }
-    let remote = match a.access_token(&s.http).await {
-        Ok(token) => {
-            apply_remote(
-                &Gmail {
-                    http: &s.http,
-                    token: &token,
-                },
-                id,
-                add,
-                remove,
-                trash,
-            )
-            .await
-        }
-        Err(e) => Err(e),
+    let Some(seq) = queue_change(a, id, add, remove, trash)? else {
+        return Ok(());
     };
-    match remote {
-        Ok(()) => Ok(()),
-        Err(e) if gmail::is_transient(&e) => db::add_pending(&a.db(), id, add, remove, trash),
+    let token = match a.access_token(&s.http).await {
+        Ok(t) => t,
+        Err(e) if gmail::is_transient(&e) => return Ok(()),
         Err(e) => {
-            if let Ok(token) = a.access_token(&s.http).await {
-                refetch(
-                    app,
-                    a,
-                    &Gmail {
-                        http: &s.http,
-                        token: &token,
-                    },
-                    id,
-                )
-                .await;
-            }
+            db::done_pending(&a.db(), seq)?;
+            return Err(e);
+        }
+    };
+    let g = Gmail {
+        http: &s.http,
+        token: &token,
+    };
+    if let Err(e) = send_queued(a, &g, seq, id, add, remove, trash).await {
+        refetch(app, a, &g, id).await;
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Puts a change in `pending_ops` before Gmail is asked, so quitting mid-request leaves it for the next sync instead
+/// of losing it. Returns its `seq` to send now, or `None` when an earlier change to the thread is still waiting: it
+/// goes out after that one, in order.
+fn queue_change(
+    a: &Account,
+    id: &str,
+    add: &[String],
+    remove: &[String],
+    trash: bool,
+) -> anyhow::Result<Option<i64>> {
+    let c = a.db();
+    let behind = db::has_pending(&c, id);
+    let seq = db::add_pending(&c, id, add, remove, trash)?;
+    Ok((!behind).then_some(seq))
+}
+
+/// Sends a queued change. It leaves the queue once Gmail takes it or refuses it (the error), and stays for the sync
+/// loop when Gmail can't be reached.
+async fn send_queued(
+    a: &Account,
+    g: &Gmail<'_>,
+    seq: i64,
+    id: &str,
+    add: &[String],
+    remove: &[String],
+    trash: bool,
+) -> anyhow::Result<()> {
+    match apply_remote(g, id, add, remove, trash).await {
+        Ok(()) => db::done_pending(&a.db(), seq),
+        Err(e) if gmail::is_transient(&e) => Ok(()),
+        Err(e) => {
+            db::done_pending(&a.db(), seq)?;
             Err(e)
         }
     }
@@ -1672,14 +1691,24 @@ async fn modify_many(
     for id in &waiting {
         db::add_pending(&a.db(), id, &add, &remove, false)?;
     }
-    let queue = |ids: &[String]| {
-        ids.iter()
-            .try_for_each(|id| db::add_pending(&a.db(), id, &add, &remove, false))
+    // Queued before the batch goes out, as in `push_change`: a quit mid-request leaves them for the next sync.
+    let seqs = {
+        let c = a.db();
+        now.iter()
+            .map(|id| db::add_pending(&c, id, &add, &remove, false))
+            .collect::<anyhow::Result<Vec<i64>>>()?
+    };
+    let done = || {
+        let c = a.db();
+        seqs.iter().try_for_each(|&seq| db::done_pending(&c, seq))
     };
     let token = match a.access_token(&s.http).await {
         Ok(t) => t,
-        Err(e) if gmail::is_transient(&e) => return Ok(queue(&now)?),
-        Err(e) => return Err(e.into()),
+        Err(e) if gmail::is_transient(&e) => return Ok(()),
+        Err(e) => {
+            done()?;
+            return Err(e.into());
+        }
     };
     let g = Gmail {
         http: &s.http,
@@ -1689,9 +1718,10 @@ async fn modify_many(
     let add_ids: Vec<&str> = add.iter().map(String::as_str).collect();
     let remove_ids: Vec<&str> = remove.iter().map(String::as_str).collect();
     match g.batch_modify(&msgs, &add_ids, &remove_ids).await {
-        Ok(()) => Ok(()),
-        Err(e) if gmail::is_transient(&e) => Ok(queue(&now)?),
+        Ok(()) => Ok(done()?),
+        Err(e) if gmail::is_transient(&e) => Ok(()),
         Err(e) => {
+            done()?;
             for id in &now {
                 refetch(&app, &a, &g, id).await;
             }
@@ -2703,6 +2733,67 @@ mod tests {
         );
     }
     use super::*;
+
+    #[test]
+    fn label_changes_stay_queued_until_gmail_answers() {
+        use std::time::Duration;
+        let path = std::env::temp_dir().join(format!("shift-queue-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let a = Account::new("me@example.com".into(), db::open(&path).unwrap());
+        let archive = ["INBOX".to_string()];
+        tauri::async_runtime::block_on(async {
+            let _fake = fake_gmail::start(|req, _| {
+                if req.path.contains("/threads/slow/") {
+                    std::thread::sleep(Duration::from_millis(400));
+                }
+                if req.path.contains("/threads/gone/") {
+                    return (404, "{}".into());
+                }
+                (200, "{}".into())
+            });
+            let http = reqwest::Client::new();
+            let g = Gmail {
+                http: &http,
+                token: "t",
+            };
+            let send = |id: &'static str, seq| send_queued(&a, &g, seq, id, &[], &archive, false);
+
+            // Cut off mid-request, as quitting would: still queued for the next sync.
+            let seq = queue_change(&a, "slow", &[], &archive, false)
+                .unwrap()
+                .unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), send("slow", seq))
+                    .await
+                    .is_err()
+            );
+            assert!(db::has_pending(&a.db(), "slow"));
+            // A later change to that thread waits behind it rather than going out first.
+            assert_eq!(
+                queue_change(&a, "slow", &archive, &[], false).unwrap(),
+                None
+            );
+
+            let seq = queue_change(&a, "ok", &[], &archive, false)
+                .unwrap()
+                .unwrap();
+            send("ok", seq).await.unwrap();
+            assert!(
+                !db::has_pending(&a.db(), "ok"),
+                "taken by Gmail, so off the queue"
+            );
+
+            let seq = queue_change(&a, "gone", &[], &archive, false)
+                .unwrap()
+                .unwrap();
+            assert!(send("gone", seq).await.is_err());
+            assert!(
+                !db::has_pending(&a.db(), "gone"),
+                "refused by Gmail, so off the queue"
+            );
+        });
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn account_files_are_safe_and_migration_moves_the_old_database() {
