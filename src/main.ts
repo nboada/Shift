@@ -1,4 +1,5 @@
 import { iconHtml } from "./icons";
+import { DEVICE, IS_IOS } from "./platform";
 import { initOnboarding, onboardingDue, startOnboarding } from "./onboarding";
 import { initCleanup, openCleanup } from "./cleanup";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -167,7 +168,6 @@ function dateGroup(ms: number) {
 }
 
 const setView = (v: "mailboxes" | "list" | "reader") => (app.dataset.view = v);
-const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 // The iOS keyboard covers the page without resizing it; full-screen sheets size to what's still visible (--visible-height).
 if (IS_IOS && window.visualViewport) {
   const vv = window.visualViewport;
@@ -2469,7 +2469,7 @@ $("#send-later").addEventListener("click", async () => {
         action: () => openLater(times.find((t) => t.id === "tomorrow")!.at),
       },
       { item: "Separator" as const },
-      { text: "Sent from this Mac while Shift is running", enabled: false },
+      { text: `Sent from this ${DEVICE} while Shift is running`, enabled: false },
     ],
   });
   menu.popup();
@@ -3115,7 +3115,7 @@ async function signOut(account: string) {
     : "";
   const yes = await ask({
     title: `Sign out of ${account}?`,
-    message: `Mail stored on this Mac for this account will be removed. ${imapAccounts.has(account) ? "The mail on your server" : "Your Gmail"} isn't affected.${unsent}`,
+    message: `Mail stored on this ${DEVICE} for this account will be removed. ${imapAccounts.has(account) ? "The mail on your server" : "Your Gmail"} isn't affected.${unsent}`,
     confirm: "Sign out",
     danger: true,
   });

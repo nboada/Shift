@@ -1,4 +1,5 @@
 import { iconClass } from "./icons";
+import { DEVICE, IS_IOS } from "./platform";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ask } from "./dialog";
@@ -282,7 +283,7 @@ const render: Record<string, () => string> = {
         row(
           "Add a Google account",
           `<button class="secondary" data-cmd="add-account"><i class="ti ti-plus"></i> Add account</button>`,
-          "Sign in with Google in your browser. Mail is stored on this Mac.",
+          `Sign in with Google. Mail is stored on this ${DEVICE}.`,
         ) +
           row(
             "Add another email account",
@@ -299,7 +300,7 @@ const render: Record<string, () => string> = {
     const models: [string, string][] = [...p.models.map((m): [string, string] => [m, m]), ["custom", "Custom model…"]];
     const perTask = tasksOpen || AI_TASKS.some(([t]) => settings.ai.tasks[t].provider);
     return (
-      `<p class="section-lede">Write, reply and sort mail with your own AI account. Shift sends the provider only what a feature needs, straight from this Mac.</p>` +
+      `<p class="section-lede">Write, reply and sort mail with your own AI account. Shift sends the provider only what a feature needs, straight from this ${DEVICE}.</p>` +
       group(
         "",
         row(
@@ -349,14 +350,17 @@ const render: Record<string, () => string> = {
   },
 
   general: () =>
-    group(
-      "Startup",
-      row(
-        "Open Shift at login",
-        `<input type="checkbox" class="switch" role="switch" id="open-at-login" />`,
-        "Starts hidden in the Dock, so new mail notifications arrive without opening a window.",
-      ),
-    ) +
+    // iOS has no login items: the system decides when the app runs.
+    (IS_IOS
+      ? ""
+      : group(
+          "Startup",
+          row(
+            "Open Shift at login",
+            `<input type="checkbox" class="switch" role="switch" id="open-at-login" />`,
+            "Starts hidden in the Dock, so new mail notifications arrive without opening a window.",
+          ),
+        )) +
     group(
       "Sync",
       row(
@@ -368,7 +372,7 @@ const render: Record<string, () => string> = {
           [300, "Every 5 minutes"],
           [900, "Every 15 minutes"],
         ]),
-        "Opened mail always loads from this Mac instantly.",
+        `Opened mail always loads from this ${DEVICE} instantly.`,
       ),
     ) +
     group(
@@ -827,10 +831,12 @@ export function initSettings(c: Ctx) {
   const nav = root().querySelector(".settings-nav")!;
   nav.innerHTML =
     `<button id="settings-close" class="icon settings-close" data-tip="Close (Esc)"><i class="ti ti-x"></i></button>` +
-    SECTIONS.map(
-      ([id, label, icon]) =>
-        `<button data-section="${id}"><i class="${iconClass(icon)}"></i><span>${label}</span></button>`,
-    ).join("");
+    SECTIONS.filter(([id]) => !(IS_IOS && id === "shortcuts"))
+      .map(
+        ([id, label, icon]) =>
+          `<button data-section="${id}"><i class="${iconClass(icon)}"></i><span>${label}</span></button>`,
+      )
+      .join("");
   nav.addEventListener("click", (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-section]");
     if (b) show(b.dataset.section!);
