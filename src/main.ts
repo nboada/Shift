@@ -156,6 +156,16 @@ function dateGroup(ms: number) {
 
 const setView = (v: "mailboxes" | "list" | "reader") => (app.dataset.view = v);
 
+// WebKit's own menu (Reload, Inspect Element, Open Link) only where Shift has none: text fields and selected text keep
+// it for Copy, Paste and Look Up. Reload would restart the app and Open Link would load the page inside it. In dev
+// builds, ⌥-right-click still reaches Inspect Element.
+document.addEventListener("contextmenu", (e) => {
+  if (e.defaultPrevented || (import.meta.env.DEV && e.altKey)) return;
+  const el = e.target as Element;
+  if (el.closest("input, textarea, [contenteditable]") || !window.getSelection()?.isCollapsed) return;
+  e.preventDefault();
+});
+
 // Dev builds surface uncaught errors on screen, since the webview console isn't visible.
 if (import.meta.env.DEV) {
   window.addEventListener("error", (e) => toast(`Error: ${e.message}`));
