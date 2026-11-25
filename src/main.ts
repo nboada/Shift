@@ -198,18 +198,12 @@ const isHex = (c: string | null): c is string => !!c && /^#[0-9a-f]{6}$/i.test(c
 // Gmail colours go through a generated stylesheet (no inline styles); only #rrggbb values get into it.
 function labelColorCss(colors: string[]) {
   const hexes = new Set([...colors, ...LABEL_COLORS.map((c) => c[1])].filter(isHex).map((c) => c.toLowerCase()));
-  // Dots and chips take the colour as is, like Gmail; chip text is Gmail's pairing for its palette, else black or white
-  // by brightness.
-  const text = (h: string) => {
-    const paired = LABEL_COLORS.find((c) => c[1].toLowerCase() === h)?.[2];
-    if (paired) return paired;
-    const [r, g, b] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-    return r * 0.299 + g * 0.587 + b * 0.114 > 150 ? "#000000" : "#ffffff";
-  };
+  // Dots take the colour as is; list chips a faded tint of it with the name in the colour, mixed toward the text colour
+  // so pale ones (yellow, mint) stay readable.
   $("#label-colors").textContent = [...hexes]
     .map(
       (h) => `.label-dot[data-color="${h.slice(1)}"] { background: ${h}; }
-.row-label[data-color="${h.slice(1)}"] { background: ${h}; color: ${text(h)}; }`,
+.row-label[data-color="${h.slice(1)}"] { background: color-mix(in srgb, ${h} 16%, transparent); color: color-mix(in srgb, ${h} 70%, var(--text)); }`,
     )
     .join("\n");
 }
