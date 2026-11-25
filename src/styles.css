@@ -366,6 +366,13 @@ button.primary:disabled { opacity: 0.6; }
   border-bottom: 1px solid var(--line);
 }
 .toolbar h2 { flex: 1; margin: 0 6px; font-size: 19px; letter-spacing: -0.01em; }
+.toolbar h2:has(+ .acct-dots:not([hidden])) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-dots { flex: 1; display: flex; align-items: center; gap: 0; margin-top: 2px; /* optical: centre on the letters, not the line box */ }
+.acct-pick { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; }
+.acct-pick:hover { background: var(--hover); }
+.acct-pick .account-dot { width: 9px; height: 9px; transition: opacity 0.15s, box-shadow 0.15s; }
+.acct-dots.filtered .acct-pick:not(.on) .account-dot { opacity: 0.3; }
+.acct-pick.on .account-dot { box-shadow: 0 0 0 2px var(--pane, var(--card)), 0 0 0 3.5px var(--acct, var(--accent)); }
 .toolbar .back { display: none; }
 .actions { display: flex; gap: 10px; }
 .app:not([data-open]) .actions { display: none; }
@@ -508,9 +515,7 @@ button.primary:disabled { opacity: 0.6; }
   font: inherit;
 }
 
-.threads { list-style: none; margin: 0; padding: 0 6px 48px; overflow-y: auto; flex: 1; outline: 0; }
-/* Bottom fade hints there's more to scroll; the 48px bottom padding lets the last row clear it. */
-.threads { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 48px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 48px), transparent); }
+.threads { list-style: none; margin: 0; padding: 0 6px 8px; overflow-y: auto; flex: 1; outline: 0; }
 .threads li[data-id] {
   display: grid;
   grid-template-columns: 8px 32px minmax(0, 1fr) auto;
@@ -564,16 +569,23 @@ button.primary:disabled { opacity: 0.6; }
   line-height: 18px;
   vertical-align: 1px;
 }
-.threads .date { grid-column: 4; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.threads .date { grid-column: 4; justify-self: end; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .threads .subject { grid-column: 3 / 5; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .threads .subject-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-labels { flex: none; display: flex; gap: 4px; }
 .row-label { display: inline-flex; align-items: center; gap: 5px; max-width: 110px; padding: 1px 7px; border-radius: 4px; background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 500; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-label.more { padding: 1px 6px; }
 .reader-labels { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 14px; }
+/* The subject stays in view while the conversation scrolls, with its labels beside it. top cancels the reader's padding, which sticky positioning keeps clear of. */
+.reader-head { position: sticky; top: -20px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -20px -28px 14px; padding: 10px 28px; border-bottom: 1px solid var(--line); background: var(--reader); }
+.reader .reader-head h1 { margin: 0; font-size: 17px; font-weight: 650; line-height: 1.3; }
+.reader-head .reader-labels { margin: 0; }
+.reader-head .ai-labelled { flex-basis: 100%; margin: 0; }
 .reader-labels .row-label { max-width: none; padding: 2px 9px; font-size: 12px; }
 .threads li.selected .row-label:not([data-color]) { background: var(--card); }
 .threads li.unread .subject { font-weight: 600; }
+.threads .snippet:has(+ .row-labels) { grid-column: 3; }
+.threads li > .row-labels { grid-column: 4; align-self: end; justify-self: end; }
 .threads .snippet {
   grid-column: 3 / 5;
   color: var(--muted);
@@ -585,7 +597,7 @@ button.primary:disabled { opacity: 0.6; }
 .threads .pin { color: var(--pin); margin-left: 6px; }
 @font-face { font-family: "tabler-icons-filled"; font-display: block; src: url("../node_modules/@tabler/icons-webfont/dist/fonts/tabler-icons-filled.woff2") format("woff2"); }
 .toolbar [data-action="star"][aria-pressed="true"] { color: var(--pin); }
-.toolbar [data-action="star"][aria-pressed="true"] .ti-pinned::before { font-family: "tabler-icons-filled"; content: "\f68e"; }
+.toolbar [data-action="star"][aria-pressed="true"] .ti-pinned::before, .threads .pin::before { font-family: "tabler-icons-filled"; content: "\f68e"; }
 .threads .section {
   display: flex;
   align-items: center;
@@ -616,7 +628,7 @@ body.resizing { cursor: col-resize; }
 body.resizing iframe { pointer-events: none; }
 
 /* reader */
-.reader-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--reader); border-radius: 0 14px 14px 0; box-shadow: var(--pane-shadow); overflow: hidden; }
+.reader-pane { isolation: isolate; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--reader); border-radius: 0 14px 14px 0; box-shadow: var(--pane-shadow); overflow: hidden; }
 .app:not([data-open]) .reader-pane .toolbar { border-bottom-color: transparent; }
 .reader { flex: 1; overflow-y: auto; padding: 20px 28px 40px; user-select: text; }
 .reader > .message { scroll-margin-top: 12px; }
@@ -1218,6 +1230,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 :root[data-layout="wide"] .threads .subject { order: 1; flex: 0 1 auto; max-width: 50%; font-size: 14px; font-weight: 500; }
 :root[data-layout="wide"] .threads li.unread .subject { font-weight: 650; }
 :root[data-layout="wide"] .threads .snippet { order: 2; flex: 1; min-width: 0; display: block; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
+:root[data-layout="wide"] .threads li > .row-labels { order: 2; align-self: center; }
 :root[data-layout="wide"] .threads .date { order: 3; flex: none; margin-left: 12px; font-size: 11.5px; font-weight: 500; }
 :root[data-layout="wide"] .threads .row-actions { top: 50%; bottom: auto; transform: translateY(-50%); }
 :root[data-reduce-motion="true"] *, :root[data-reduce-motion="true"] *::before { transition: none !important; animation: none !important; }
