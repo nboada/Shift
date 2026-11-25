@@ -51,9 +51,9 @@ The one-column layout exists; this is about touch.
 
 ### 3. iOS behaviour (3–5 days)
 
-- **Google sign-in:** the iOS OAuth client and `ASWebAuthenticationSession` (decision 2). `auth::sign_in` gets an iOS branch with the same PKCE code and a different redirect.
+- **Google sign-in:** done. The iOS OAuth client (`GOOGLE_IOS_CLIENT_ID`, no secret) through the system sheet (`tauri-plugin-web-auth`, ASWebAuthenticationSession); tokens go to the data-protection Keychain, readable after first unlock.
 - **IMAP accounts:** they work as they are (password in the Keychain; plain TCP + TLS is allowed on iOS).
-- **Attachments:** iOS has no Downloads folder and no `xattr` quarantine. `open_attachment` gets an iOS branch: write to the app's temp folder, then open Quick Look or the share sheet (a small Swift plugin, or the opener plugin if it covers it).
+- **Attachments:** done. On iOS a tap hands the file to the share sheet (`navigator.share`), which previews it and offers Save to Files and other apps; no native code.
 - **Notifications:** ask for permission on first launch after sign-in. Tapping a notification opens the email; the existing `open-from-notification` event already does this, without the desktop window calls.
 - **Push (decision 1):** register for remote notifications (a Swift plugin hands the APNs device token to Rust), send it with the account's watch to the relay, and renew `users.watch` every few days. A push wakes the app for one `sync` with a time limit, then a local notification as today. An APNs key (.p8) from the developer account goes to the relay as a Worker secret.
 - **Keychain:** items stay readable after first unlock (`kSecAttrAccessibleAfterFirstUnlock`), so background refresh can sign in.
