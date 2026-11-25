@@ -573,14 +573,46 @@ async function loadThreads() {
     });
     return renderThreads();
   }
-  const list = search
-    ? await invoke<Thread[]>("search", { query: search, accounts: scope })
-    : await invoke<Thread[]>("threads", { label: mailbox, accounts: scope });
+  if (search) return searchAccounts(search, seq);
+  const list = await invoke<Thread[]>("threads", { label: mailbox, accounts: scope });
   if (seq !== loadSeq) return;
   threads = sortForInbox(list);
   renderThreads();
   // A list too short to scroll (Trash, a quiet label) asks for older mail straight away.
   if (threadList.scrollHeight <= threadList.clientHeight) loadMore();
+}
+
+const searchingTitle = (q: string) => `Searching ${inMail() === "in Gmail" ? "Gmail" : "your mail"} for “${q}”…`;
+
+/**
+ * Gmail search, one request per account at once: each account's results join the list as they arrive, rather than
+ * waiting for the slowest account (and every old conversation it has to download first). Rejects with the first
+ * error once all have answered, so the results that did arrive stay.
+ */
+async function searchAccounts(query: string, seq: number) {
+  const inView = scope ?? accounts.filter((a) => accountSettings(a).unified !== false);
+  let pending = inView.length;
+  const errors: unknown[] = [];
+  await Promise.all(
+    inView.map(async (account) => {
+      try {
+        const found = await invoke<Thread[]>("search", { query, accounts: [account] });
+        if (seq !== loadSeq) return;
+        const ids = new Set(found.map((t) => t.id));
+        const merged = [...threads.filter((t) => t.account !== account || !ids.has(t.id)), ...found];
+        threads = sortForInbox(merged.sort((a, b) => b.date - a.date));
+      } catch (e) {
+        errors.push(e);
+      } finally {
+        pending--;
+        if (seq === loadSeq) {
+          renderThreads();
+          if (pending) $("#list-title").textContent = searchingTitle(query);
+        }
+      }
+    }),
+  );
+  if (errors.length) throw errors[0];
 }
 
 /**
@@ -3038,12 +3070,12 @@ document.querySelectorAll<HTMLFormElement>(".search").forEach((form) =>
     try {
       threads = await invoke<Thread[]>("search_local", { query: value, accounts: scope });
       renderThreads();
-      $("#list-title").textContent = `Searching ${inMail() === "in Gmail" ? "Gmail" : "your mail"} for “${value}”…`;
+      $("#list-title").textContent = searchingTitle(value);
       await loadThreads();
     } catch (err) {
-      // Offline or Gmail error: keep the local results that are already showing.
+      // Offline or Gmail error: keep the results already showing (this Mac's, and any account that answered).
       renderThreads();
-      toast(`Showing results from this Mac only: ${err}`);
+      toast(`Some results may be missing: ${err}`);
     }
   }),
 );
