@@ -940,9 +940,8 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .ai-rule span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings .ai-rule input[type="text"] { width: 100%; }
 /* Floated, so the message wraps around it rather than running underneath; z-index lifts it over the editor, which Tiptap positions. */
-#ai-write { float: right; position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; margin: 10px 12px 4px 8px; padding: 4px 10px; border-radius: 8px; background: transparent; font-size: 13px; }
+#ai-write { float: right; position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; margin: 10px 12px 4px 8px; padding: 4px 10px; border-radius: 8px; font-size: 13px; }
 #ai-write i { color: var(--brand); font-size: 16px; }
-#ai-write:hover:not(:disabled) { background: color-mix(in srgb, var(--brand), transparent 92%); border-color: color-mix(in srgb, var(--brand), transparent 60%); }
 #ai-write.busy i { animation: ai-pulse 1s ease-in-out infinite; color: var(--brand); }
 @keyframes ai-pulse { 50% { opacity: 0.35; } }
 /* On the library's own element: it sets its defaults there, which would override values inherited from a wrapper. */
@@ -1404,8 +1403,8 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .compose-quote iframe { display: block; width: 100%; height: 80px; border: 0; background: #fff; pointer-events: none; }
 .compose-quote.ProseMirror-selectednode { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-button.secondary { padding: 6px 12px; border: 1px solid var(--card-line); background: var(--bg); font-weight: 500; }
-button.secondary:hover:not(:disabled) { background: var(--hover); }
+button.secondary { padding: 6px 12px; border: 1px solid var(--card-line); background: transparent; font-weight: 500; }
+button.secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--brand), transparent 92%); border-color: color-mix(in srgb, var(--brand), transparent 60%); }
 button.secondary:disabled { opacity: 0.5; }
 .empty-btn, .quiet-danger { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; color: var(--muted); font-size: 12.5px; font-weight: 500; transition: background-color 0.12s, color 0.12s; }
 .empty-btn i, .quiet-danger i { font-size: 15px; }
