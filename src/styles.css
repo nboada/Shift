@@ -599,7 +599,7 @@ button.primary:disabled { opacity: 0.6; }
 .threads .pin { color: var(--pin); margin-left: 6px; }
 @font-face { font-family: "tabler-icons-filled"; font-display: block; src: url("../node_modules/@tabler/icons-webfont/dist/fonts/tabler-icons-filled.woff2") format("woff2"); }
 .toolbar [data-action="star"][aria-pressed="true"] { color: var(--pin); }
-.toolbar [data-action="star"][aria-pressed="true"] .ti-pinned::before { font-family: "tabler-icons-filled"; content: "\f68e"; }
+.toolbar [data-action="star"][aria-pressed="true"] .ti-pinned::before, .threads .pin::before { font-family: "tabler-icons-filled"; content: "\f68e"; }
 .threads .section {
   display: flex;
   align-items: center;
