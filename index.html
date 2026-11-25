@@ -17,10 +17,10 @@
       <div class="signin-card">
         <img class="signin-mark" src="/shift-icon.png" alt="" />
         <h1>Welcome to Shift</h1>
-        <p>A fast Gmail app that keeps your mail on your Mac.</p>
+        <p>A fast email app that keeps your mail on your Mac.</p>
         <ul class="signin-points">
-          <li><i class="ti ti-lock"></i>Your mail goes between your Mac and Google, nowhere else</li>
-          <li><i class="ti ti-users"></i>Every Gmail account in one inbox</li>
+          <li><i class="ti ti-lock"></i>Your mail goes between your Mac and your mail provider, nowhere else</li>
+          <li><i class="ti ti-users"></i>Gmail and your other accounts in one inbox</li>
           <li><i class="ti ti-keyboard"></i>Built for the keyboard</li>
         </ul>
         <!-- Google's official button artwork, unchanged, as its sign-in branding guidelines require. -->
@@ -28,6 +28,7 @@
           <img class="gsi-light" src="/google-signin-light.svg" alt="" width="180" height="40" />
           <img class="gsi-dark" src="/google-signin-dark.svg" alt="" width="180" height="40" />
         </button>
+        <button type="button" id="signin-other" class="link-btn">Use another email account</button>
         <p id="signin-error" class="error"></p>
       </div>
     </section>
@@ -214,6 +215,31 @@
         <button type="button" class="secondary" data-cancel></button>
         <button type="button" class="primary" data-ok></button>
       </footer>
+    </dialog>
+    <dialog id="imap-signin" class="ask imap-signin" aria-labelledby="imap-title">
+      <form method="dialog">
+        <h3 id="imap-title">Add an email account</h3>
+        <p>iCloud, Fastmail, Yahoo, or your own domain. Many providers want an app password here rather than your usual one.</p>
+        <label>Email <input name="email" type="email" required autocomplete="off" spellcheck="false" /></label>
+        <label>Password <input name="password" type="password" required autocomplete="off" /></label>
+        <details>
+          <summary>Server settings</summary>
+          <label>Username <input name="user" autocomplete="off" spellcheck="false" /></label>
+          <div class="imap-row">
+            <label>IMAP server <input name="imapHost" autocomplete="off" spellcheck="false" placeholder="Found for you" /></label>
+            <label>Port <input name="imapPort" inputmode="numeric" value="993" /></label>
+          </div>
+          <div class="imap-row">
+            <label>SMTP server <input name="smtpHost" autocomplete="off" spellcheck="false" placeholder="Found for you" /></label>
+            <label>Port <input name="smtpPort" inputmode="numeric" value="465" /></label>
+          </div>
+        </details>
+        <p class="error" aria-live="polite"></p>
+        <footer>
+          <button type="button" class="secondary" data-cancel>Cancel</button>
+          <button type="submit" class="primary" data-ok>Sign in</button>
+        </footer>
+      </form>
     </dialog>
     <div id="link-status" class="link-status" aria-live="polite" hidden></div>
   </body>
