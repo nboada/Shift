@@ -1723,6 +1723,7 @@ threadList.addEventListener("contextmenu", (e) => {
     { id: "reply", label: "Reply", icon: "arrow-bend-up-left", key: keyLabel("reply") },
     { id: "replyAll", label: "Reply all", icon: "arrow-bend-double-up-left", key: keyLabel("replyAll") },
     { id: "forward", label: "Forward", icon: "arrow-bend-up-right", key: keyLabel("forward") },
+    { id: "aiReply", label: "Draft a reply with AI", icon: "message-ai" },
     "-",
     // Spam and Trash are on their way out: no reading state, pins or labels, just where the email goes next.
     ...(binned
