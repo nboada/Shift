@@ -28,6 +28,10 @@ Run all the checks (`bun test`, `bun run build`, `bun run format:check`, `cargo 
 
 Before writing or changing Rust, load the `anthropic-skills:rust-best-practices` skill and follow it. `Cargo.toml`'s `[lints.clippy]` enforces part of it (no `unwrap()` outside tests, `perf`, redundant clones), and an exception takes `#[expect(..., reason = "...")]`, not `#[allow]`. The rest is judgement: borrow rather than clone, `&str` and `&[T]` parameters where nothing needs ownership, `anyhow` with `?` and `.context()`. Run `cargo fmt` after editing Rust. The commit that first formatted it is in `.git-blame-ignore-revs`.
 
+## Issues and branches
+
+A real bug gets a GitHub issue first (what happens, how to reproduce it, what fixed looks like), then a branch `fix/<issue>-<slug>` (e.g. `fix/123-spam-reappears`) in its own worktree, and a pull request whose body says `Closes #<issue>`. Small tweaks (copy, a style, a one-line fix) go straight to main. Issues are public: screenshots come from the demo, never a real inbox, and a `roadmap:` label puts the issue on the site's roadmap page, so add one only on purpose.
+
 ## Public repository
 
 The repository is public (MIT), and so is anything ever pushed, pull-request branches included. Never commit secrets (keys, tokens, `.env` files, certificates, the update signing key), real email content or addresses from anyone's mailbox, screenshots of a real inbox, app databases, `.wrangler` state or client data; demo fixtures stay invented. Check the staged diff before every commit and stage named paths rather than everything. GitHub secret scanning and push protection are on, and `.github/workflows/secrets.yml` runs gitleaks on every push and pull request. Secrets live in the Keychain or `.env.local` (git-ignored), never in the tree.
