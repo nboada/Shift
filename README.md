@@ -1,46 +1,46 @@
-# Shift
+<p align="center">
+  <img src="public/shift-icon.png" width="96" height="96" alt="Shift icon">
+</p>
 
-A fast Gmail client for macOS: Rust core (Tauri 2) with a web UI. Mail is cached in local SQLite, so the UI never waits on the network. Changes come in through Gmail's history API every 30 seconds.
+<h1 align="center">Shift</h1>
 
-**Download:** [getshiftmail.com](https://getshiftmail.com) or the [latest release](https://github.com/nboada/Shift/releases/latest) (a signed, notarized universal app that updates itself).
+<p align="center">
+  A fast, keyboard-friendly Gmail app for macOS. Free and open source.<br>
+  <a href="https://getshiftmail.com/download"><b>Download for macOS</b></a> ·
+  <a href="https://getshiftmail.com">Website</a> ·
+  <a href="https://getshiftmail.com/changelog">Changelog</a> ·
+  <a href="https://github.com/nboada/Shift/releases/latest">Latest release</a>
+</p>
 
-## Setup
+<p align="center">
+  <img src="docs/screenshots/reader.png" alt="Shift showing the inbox and an open conversation">
+</p>
 
-1. Google Cloud Console: create a project, enable the **Gmail API**, set up the OAuth consent screen (add your account as a test user, and the `https://mail.google.com/` scope, which Empty Trash/Spam needs to delete mail permanently), then create an OAuth client of type **Desktop app**.
-2. Put the client credentials in `.env.local` (git-ignored) as `GOOGLE_CLIENT_ID=` and `GOOGLE_CLIENT_SECRET=`, then run:
+Shift keeps a copy of your mail in a local database, so opening, searching and switching accounts never waits on the network. Changes sync with Gmail in the background. The app is a Rust core (Tauri 2) with a vanilla TypeScript UI, signed and notarized, and it updates itself.
 
-```sh
-bun install
-bun run tauri dev   # build.rs bakes GOOGLE_CLIENT_ID/SECRET from .env.local into the binary
-```
+## Features
 
+- **Several accounts, one inbox.** A unified view, or one account at a time.
+- **Keyboard first.** Single-key shortcuts (`E` archive, `R` reply, `J`/`K` next and previous), Apple Mail's ⌘ shortcuts, a ⌘K command palette, and every binding can be remapped.
+- **Send later and undo send.** Schedule emails for later today, tomorrow morning, next week or any time.
+- **Calendar invites inline.** Answer Yes, Maybe or No from the email itself.
+- **A proper composer.** Rich text, signatures, attachments by drag and drop, drafts saved to Gmail as you type.
+- **Optional AI with your own key.** Draft replies, rewrite text, sort mail into your labels and suggest clean-ups (Anthropic or any OpenAI-compatible API).
+- **No Shift servers.** Mail goes between your Mac and Google only.
 
+<table>
+  <tr>
+    <td><img src="docs/screenshots/invite.png" alt="A calendar invite with Yes, Maybe and No buttons"></td>
+    <td><img src="docs/screenshots/palette.png" alt="The ⌘K command palette"></td>
+  </tr>
+  <tr>
+    <td align="center">Answer invites without leaving your inbox</td>
+    <td align="center">Everything is one ⌘K away</td>
+  </tr>
+</table>
 
-## Demo mode
-
-`bun run demo` opens a fake mailbox in its own database (`demo.sqlite3`), reset on every launch. Nothing talks to Gmail: actions only change the local cache, search is local and Send is a no-op. Use it when working on the UI. Only one of `tauri dev` and `demo` can run at a time (both use port 1420).
-
-## Accounts
-
-Each Google account has its own database in `accounts/<email>.sqlite3` (app data folder) and its own Keychain item for its refresh token. The sidebar switches between **All accounts** (unified; accounts can opt out in Settings → Accounts) and each account. Add accounts from Settings → Accounts, the ⌘K palette, or the first-run screen. The single-account layout (`mail.sqlite3` + one Keychain item) migrates on first launch. Demo mode has two in-memory accounts.
-
-Before public release, see `docs/google-verification.md`.
-
-## Composer
-
-New emails, replies and forwards open in a resizable window (Settings → Composer can open replies inline under the thread instead). The body is a rich-text editor (Tiptap): ⌘B, ⌘I, ⌘U and ⌘K (link) format text, and a small toolbar appears over a selection with lists and quote too. Replies and forwards quote the original as a blockquote, with your signature above it in the editor. Mail goes out as HTML with a plain-text version. Recipients are chips with autocomplete from people you've emailed (`suggest_contacts`). Drafts save to Gmail Drafts about 1.5s after you stop typing (15s when over 1 MB of files is attached, since Gmail re-uploads them on every save), and closing keeps the draft (if it can't be saved, the composer stays open). Emails in Drafts reopen in the composer. Sending a saved draft uses `drafts.send`, which removes it from Drafts. Undo send holds the email for a few seconds through the same queue as Send later, so quitting during the countdown still sends it.
-
-Attach files with the paperclip or by dropping them on the composer (25 MB in total, Gmail's limit). Forwarding includes the original attachments. In the reader, attachments are listed under each message. Click one to save it to Downloads and open it. Apps, scripts and other unusual file types are shown in Finder instead of being opened. Inline images (`cid:`) load on demand.
-
-## Send later
-
-The clock next to Send schedules the email: Later today, Tomorrow morning, This weekend, Next week (set in Settings → Scheduling), or a date and time you pick. Gmail's API has no scheduled send, so the email is saved to Gmail Drafts and Shift sends it when it's due. Shift has to be open at that time; anything overdue goes out the next time it opens. The **Scheduled** mailbox lists what's waiting: click one to edit it (that cancels its schedule until you send or schedule it again), or right-click to send now or cancel.
-
-## Settings
-
-Open with the gear in the sidebar or `⌘,`. Preferences are saved to `settings.json` in the app data folder; AI provider keys go to the macOS Keychain.
-
-## Keyboard shortcuts
+<details>
+<summary><b>Keyboard shortcuts</b></summary>
 
 Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every action can be remapped in Settings → Keyboard shortcuts. The defaults live in `src/keys.ts`.
 
@@ -69,7 +69,57 @@ Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every acti
 | Undo archive, delete, spam or move | `⌘Z` |
 | Close menu / clear selection / back | `Esc` |
 
-## Layout
+</details>
+
+## How it works
+
+<details>
+<summary><b>Accounts</b></summary>
+
+Each Google account has its own database in `accounts/<email>.sqlite3` (app data folder) and its own Keychain item for its refresh token. The sidebar switches between **All accounts** (unified; accounts can opt out in Settings → Accounts) and each account. Add accounts from Settings → Accounts, the ⌘K palette, or the first-run screen. The single-account layout (`mail.sqlite3` + one Keychain item) migrates on first launch. Demo mode has two in-memory accounts.
+
+</details>
+
+<details>
+<summary><b>Composer</b></summary>
+
+New emails, replies and forwards open in a resizable window (Settings → Composer can open replies inline under the thread instead). The body is a rich-text editor (Tiptap): ⌘B, ⌘I, ⌘U and ⌘K (link) format text, and a small toolbar appears over a selection with lists and quote too. Replies and forwards quote the original as a blockquote, with your signature above it in the editor. Mail goes out as HTML with a plain-text version. Recipients are chips with autocomplete from people you've emailed (`suggest_contacts`). Drafts save to Gmail Drafts about 1.5s after you stop typing (15s when over 1 MB of files is attached, since Gmail re-uploads them on every save), and closing keeps the draft (if it can't be saved, the composer stays open). Emails in Drafts reopen in the composer. Sending a saved draft uses `drafts.send`, which removes it from Drafts. Undo send holds the email for a few seconds through the same queue as Send later, so quitting during the countdown still sends it.
+
+Attach files with the paperclip or by dropping them on the composer (25 MB in total, Gmail's limit). Forwarding includes the original attachments. In the reader, attachments are listed under each message. Click one to save it to Downloads and open it. Apps, scripts and other unusual file types are shown in Finder instead of being opened. Inline images (`cid:`) load on demand.
+
+</details>
+
+<details>
+<summary><b>Send later</b></summary>
+
+The clock next to Send schedules the email: Later today, Tomorrow morning, This weekend, Next week (set in Settings → Scheduling), or a date and time you pick. Gmail's API has no scheduled send, so the email is saved to Gmail Drafts and Shift sends it when it's due. Shift has to be open at that time; anything overdue goes out the next time it opens. The **Scheduled** mailbox lists what's waiting: click one to edit it (that cancels its schedule until you send or schedule it again), or right-click to send now or cancel.
+
+</details>
+
+<details>
+<summary><b>Settings</b></summary>
+
+Open with the gear in the sidebar or `⌘,`. Preferences are saved to `settings.json` in the app data folder; AI provider keys go to the macOS Keychain.
+
+</details>
+
+## Building from source
+
+1. Google Cloud Console: create a project, enable the **Gmail API**, set up the OAuth consent screen (add your account as a test user, and the `https://mail.google.com/` scope, which Empty Trash/Spam needs to delete mail permanently), then create an OAuth client of type **Desktop app**.
+2. Put the client credentials in `.env.local` (git-ignored) as `GOOGLE_CLIENT_ID=` and `GOOGLE_CLIENT_SECRET=`, then run:
+
+```sh
+bun install
+bun run tauri dev   # build.rs bakes GOOGLE_CLIENT_ID/SECRET from .env.local into the binary
+```
+
+Before public release, see `docs/google-verification.md`.
+
+### Demo mode
+
+`bun run demo` opens a fake mailbox in its own database (`demo.sqlite3`), reset on every launch. Nothing talks to Gmail: actions only change the local cache, search is local and Send is a no-op. Use it when working on the UI. Only one of `tauri dev` and `demo` can run at a time (both use port 1420).
+
+### Layout
 
 - `src-tauri/src/auth.rs`: OAuth loopback + PKCE; the refresh token lives in the macOS Keychain
 - `src-tauri/src/gmail.rs`: Gmail REST client (backoff on 429/5xx)
@@ -79,7 +129,7 @@ Spark-style single keys and Apple Mail's ⌘ shortcuts both work, and every acti
 - `src-tauri/src/settings.rs`: settings file and AI keys in the Keychain
 - `src/`: UI (vanilla TypeScript, Tabler icons); `settings.ts` + `settings-ui.ts` for preferences, `keys.ts` for shortcuts
 
-## Checks
+### Checks
 
 ```sh
 cd src-tauri && cargo test && cargo clippy --all-targets
