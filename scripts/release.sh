@@ -26,6 +26,7 @@ bun install --frozen-lockfile
 (cd site && bun install --frozen-lockfile)
 bun test
 bun run build
+bun run format:check
 (cd src-tauri && cargo fmt --check && cargo test && cargo clippy --all-targets -- -D warnings)
 
 PUBLISH=0
