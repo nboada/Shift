@@ -27,10 +27,8 @@ dist-ssr
 # Wrangler local state (local KV and R2 data)
 .wrangler
 
-# Release artifacts staged by scripts/release.sh; they are deployed, not committed
-site/.release/
-site/public/updates/
-# (old staging folder; releases now stage in site/.release, which is never deployed)
+# Release artifacts staged by scripts/release.sh; they're published as GitHub releases, not committed
+.release/
 
 # Astro build cache
 .astro
