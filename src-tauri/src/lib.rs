@@ -1909,7 +1909,11 @@ async fn push_imap(
         Ok(mut session) => {
             for (seq, id) in jobs {
                 match imap::apply(&mut session, a, id, add, remove, trash).await {
-                    Ok(()) => db::done_pending(&a.db(), *seq)?,
+                    // The conversation as the server now has it: moved copies, their new folders.
+                    Ok(()) => {
+                        db::done_pending(&a.db(), *seq)?;
+                        imap::refresh_thread(&mut a.db(), id)?;
+                    }
                     Err(e) if imap::is_transient(&e) => break,
                     Err(e) => {
                         db::done_pending(&a.db(), *seq)?;

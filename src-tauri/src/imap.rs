@@ -1226,7 +1226,10 @@ async fn replay(s: &mut Session, a: &Account) -> Result<()> {
     let ops = db::pending_ops(&a.db())?;
     for op in ops {
         match apply(s, a, &op.thread, &op.add, &op.remove, op.trash).await {
-            Ok(()) => db::done_pending(&a.db(), op.seq)?,
+            Ok(()) => {
+                db::done_pending(&a.db(), op.seq)?;
+                refresh_thread(&mut a.db(), &op.thread)?;
+            }
             Err(e) if is_transient(&e) => return Err(e),
             Err(e) => {
                 eprintln!("{} change to {}: {e:#}", a.email, op.thread);
@@ -1410,6 +1413,212 @@ mod tests {
                 .query_row("SELECT count(*) FROM imap_messages", [], |r| r.get(0))
                 .expect("count");
             println!("{n} threads, {m} messages");
+        });
+    }
+
+    fn thread_labels(c: &Connection, thread: &str) -> Vec<String> {
+        let mut st = c
+            .prepare("SELECT label_id FROM thread_labels WHERE thread_id = ?1 ORDER BY label_id")
+            .expect("query");
+        st.query_map([thread], |r| r.get(0))
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("labels")
+    }
+
+    /// Every action against a real account, each undone: read and pin toggled, archive and back, a draft saved and
+    /// deleted, and an email to itself (checked for a leaked Bcc) trashed and deleted for good.
+    /// `SHIFT_IMAP_EMAIL=… SHIFT_IMAP_PASSWORD_FILE=… cargo test live_imap_actions -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs a real IMAP account, and changes it (undoing each change)"]
+    fn live_imap_actions() {
+        let email = std::env::var("SHIFT_IMAP_EMAIL").expect("SHIFT_IMAP_EMAIL");
+        let password = std::fs::read_to_string(
+            std::env::var("SHIFT_IMAP_PASSWORD_FILE").expect("password file"),
+        )
+        .expect("password");
+        let password = password.trim_end_matches(['\r', '\n']).to_string();
+        tauri::async_runtime::block_on(async {
+            let cfg = guess(&email).await.expect("servers");
+            let a = crate::Account::new(email.clone(), conn());
+            sync(&a, &cfg, &password).await.expect("synced");
+            let thread: String = a
+                .db()
+                .query_row(
+                    "SELECT t.id FROM threads t JOIN thread_labels l ON l.thread_id = t.id
+                     WHERE l.label_id = 'INBOX' ORDER BY t.date DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("an Inbox conversation");
+            let before = thread_labels(&a.db(), &thread);
+            println!("thread {thread}: {before:?}");
+            let step = |add: &[&str], remove: &[&str], trash: bool| {
+                let add: Vec<String> = add.iter().map(ToString::to_string).collect();
+                let remove: Vec<String> = remove.iter().map(ToString::to_string).collect();
+                (add, remove, trash)
+            };
+            let unread = before.iter().any(|l| l == "UNREAD");
+            let steps = [
+                (
+                    if unread {
+                        step(&[], &["UNREAD"], false)
+                    } else {
+                        step(&["UNREAD"], &[], false)
+                    },
+                    "read toggled",
+                ),
+                (
+                    if unread {
+                        step(&["UNREAD"], &[], false)
+                    } else {
+                        step(&[], &["UNREAD"], false)
+                    },
+                    "read restored",
+                ),
+                (step(&["STARRED"], &[], false), "pinned"),
+                (step(&[], &["STARRED"], false), "unpinned"),
+                (step(&[], &["INBOX"], false), "archived"),
+                (step(&["INBOX"], &[], false), "back in Inbox"),
+            ];
+            for ((add, remove, trash), what) in steps {
+                let mut s = connect(&cfg, &password).await.expect("session");
+                apply(&mut s, &a, &thread, &add, &remove, trash)
+                    .await
+                    .expect(what);
+                refresh_thread(&mut a.db(), &thread).expect("refreshed");
+                let _ = s.logout().await;
+                sync(&a, &cfg, &password).await.expect("synced");
+                let now = thread_labels(&a.db(), &thread);
+                println!("{what}: {now:?}");
+                for l in &add {
+                    assert!(now.contains(l), "{what}: {l} missing");
+                }
+                for l in &remove {
+                    assert!(!now.contains(l), "{what}: {l} still there");
+                }
+            }
+            assert_eq!(thread_labels(&a.db(), &thread), before, "labels restored");
+
+            let token = hash_id("", &crate::now_ms().to_string());
+            let draft = format!(
+                "From: {email}\r\nTo: {email}\r\nSubject: Shift draft test {token}\r\nMessage-ID: <draft-{token}@shift.test>\r\n\r\nDraft.\r\n"
+            );
+            let mut s = connect(&cfg, &password).await.expect("session");
+            append(&mut s, &a, "DRAFT", "(\\Draft \\Seen)", draft.as_bytes())
+                .await
+                .expect("draft saved");
+            let _ = s.logout().await;
+            sync(&a, &cfg, &password).await.expect("synced");
+            let found: i64 = a
+                .db()
+                .query_row(
+                    "SELECT count(*) FROM imap_messages WHERE msgid = ?1",
+                    [format!("<draft-{token}@shift.test>")],
+                    |r| r.get(0),
+                )
+                .expect("count");
+            assert_eq!(found, 1, "draft synced");
+            let mut s = connect(&cfg, &password).await.expect("session");
+            remove_by_msgid(&mut s, &a, "DRAFT", &format!("<draft-{token}@shift.test>"))
+                .await
+                .expect("draft deleted");
+            let _ = s.logout().await;
+            sync(&a, &cfg, &password).await.expect("synced");
+            let found: i64 = a
+                .db()
+                .query_row(
+                    "SELECT count(*) FROM imap_messages WHERE msgid = ?1",
+                    [format!("<draft-{token}@shift.test>")],
+                    |r| r.get(0),
+                )
+                .expect("count");
+            assert_eq!(found, 0, "draft gone");
+            println!("draft saved and deleted");
+
+            let msgid = format!("<send-{token}@shift.test>");
+            let raw = format!(
+                "From: {email}\r\nTo: {email}\r\nBcc: hidden-{token}@shift.test\r\nSubject: Shift IMAP test {token}\r\nMessage-ID: {msgid}\r\n\r\nA test from Shift's IMAP check. It deletes itself.\r\n"
+            );
+            send(
+                &cfg,
+                &password,
+                &email,
+                std::slice::from_ref(&email),
+                &without_bcc(raw.as_bytes()),
+            )
+            .await
+            .expect("sent");
+            let mut s = connect(&cfg, &password).await.expect("session");
+            append(&mut s, &a, "SENT", "(\\Seen)", raw.as_bytes())
+                .await
+                .expect("filed in Sent");
+            let _ = s.logout().await;
+            let mut arrived = None;
+            for _ in 0..12 {
+                sync(&a, &cfg, &password).await.expect("synced");
+                arrived = a
+                    .db()
+                    .query_row(
+                        "SELECT m.thread_id, (SELECT count(*) FROM imap_uids u JOIN imap_folders f ON f.name = u.folder
+                           WHERE u.id = m.id AND f.label = 'INBOX'), m.raw FROM imap_messages m WHERE m.msgid = ?1",
+                        [&msgid],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?)),
+                    )
+                    .optional()
+                    .expect("query")
+                    .filter(|(_, inbox, _)| *inbox > 0);
+                if arrived.is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            let (sent_thread, _, _) = arrived.expect("the test email arrived in the Inbox");
+            println!(
+                "sent and received: {:?}",
+                thread_labels(&a.db(), &sent_thread)
+            );
+            let mut s = connect(&cfg, &password).await.expect("session");
+            let inbox = folder_for(&a.db(), "INBOX").expect("q").expect("inbox");
+            s.select(&inbox).await.expect("select");
+            let uids: Vec<u32> = s
+                .uid_search(format!("HEADER Message-ID \"{msgid}\""))
+                .await
+                .expect("search")
+                .into_iter()
+                .collect();
+            let fetched: Vec<Fetch> = s
+                .uid_fetch(uid_set(&uids), "(UID BODY.PEEK[HEADER])")
+                .await
+                .expect("fetch")
+                .try_collect()
+                .await
+                .expect("fetched");
+            let header =
+                String::from_utf8_lossy(fetched.first().and_then(|f| f.header()).expect("header"))
+                    .to_string();
+            assert!(
+                !header.to_lowercase().contains("hidden-"),
+                "Bcc reached the recipient:\n{header}"
+            );
+            println!("no Bcc in what arrived");
+            apply(&mut s, &a, &sent_thread, &[], &[], true)
+                .await
+                .expect("trashed");
+            let _ = s.logout().await;
+            sync(&a, &cfg, &password).await.expect("synced");
+            println!("trashed: {:?}", thread_labels(&a.db(), &sent_thread));
+            let mut s = connect(&cfg, &password).await.expect("session");
+            delete_trashed(&mut s, &a, &sent_thread)
+                .await
+                .expect("deleted for good");
+            let _ = s.logout().await;
+            sync(&a, &cfg, &password).await.expect("synced");
+            assert!(
+                !db::has_thread(&a.db(), &sent_thread).expect("q"),
+                "test email gone"
+            );
+            println!("test email deleted for good");
         });
     }
 }
