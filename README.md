@@ -1,6 +1,8 @@
 # Shift
 
-A fast Gmail client: Rust core (Tauri 2) with a web UI. Mail is cached in local SQLite, so the UI never waits on the network. Changes come in through Gmail's history API every 30 seconds.
+A fast Gmail client for macOS: Rust core (Tauri 2) with a web UI. Mail is cached in local SQLite, so the UI never waits on the network. Changes come in through Gmail's history API every 30 seconds.
+
+**Download:** [getshiftmail.com](https://getshiftmail.com) or the [latest release](https://github.com/nboada/Shift/releases/latest) (a signed, notarized universal app that updates itself).
 
 ## Setup
 
@@ -84,3 +86,7 @@ cd src-tauri && cargo test && cargo clippy --all-targets
 bun test        # keyboard shortcut table
 bun run build   # tsc + vite
 ```
+
+## License
+
+[MIT](LICENSE)
