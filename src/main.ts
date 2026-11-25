@@ -607,6 +607,11 @@ function refresh() {
     nearby.clear();
     await renderMailboxes();
     if (!search) await loadThreads();
+    // A new message in the open conversation (a reply, or one just sent) shows without reopening it. Not while an
+    // inline reply is being written, and not in Drafts or Scheduled, where opening a row opens the composer.
+    const open = threads.find((t) => t.id === selected);
+    if (open && open.count !== messages.length && !compose?.inline && mailbox !== "DRAFT" && mailbox !== "SCHEDULED")
+      void openThread(open.id);
     if (selected) prefetchAround(selected);
   }, 60);
 }
