@@ -1207,7 +1207,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 
 /* phones and narrow windows: one pane at a time */
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; grid-template-rows: 1fr; padding: 0; }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); padding: 0; }
   .topbar { display: none; }
   .sidebar-top { display: block; }
   .list-pane, .reader-pane { border-radius: 0; box-shadow: none; padding-top: env(safe-area-inset-top); }

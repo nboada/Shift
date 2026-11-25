@@ -5,7 +5,7 @@
     <!-- In the page rather than tauri.conf.json: Tauri skips its CSP for the dev server and nonces styles in release,
          which would block the inline style attributes emails rely on. Email frames inherit this and tighten it. -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420; media-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
     <title>Shift</title>
     <link rel="stylesheet" href="/src/styles.css" />
     <script type="module" src="/src/main.ts"></script>

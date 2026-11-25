@@ -167,6 +167,7 @@ function dateGroup(ms: number) {
 }
 
 const setView = (v: "mailboxes" | "list" | "reader") => (app.dataset.view = v);
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
 // WebKit's own menu (Reload, Inspect Element, Open Link) only where Shift has none: text fields and selected text keep
 // it for Copy, Paste and Look Up. Reload would restart the app and Open Link would load the page inside it. In dev
@@ -961,6 +962,8 @@ function attachmentStrip(m: Message, account: string) {
         account,
         message: m.id,
         idx: a.idx,
+        name: a.filename || "attachment",
+        mime: a.mime,
       }),
     )
     .join("")}</div>`;
@@ -1035,8 +1038,17 @@ reader.addEventListener("click", async (e) => {
 reader.addEventListener("click", async (e) => {
   const el = (e.target as Element).closest<HTMLElement>(".message-files .attachment");
   if (!el) return;
-  const { account, message, idx } = el.dataset;
+  const { account, message, idx, name, mime } = el.dataset;
   try {
+    // iOS has no Downloads folder: hand the file to the share sheet, which previews it and offers Save to Files.
+    if (IS_IOS) {
+      const data = await invoke<string>("attachment_data", { account, message, idx: Number(idx) });
+      const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+      const file = new File([bytes], name ?? "attachment", { type: mime || "application/octet-stream" });
+      // Closing the sheet rejects the promise; that's a cancel, not an error.
+      await navigator.share({ files: [file] }).catch(() => {});
+      return;
+    }
     const path = await invoke<string>("open_attachment", { account, message, idx: Number(idx) });
     toast(`Saved to ${path.split("/").slice(-2).join("/")}`, { kind: "success" });
   } catch (err) {
