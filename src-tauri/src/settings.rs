@@ -101,6 +101,14 @@ pub fn ai_label_rules(dir: &Path) -> Option<Vec<(String, String)>> {
     (!rules.is_empty()).then_some(rules)
 }
 
+/// The follow-up labels by name, (needs my reply, waiting for a reply), when both are set and differ.
+pub fn follow_up_labels(dir: &Path) -> Option<(String, String)> {
+    let f = &load(dir)["inbox"]["followUps"];
+    let (needs, waiting) = (f["needsReply"].as_str()?, f["waiting"].as_str()?);
+    (!needs.is_empty() && !waiting.is_empty() && needs != waiting)
+        .then(|| (needs.to_owned(), waiting.to_owned()))
+}
+
 pub fn has_ai_key(provider: &str) -> bool {
     ai_entry(provider)
         .and_then(|e| Ok(e.get_password()?))

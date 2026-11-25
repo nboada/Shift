@@ -567,8 +567,25 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
                     enqueue(a, ids.split_off(fits))?;
                 }
                 budget -= ids.len() as i64 * METADATA_COST;
-                fetch_threads(app, a, &g, ids).await?;
+                let before = {
+                    let c = a.db();
+                    ids.iter()
+                        .map(|id| db::thread_date(&c, id))
+                        .collect::<anyhow::Result<Vec<_>>>()?
+                };
+                fetch_threads(app, a, &g, ids.clone()).await?;
                 db::set_meta(&a.db(), "history_id", &new_id)?;
+                let grew: Vec<String> = {
+                    let c = a.db();
+                    ids.into_iter()
+                        .zip(before)
+                        .filter(|(id, was)| db::thread_date(&c, id).ok().flatten() > *was)
+                        .map(|(id, _)| id)
+                        .collect()
+                };
+                if let Err(e) = move_follow_ups(app, a, &g, &grew).await {
+                    eprintln!("{} follow-ups: {e:#}", a.email);
+                }
                 if changed {
                     // A failed notification mustn't fail the sync.
                     if let Err(e) = notify_new_mail(app, a) {
@@ -854,6 +871,64 @@ fn spawn_auto_label(app: &AppHandle, account: &str) {
             let _ = app.emit("sync-error", format!("{}: AI labelling: {e:#}", a.email));
         }
     });
+}
+
+/// Follow-ups (Settings → Inbox): a conversation with the user's "needs my reply" label moves to their "waiting" label
+/// once they reply, and back when the other side writes. Only conversations that got a new message this sync, so a
+/// label added by hand stays put.
+async fn move_follow_ups(
+    app: &AppHandle,
+    a: &Account,
+    g: &Gmail<'_>,
+    ids: &[String],
+) -> anyhow::Result<()> {
+    let s = app.state::<State>();
+    let Some((needs, waiting)) = settings::follow_up_labels(&s.dir) else {
+        return Ok(());
+    };
+    let (Some(needs), Some(waiting)) = ({
+        let c = a.db();
+        (db::label_id(&c, &needs)?, db::label_id(&c, &waiting)?)
+    }) else {
+        return Ok(());
+    };
+    for id in ids {
+        let has = db::thread_label_ids(&a.db(), id)?;
+        if !has.iter().any(|l| *l == needs || *l == waiting) || db::has_pending(&a.db(), id) {
+            continue;
+        }
+        // The cache doesn't keep each message's labels, which say whether it's a draft or one the user sent.
+        let t = g.thread(id, false).await?;
+        let Some((add, remove)) = follow_up_move(&t, &has, &needs, &waiting) else {
+            continue;
+        };
+        let (add, remove) = (vec![add.to_owned()], vec![remove.to_owned()]);
+        db::change_labels(&mut a.db(), id, &add, &remove)?;
+        push_change(app, &s, a, id, &add, &remove, false).await?;
+    }
+    Ok(())
+}
+
+/// Which follow-up label a conversation moves to, as (add, remove): whoever wrote its latest message (drafts and binned
+/// messages aside) decides whose turn it is.
+fn follow_up_move<'a>(
+    t: &gmail::Thread,
+    has: &[String],
+    needs: &'a str,
+    waiting: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    let last = t.messages.iter().rev().find(|m| {
+        !m.label_ids
+            .iter()
+            .any(|l| l == "DRAFT" || l == "TRASH" || l == "SPAM")
+    })?;
+    let mine = last.label_ids.iter().any(|l| l == "SENT");
+    let has = |l: &str| has.iter().any(|x| x == l);
+    match (mine, has(needs), has(waiting)) {
+        (true, true, _) => Some((waiting, needs)),
+        (false, _, true) => Some((needs, waiting)),
+        _ => None,
+    }
 }
 
 async fn auto_label(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
@@ -2895,6 +2970,39 @@ mod tests {
         );
     }
     use super::*;
+
+    #[test]
+    fn follow_ups_move_with_whoever_wrote_last() {
+        let t = |labels: &[&[&str]]| -> gmail::Thread {
+            let msgs: Vec<_> = labels
+                .iter()
+                .enumerate()
+                .map(|(i, l)| serde_json::json!({ "id": format!("m{i}"), "labelIds": l }))
+                .collect();
+            serde_json::from_value(serde_json::json!({ "id": "t", "messages": msgs })).unwrap()
+        };
+        let has = |l: &str| vec![l.to_string()];
+        assert_eq!(
+            follow_up_move(&t(&[&["INBOX"], &["SENT"]]), &has("N"), "N", "W"),
+            Some(("W", "N")),
+            "my reply: now waiting"
+        );
+        assert_eq!(
+            follow_up_move(&t(&[&["SENT"], &["INBOX"]]), &has("W"), "N", "W"),
+            Some(("N", "W")),
+            "their reply: my turn"
+        );
+        assert_eq!(
+            follow_up_move(&t(&[&["INBOX"], &["DRAFT"]]), &has("N"), "N", "W"),
+            None,
+            "a draft isn't a reply"
+        );
+        assert_eq!(
+            follow_up_move(&t(&[&["SENT"]]), &has("W"), "N", "W"),
+            None,
+            "still waiting"
+        );
+    }
 
     #[test]
     fn discarding_a_lone_draft_removes_its_thread_from_the_cache() {

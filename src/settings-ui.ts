@@ -498,6 +498,10 @@ const render: Record<string, () => string> = {
           "Notifications are Gmail's Promotions, Updates, Social and Forums.",
         ),
     ) +
+    group(
+      "Follow-ups",
+      `<p class="group-note">When you reply, the conversation moves from your “needs my reply” label to your “waiting” label, and back when they write again. Pick a label for each to turn it on.</p><div id="follow-up-labels"></div>`,
+    ) +
     group("Sidebar", row("Show unread count", toggle("inbox.unreadBadge"), "In the sidebar and on Shift's Dock icon.")),
 
   composer: () =>
@@ -632,6 +636,7 @@ function show(section: string) {
     refreshKeyStatus();
     void renderLabelRules();
   }
+  if (section === "inbox") void renderFollowUps();
   if (section === "general") void refreshOpenAtLogin();
   previewSignature();
 }
@@ -657,6 +662,20 @@ async function renderLabelRules() {
       `<div class="ai-label-now"><p class="group-note" id="ai-label-status">New mail is labelled as it arrives. To apply the rules to emails already in your Inbox:</p>
         <button class="secondary" data-cmd="label-inbox">Label my Inbox now</button></div>`
     : `<p class="group-note">You have no labels yet. Create one from an email's Label menu, then describe it here.</p>`;
+}
+
+/** The two follow-up label pickers, filled once the account labels are in. */
+async function renderFollowUps() {
+  const box = document.getElementById("follow-up-labels");
+  if (!box) return;
+  const labels = await invoke<{ name: string; kind: string }[]>("labels", { accounts: null }).catch(() => []);
+  const names = [...new Set(labels.filter((l) => l.kind === "user").map((l) => l.name))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const options: [string, string][] = [["", "None"], ...names.map((n): [string, string] => [n, n])];
+  box.innerHTML =
+    row("Needs my reply", select("inbox.followUps.needsReply", options)) +
+    row("Waiting for a reply", select("inbox.followUps.waiting", options));
 }
 
 /** macOS owns this one (Login Items), so the switch reads the real state instead of a saved setting. */
