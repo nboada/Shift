@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
+import { blockText, textToHtml } from "./compose";
 import { attachmentButton, fileIcon, listedAttachments } from "./attachments";
 import type { Label, MailCore, Message, Thread } from "./core/mail";
 import { inviteCard, isCalendarFile } from "./invite";
@@ -531,4 +532,27 @@ export function wireReader(container: HTMLElement, mail: MailCore, reply: (kind:
       toast(String(err), { kind: "error" });
     }
   });
+}
+
+/** The quoted email for a reply or forward, whole: cleaned of anything active, its inline (cid:) images dropped since
+ *  they don't travel with the reply, and a text version for the plain-text part. */
+// shortcut: styles in the original's <head> and inline (cid:) images are left out of the quote; carry them as inline
+// MIME parts with their Content-IDs, and scope the styles, if forwards need them.
+export function quoted(m: Message, header: string) {
+  const body = m.html ? new DOMParser().parseFromString(cleanEmail(m.html).html, "text/html").body : null;
+  body?.querySelectorAll('img[src^="cid:" i]').forEach((img) => img.remove());
+  const html = body ? body.innerHTML : textToHtml(m.text ?? "");
+  const text = m.text ?? (body ? blockText(body) : "");
+  return `<p></p>${header}<div data-quote="${esc(html)}" data-text="${esc(text)}"></div>`;
+}
+
+/** The composer's preview of a quoted email: sandboxed with no scripts, remote images only when they're allowed. */
+export function renderQuote(frame: HTMLIFrameElement, html: string) {
+  const images = settings.appearance.loadRemoteImages ? "https: http: data:" : "data:";
+  frame.setAttribute("sandbox", "allow-same-origin");
+  frame.onload = () => (frame.style.height = `${frame.contentDocument?.documentElement.scrollHeight ?? 80}px`);
+  frame.srcdoc =
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${images}">` +
+    EMAIL_CSS +
+    cleanEmail(html).html;
 }

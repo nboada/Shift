@@ -22,9 +22,8 @@ import {
 } from "./settings";
 import { closeSettings, initSettings, openSettings, settingsOpen } from "./settings-ui";
 import { arrange } from "./sidebar";
-import { blockText, docToText, emailHtml, textToHtml } from "./compose";
+import { textToHtml } from "./compose";
 import { createEditor, foldReplyQuote } from "./editor";
-import { generateHTML, generateJSON } from "@tiptap/core";
 import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
 import { addImapAccount } from "./imap-signin";
 import { Recipients } from "./recipients";
@@ -36,14 +35,14 @@ import AirDatepicker from "air-datepicker";
 import localeEnModule from "air-datepicker/locale/en";
 import { attachmentButton, fileIcon } from "./attachments";
 import { type Fields, type Label, type Message, type Thread, SECTIONS, SYSTEM, createMailCore } from "./core/mail";
-import { AI_EDITS, type ComposeState, type Content, createComposer, ownText, signatureBlock } from "./core/composer";
+import { AI_EDITS, type ComposeState, createComposer, editorContent, ownText, swapSignature } from "./core/composer";
 import {
   type ReplyKind,
-  EMAIL_CSS,
   LABEL_COLORS,
   avatar,
   bareEmail,
-  cleanEmail,
+  quoted,
+  renderQuote,
   dateGroup,
   decodeEntities,
   displayName,
@@ -1075,7 +1074,7 @@ $("#from-row").addEventListener("click", (e) => {
   if (!b || !state || b.dataset.from === state.account) return;
   const prev = state.account;
   compose.setAccount(b.dataset.from!);
-  swapSignature(prev, state.account);
+  swapSignature(editor, prev, state.account);
   renderFromRow();
   compose.touch();
 });
@@ -1096,19 +1095,6 @@ const currentFields = (): Fields => ({
   subject: subjectInput.value,
   body: editor.getHTML(),
 });
-
-/** What's in the composer, with the email as sent: HTML from the editor plus a plain-text version. */
-function readComposer(): Content {
-  const sigHtml = signatureFor(compose.state?.account).html;
-  const sigText =
-    new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
-  return {
-    fields: currentFields(),
-    text: docToText(editor.state.doc, sigText),
-    html: emailHtml(editor.getHTML(), sigHtml),
-    typed: !!editor.getText().trim(),
-  };
-}
 
 /** Takes the form out of the reader / window and parks it back in the (closed) dialog. */
 function detachComposer() {
@@ -1188,7 +1174,7 @@ const compose = createComposer(mail, {
   opening: hideDraftPill,
   show: showComposer,
   hide: detachComposer,
-  read: readComposer,
+  read: () => ({ fields: currentFields(), ...editorContent(editor, compose.state?.account) }),
   status: draftStatus,
   error: composeError,
   files: renderComposeFiles,
@@ -1203,47 +1189,6 @@ const compose = createComposer(mail, {
   toast,
   where: inMail,
 });
-
-/** After a From change: the new account's signature replaces the old one, unless the old block no longer appears as inserted (edited). */
-function swapSignature(from: string, to: string) {
-  const exts = editor.extensionManager.extensions;
-  const normal = (html: string) => (html ? generateHTML(generateJSON(html, exts), exts) : "");
-  const [before, after] = [normal(signatureBlock(from)), normal(signatureBlock(to))];
-  const body = editor.getHTML();
-  // shortcut: from an account without a signature, the new one is only added to emails without a quote (at the end); place it above the quote if forwards need it.
-  const next = before
-    ? body.includes(before)
-      ? body.replace(before, () => after)
-      : null
-    : body.includes("<blockquote")
-      ? null
-      : body + after;
-  // Always reset when found, even if unchanged: it rebuilds the HTML signature's preview for the new account.
-  if (next !== null) editor.chain().setContent(next, { emitUpdate: false }).setTextSelection(0).run();
-}
-
-/** The quoted email for a reply or forward, whole: cleaned of anything active, its inline (cid:) images dropped since
- *  they don't travel with the reply, and a text version for the plain-text part. */
-// shortcut: styles in the original's <head> and inline (cid:) images are left out of the quote; carry them as inline
-// MIME parts with their Content-IDs, and scope the styles, if forwards need them.
-function quoted(m: Message, header: string) {
-  const body = m.html ? new DOMParser().parseFromString(cleanEmail(m.html).html, "text/html").body : null;
-  body?.querySelectorAll('img[src^="cid:" i]').forEach((img) => img.remove());
-  const html = body ? body.innerHTML : textToHtml(m.text ?? "");
-  const text = m.text ?? (body ? blockText(body) : "");
-  return `<p></p>${header}<div data-quote="${esc(html)}" data-text="${esc(text)}"></div>`;
-}
-
-/** The composer's preview of a quoted email: sandboxed with no scripts, remote images only when they're allowed. */
-function renderQuote(frame: HTMLIFrameElement, html: string) {
-  const images = settings.appearance.loadRemoteImages ? "https: http: data:" : "data:";
-  frame.setAttribute("sandbox", "allow-same-origin");
-  frame.onload = () => (frame.style.height = `${frame.contentDocument?.documentElement.scrollHeight ?? 80}px`);
-  frame.srcdoc =
-    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${images}">` +
-    EMAIL_CSS +
-    cleanEmail(html).html;
-}
 
 function reply(kind: ReplyKind, last?: Message) {
   return compose.reply(kind, last);
@@ -2367,9 +2312,7 @@ function start(list: string[]) {
 /** The iPhone gets its own screens on the same core (src/mobile), loaded only there. */
 let phone: Promise<{ reset: () => void }> | null = null;
 async function showPhone() {
-  phone ??= import("./mobile/phone").then((m) =>
-    m.mountPhone({ mail, compose: () => void compose.write(), reply, openDraft, editScheduled }),
-  );
+  phone ??= import("./mobile/phone").then((m) => m.mountPhone(mail));
   (await phone).reset();
 }
 

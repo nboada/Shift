@@ -2,9 +2,9 @@
 // Gmail as you type, sending (with Undo send), Send later, replies and forwards, signatures, attachments, reopening
 // drafts and scheduled emails. It reaches the backend through `invoke` and the screen through the UI's `ComposeView`.
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import type { Editor } from "@tiptap/core";
+import { type Editor, generateHTML, generateJSON } from "@tiptap/core";
 import { type OutFile, checkSize, readFile } from "../attachments";
-import { textToHtml } from "../compose";
+import { docToText, emailHtml, textToHtml } from "../compose";
 import { bareEmail, displayName, isValidAddress, splitAddresses, splitList } from "../recipients";
 import { formatWhen } from "../schedule";
 import { accountSettings, settings, signatureFor } from "../settings";
@@ -68,6 +68,36 @@ export function signatureBlock(account: string) {
 
 /** An empty line to write on, then the account's signature. */
 export const signature = (account: string) => "<p></p>" + signatureBlock(account);
+
+/** The editor's email as sent, HTML plus a plain-text version, and whether anything is written in it. */
+export function editorContent(editor: Editor, account: string | undefined) {
+  const sigHtml = signatureFor(account).html;
+  const sigText =
+    new DOMParser().parseFromString(sigHtml.replace(/<br\s*\/?>/gi, "\n"), "text/html").body.textContent ?? "";
+  return {
+    text: docToText(editor.state.doc, sigText),
+    html: emailHtml(editor.getHTML(), sigHtml),
+    typed: !!editor.getText().trim(),
+  };
+}
+
+/** After a From change: the new account's signature replaces the old one, unless the old block no longer appears as inserted (edited). */
+export function swapSignature(editor: Editor, from: string, to: string) {
+  const exts = editor.extensionManager.extensions;
+  const normal = (html: string) => (html ? generateHTML(generateJSON(html, exts), exts) : "");
+  const [before, after] = [normal(signatureBlock(from)), normal(signatureBlock(to))];
+  const body = editor.getHTML();
+  // shortcut: from an account without a signature, the new one is only added to emails without a quote (at the end); place it above the quote if forwards need it.
+  const next = before
+    ? body.includes(before)
+      ? body.replace(before, () => after)
+      : null
+    : body.includes("<blockquote")
+      ? null
+      : body + after;
+  // Always reset when found, even if unchanged: it rebuilds the HTML signature's preview for the new account.
+  if (next !== null) editor.chain().setContent(next, { emitUpdate: false }).setTextSelection(0).run();
+}
 
 /** The editing instructions in the Write with AI menu. */
 export const AI_EDITS: [label: string, icon: string, instruction: string][] = [
