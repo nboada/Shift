@@ -939,9 +939,10 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .ai-rule { display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr); align-items: center; gap: 12px; font-size: 13px; font-weight: 500; }
 .ai-rule span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings .ai-rule input[type="text"] { width: 100%; }
-#ai-write { display: inline-flex; align-items: center; gap: 6px; margin-right: 8px; border-radius: 8px; background: transparent; }
+/* Floated, so the message wraps around it rather than running underneath; z-index lifts it over the editor, which Tiptap positions. */
+#ai-write { float: right; position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; margin: 10px 12px 4px 8px; padding: 4px 10px; border-radius: 8px; background: transparent; font-size: 13px; }
 #ai-write i { color: var(--brand); font-size: 16px; }
-#ai-write:hover:not(:disabled) { background: var(--hover); }
+#ai-write:hover:not(:disabled) { background: color-mix(in srgb, var(--brand), transparent 92%); border-color: color-mix(in srgb, var(--brand), transparent 60%); }
 #ai-write.busy i { animation: ai-pulse 1s ease-in-out infinite; color: var(--brand); }
 @keyframes ai-pulse { 50% { opacity: 0.35; } }
 /* On the library's own element: it sets its defaults there, which would override values inherited from a wrapper. */
