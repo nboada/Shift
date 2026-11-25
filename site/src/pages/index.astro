@@ -5,19 +5,10 @@ import Base from "../layouts/Base.astro";
   <main id="main">
     <section class="hero wrap">
       <h1><span class="h1-logo" aria-hidden="true"><img src="/gmail.svg" alt="" width="88" height="66" /></span>Gmail at the speed of your Mac.</h1>
-      <p>Shift keeps a copy of your mail on your Mac, so every account opens, searches and switches instantly. Coming soon for macOS.</p>
-      <div id="get" class="actions">
-        <div class="get" data-get>
-        <button type="button" class="pill" data-get-open><span class="apple-logo" aria-hidden="true"></span>Ask for early access</button>
-        <form class="get-form" hidden novalidate>
-          <label class="sr-only" for="get-email-1">Email address</label>
-          <input id="get-email-1" type="email" name="email" required autocomplete="email" placeholder="you@example.com" />
-          <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" />
-          <button type="submit" class="pill">Get Shift</button>
-        </form>
-        <a class="pill" href="/download" hidden data-get-download><span class="apple-logo" aria-hidden="true"></span>Download for macOS</a>
-        <p class="get-msg" role="status"></p>
-      </div>
+      <p>Shift keeps a copy of your mail on your Mac, so every account opens, searches and switches instantly. Free and open source.</p>
+      <div id="get" class="downloads">
+        <a class="pill" href="/download"><span class="apple-logo" aria-hidden="true"></span>Download for macOS</a>
+        <a class="pill ghost" href="https://github.com/nboada/Shift"><i class="ph ph-github-logo" aria-hidden="true"></i>View on GitHub</a>
       </div>
       <dl class="stats" aria-label="Shift in numbers">
         <div><dt>download</dt><dd>15 MB</dd></div>
@@ -222,18 +213,11 @@ import Base from "../layouts/Base.astro";
 
     <section class="closing wrap">
       <img src="/icon.png" alt="" width="88" height="88" />
-      <h2>Try Shift early.</h2>
-      <p>Shift is in testing now. Leave your email and download the latest build.</p>
-      <div class="get" data-get>
-        <button type="button" class="pill" data-get-open><span class="apple-logo" aria-hidden="true"></span>Ask for early access</button>
-        <form class="get-form" hidden novalidate>
-          <label class="sr-only" for="get-email-2">Email address</label>
-          <input id="get-email-2" type="email" name="email" required autocomplete="email" placeholder="you@example.com" />
-          <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" />
-          <button type="submit" class="pill">Get Shift</button>
-        </form>
-        <a class="pill" href="/download" hidden data-get-download><span class="apple-logo" aria-hidden="true"></span>Download for macOS</a>
-        <p class="get-msg" role="status"></p>
+      <h2>Try Shift.</h2>
+      <p>Free, open source under the MIT licence, and updates itself.</p>
+      <div class="downloads">
+        <a class="pill" href="/download"><span class="apple-logo" aria-hidden="true"></span>Download for macOS</a>
+        <a class="pill ghost" href="https://github.com/nboada/Shift"><i class="ph ph-github-logo" aria-hidden="true"></i>View on GitHub</a>
       </div>
     </section>
   </main>
