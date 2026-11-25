@@ -585,7 +585,9 @@ button.primary:disabled { opacity: 0.6; }
 .threads li.selected .row-label:not([data-color]) { background: var(--card); }
 .threads li.unread .subject { font-weight: 600; }
 .threads .snippet:has(+ .row-labels) { grid-column: 3; }
-.threads li > .row-labels { grid-column: 4; align-self: end; justify-self: end; }
+.threads li > .row-labels { grid-column: 4; align-self: end; justify-self: end; transition: opacity 0.15s; }
+/* The hover buttons sit over the labels, so the labels step aside. */
+.threads li[data-id]:hover > .row-labels { opacity: 0; }
 .threads .snippet {
   grid-column: 3 / 5;
   color: var(--muted);
