@@ -47,15 +47,22 @@ impl Account {
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.db.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     async fn access_token(&self, http: &reqwest::Client) -> anyhow::Result<String> {
         let mut t = self.token.lock().await;
-        if let Some(fresh) = t.as_ref().filter(|t| t.expires > std::time::SystemTime::now()) {
+        if let Some(fresh) = t
+            .as_ref()
+            .filter(|t| t.expires > std::time::SystemTime::now())
+        {
             return Ok(fresh.access.clone());
         }
-        Ok(t.insert(auth::refresh(http, &self.email).await?).access.clone())
+        Ok(t.insert(auth::refresh(http, &self.email).await?)
+            .access
+            .clone())
     }
 
     /// Drops the cached access token, so the next call refreshes it (after Gmail answered 401).
@@ -172,13 +179,19 @@ fn load_accounts(dir: &Path) -> anyhow::Result<(Vec<Arc<Account>>, Vec<String>)>
                         for suffix in ["", "-wal", "-shm"] {
                             let from = format!("{}{suffix}", path.display());
                             if Path::new(&from).exists()
-                                && let Err(e) = std::fs::rename(&from, format!("{from}.broken-{secs}"))
+                                && let Err(e) =
+                                    std::fs::rename(&from, format!("{from}.broken-{secs}"))
                             {
                                 eprintln!("Couldn't set {from} aside: {e}");
                             }
                         }
                     }
-                    broken.push(path.file_stem().unwrap_or_default().to_string_lossy().into_owned());
+                    broken.push(
+                        path.file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
                 }
             }
         }
@@ -233,7 +246,12 @@ async fn fetch_threads(
 }
 
 /// Fetches bodies for the newest inbox threads so opening them doesn't wait on the network, within `budget` units.
-async fn prefetch_bodies(app: &AppHandle, a: &Account, g: &Gmail<'_>, budget: i64) -> anyhow::Result<()> {
+async fn prefetch_bodies(
+    app: &AppHandle,
+    a: &Account,
+    g: &Gmail<'_>,
+    budget: i64,
+) -> anyhow::Result<()> {
     let ids = db::missing_bodies(&a.db(), "INBOX", (budget / FULL_COST).max(0) as usize)?;
     let jobs = ids.into_iter().map(|id| (id, true)).collect();
     fetch(app, a, g, jobs)
@@ -413,21 +431,32 @@ async fn load_more(
                 None => continue,
             },
         };
-        let key = format!("more:{}", label.as_deref().unwrap_or(if q.is_empty() { "ALL" } else { "ARCHIVE" }));
+        let key = format!(
+            "more:{}",
+            label
+                .as_deref()
+                .unwrap_or(if q.is_empty() { "ALL" } else { "ARCHIVE" })
+        );
         let mut page = match db::get_meta(&a.db(), &key)? {
             Some(t) if t == "done" => continue,
             Some(t) => t,
             None => String::new(),
         };
         let token = a.access_token(&s.http).await?;
-        let g = Gmail { http: &s.http, token: &token };
+        let g = Gmail {
+            http: &s.http,
+            token: &token,
+        };
         // Pages already cached are skipped (up to 5, at 10 units each) until one brings threads we don't have.
         let mut fresh = Vec::new();
         for _ in 0..5 {
             let (ids, next) = g.thread_page(q, label.as_deref(), &page).await?;
             {
                 let c = a.db();
-                fresh.extend(ids.into_iter().filter(|id| !db::has_thread(&c, id).unwrap_or(true)));
+                fresh.extend(
+                    ids.into_iter()
+                        .filter(|id| !db::has_thread(&c, id).unwrap_or(true)),
+                );
                 db::set_meta(&c, &key, next.as_deref().unwrap_or("done"))?;
             }
             page = next.clone().unwrap_or_default();
@@ -437,7 +466,13 @@ async fn load_more(
         }
         more |= !page.is_empty();
         added += fresh.len();
-        let failed = fetch(&app, &a, &g, fresh.into_iter().map(|id| (id, false)).collect()).await;
+        let failed = fetch(
+            &app,
+            &a,
+            &g,
+            fresh.into_iter().map(|id| (id, false)).collect(),
+        )
+        .await;
         if let Some((_, e)) = failed.into_iter().next() {
             return Err(e.into());
         }
@@ -463,7 +498,12 @@ fn enqueue(a: &Account, ids: Vec<String>) -> anyhow::Result<()> {
 }
 
 /// Returns how many it took and the quota units that cost; at least one thread a tick, so the queue always moves.
-async fn backfill(app: &AppHandle, a: &Account, g: &Gmail<'_>, budget: i64) -> anyhow::Result<(usize, i64)> {
+async fn backfill(
+    app: &AppHandle,
+    a: &Account,
+    g: &Gmail<'_>,
+    budget: i64,
+) -> anyhow::Result<(usize, i64)> {
     let queue: Vec<String> = match db::get_meta(&a.db(), "backfill")? {
         Some(json) => serde_json::from_str(&json)?,
         None => return Ok((0, 0)),
@@ -552,9 +592,18 @@ async fn sync_account(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
     if let Ok(n) = g.unread_threads("INBOX").await {
         let c = a.db();
         // `labels` already adds the last extra; take it off to get what's cached.
-        let cached = db::labels(&c)?.into_iter().find(|l| l.id == "INBOX").map_or(0, |l| l.unread);
-        let extra: i64 = db::get_meta(&c, "inbox_unread_extra")?.and_then(|v| v.parse().ok()).unwrap_or(0);
-        db::set_meta(&c, "inbox_unread_extra", &(n - (cached - extra)).max(0).to_string())?;
+        let cached = db::labels(&c)?
+            .into_iter()
+            .find(|l| l.id == "INBOX")
+            .map_or(0, |l| l.unread);
+        let extra: i64 = db::get_meta(&c, "inbox_unread_extra")?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        db::set_meta(
+            &c,
+            "inbox_unread_extra",
+            &(n - (cached - extra)).max(0).to_string(),
+        )?;
     }
     Ok(())
 }
@@ -664,7 +713,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         let check =
             MenuItem::with_id(app, CHECK_UPDATES, "Check for Updates…", true, None::<&str>)?;
         app_menu.insert(&check, 1)?;
-        let settings = MenuItem::with_id(app, OPEN_SETTINGS, "Settings…", true, Some("CmdOrCtrl+,"))?;
+        let settings =
+            MenuItem::with_id(app, OPEN_SETTINGS, "Settings…", true, Some("CmdOrCtrl+,"))?;
         app_menu.insert(&settings, 2)?;
     }
     Ok(menu)
@@ -820,7 +870,10 @@ async fn auto_label(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
         return Ok(());
     }
     let token = a.access_token(&s.http).await?;
-    let g = Gmail { http: &s.http, token: &token };
+    let g = Gmail {
+        http: &s.http,
+        token: &token,
+    };
     // Oldest first, 40 at a time (one AI request each); the watermark moves past a batch only once it's done, so a
     // burst of mail is labelled in full and a failure retries from the batch that failed.
     for batch in mail.chunks(40) {
@@ -1078,15 +1131,21 @@ fn restart_app(app: AppHandle) {
     // macOS: relaunch through LaunchServices (`open`) once this process has exited. Tauri's restart starts the new
     // binary as a child of this one, which the Dock shows as a second Shift icon next to the pinned one.
     #[cfg(target_os = "macos")]
-    if let Some(bundle) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(Path::to_path_buf))
-    {
+    if let Some(bundle) = std::env::current_exe().ok().and_then(|exe| {
+        exe.ancestors()
+            .find(|p| p.extension().is_some_and(|e| e == "app"))
+            .map(Path::to_path_buf)
+    }) {
         let script = format!(
             "while kill -0 {} 2>/dev/null; do sleep 0.1; done; open \"$0\"",
             std::process::id()
         );
-        if std::process::Command::new("/bin/sh").args(["-c", &script]).arg(&bundle).spawn().is_ok() {
+        if std::process::Command::new("/bin/sh")
+            .args(["-c", &script])
+            .arg(&bundle)
+            .spawn()
+            .is_ok()
+        {
             app.exit(0);
             return;
         }
@@ -1538,7 +1597,19 @@ async fn push_change(
         return db::add_pending(&a.db(), id, add, remove, trash);
     }
     let remote = match a.access_token(&s.http).await {
-        Ok(token) => apply_remote(&Gmail { http: &s.http, token: &token }, id, add, remove, trash).await,
+        Ok(token) => {
+            apply_remote(
+                &Gmail {
+                    http: &s.http,
+                    token: &token,
+                },
+                id,
+                add,
+                remove,
+                trash,
+            )
+            .await
+        }
         Err(e) => Err(e),
     };
     match remote {
@@ -1546,7 +1617,16 @@ async fn push_change(
         Err(e) if gmail::is_transient(&e) => db::add_pending(&a.db(), id, add, remove, trash),
         Err(e) => {
             if let Ok(token) = a.access_token(&s.http).await {
-                refetch(app, a, &Gmail { http: &s.http, token: &token }, id).await;
+                refetch(
+                    app,
+                    a,
+                    &Gmail {
+                        http: &s.http,
+                        token: &token,
+                    },
+                    id,
+                )
+                .await;
             }
             Err(e)
         }
@@ -1578,7 +1658,8 @@ async fn modify_many(
     if s.demo {
         return Ok(());
     }
-    let (waiting, now): (Vec<String>, Vec<String>) = ids.into_iter().partition(|id| db::has_pending(&a.db(), id));
+    let (waiting, now): (Vec<String>, Vec<String>) =
+        ids.into_iter().partition(|id| db::has_pending(&a.db(), id));
     if trash || remove.iter().any(|l| l == "TRASH") || now.len() < 2 {
         let mut failed = None;
         for id in waiting.iter().chain(&now) {
@@ -1591,13 +1672,19 @@ async fn modify_many(
     for id in &waiting {
         db::add_pending(&a.db(), id, &add, &remove, false)?;
     }
-    let queue = |ids: &[String]| ids.iter().try_for_each(|id| db::add_pending(&a.db(), id, &add, &remove, false));
+    let queue = |ids: &[String]| {
+        ids.iter()
+            .try_for_each(|id| db::add_pending(&a.db(), id, &add, &remove, false))
+    };
     let token = match a.access_token(&s.http).await {
         Ok(t) => t,
         Err(e) if gmail::is_transient(&e) => return Ok(queue(&now)?),
         Err(e) => return Err(e.into()),
     };
-    let g = Gmail { http: &s.http, token: &token };
+    let g = Gmail {
+        http: &s.http,
+        token: &token,
+    };
     let msgs = db::message_ids(&a.db(), &now)?;
     let add_ids: Vec<&str> = add.iter().map(String::as_str).collect();
     let remove_ids: Vec<&str> = remove.iter().map(String::as_str).collect();
@@ -1614,7 +1701,13 @@ async fn modify_many(
 }
 
 /// Sends one label change to Gmail. Gmail moves threads in and out of Trash only through trash/untrash.
-async fn apply_remote(g: &Gmail<'_>, id: &str, add: &[String], remove: &[String], trash: bool) -> anyhow::Result<()> {
+async fn apply_remote(
+    g: &Gmail<'_>,
+    id: &str,
+    add: &[String],
+    remove: &[String],
+    trash: bool,
+) -> anyhow::Result<()> {
     if trash {
         g.trash(id).await
     } else if remove.iter().any(|l| l == "TRASH") {
@@ -1678,7 +1771,10 @@ async fn search(
         let ids = g.thread_ids(&query, None, 50).await?;
         let missing: Vec<String> = {
             let c = a.db();
-            ids.iter().filter(|id| !db::has_thread(&c, id).unwrap_or(false)).cloned().collect()
+            ids.iter()
+                .filter(|id| !db::has_thread(&c, id).unwrap_or(false))
+                .cloned()
+                .collect()
         };
         // Show whatever loaded; a few failed fetches shouldn't hide the rest of the results.
         let _ = fetch_threads(&app, &a, &g, missing).await;
@@ -1781,10 +1877,16 @@ fn build_message(from: String, draft: &Draft) -> anyhow::Result<Vec<u8>> {
     let mut id = [0u8; 16];
     getrandom::fill(&mut id)?;
     let domain = from.rsplit_once('@').map_or("gmail.com", |(_, d)| d);
-    let message_id = format!("{}@{domain}", id.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    let message_id = format!(
+        "{}@{domain}",
+        id.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    );
     let mut msg = MessageBuilder::new()
         .message_id(message_id)
-        .from(Address::new_address(from_name.map(str::to_string), from.clone()))
+        .from(Address::new_address(
+            from_name.map(str::to_string),
+            from.clone(),
+        ))
         .subject(draft.subject.clone())
         .text_body(draft.body.clone());
     // Drafts may be saved before any recipient is added.
@@ -1924,8 +2026,16 @@ async fn find_draft(
     }
     let a = s.account(&account)?;
     let token = a.access_token(&s.http).await?;
-    let g = Gmail { http: &s.http, token: &token };
-    let Some(d) = g.drafts().await?.into_iter().find(|d| d.message.thread_id == thread) else {
+    let g = Gmail {
+        http: &s.http,
+        token: &token,
+    };
+    let Some(d) = g
+        .drafts()
+        .await?
+        .into_iter()
+        .find(|d| d.message.thread_id == thread)
+    else {
         return Ok(None);
     };
     let bcc = g.draft_bcc(&d.id).await?;
@@ -1960,20 +2070,16 @@ fn take_scheduled(s: tauri::State<State>, account: String, id: i64) -> R<serde_j
 fn scheduled(s: tauri::State<State>, accounts: Option<Vec<String>>) -> R<Vec<db::ScheduledRow>> {
     let mut all = Vec::new();
     for a in s.scope(accounts.as_deref())? {
-        all.extend(
-            db::scheduled(&a.db(), None)?
-                .into_iter()
-                .map(|mut r| {
-                    // Sent to the UI on every refresh, so without file contents (`scheduled_files`).
-                    if let Some(d) = r.draft.as_object_mut() {
-                        d.remove("attachments");
-                    }
-                    db::ScheduledRow {
-                        account: a.email.clone(),
-                        ..r
-                    }
-                }),
-        );
+        all.extend(db::scheduled(&a.db(), None)?.into_iter().map(|mut r| {
+            // Sent to the UI on every refresh, so without file contents (`scheduled_files`).
+            if let Some(d) = r.draft.as_object_mut() {
+                d.remove("attachments");
+            }
+            db::ScheduledRow {
+                account: a.email.clone(),
+                ..r
+            }
+        }));
     }
     all.sort_by_key(|r| r.send_at);
     Ok(all)
@@ -2184,7 +2290,10 @@ fn write_download(dir: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<(PathB
     Ok((path, quarantined))
 }
 
-#[expect(clippy::unwrap_used, reason = "the range is endless, so find always returns a path")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "the range is endless, so find always returns a path"
+)]
 fn free_path(dir: &Path, name: &str) -> PathBuf {
     let p = Path::new(name);
     let (stem, ext) = (
@@ -2225,18 +2334,30 @@ async fn open_attachment(
     idx: i64,
 ) -> R<String> {
     let key = (account.clone(), message.clone(), idx);
-    let saved = s.opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key).cloned();
+    let saved = s
+        .opened
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key)
+        .cloned();
     let still_ours = |(p, q): &(PathBuf, bool)| p.exists() && (!q || quarantine_flag(p));
     let (path, quarantined) = match saved.filter(still_ours) {
         Some(found) => found,
         None => {
             let (name, bytes) = attachment_bytes(&s, &account, &message, idx).await?;
             let saved = write_download(&app.path().download_dir()?, &safe_filename(&name), &bytes)?;
-            s.opened.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key, saved.clone());
+            s.opened
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(key, saved.clone());
             saved
         }
     };
-    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     // Without the flag macOS wouldn't check the file before it runs, so show it in Finder instead of opening it.
     if quarantined && opens_directly(&name) {
         tauri_plugin_opener::open_path(&path, None::<&str>)?;
@@ -2576,7 +2697,10 @@ mod tests {
             let per_minute = tick_budget(secs) * 60 / secs as i64;
             assert_eq!(per_minute, 3600, "{secs}s interval");
         }
-        assert!(tick_budget(15) >= FULL_COST, "even the shortest tick can fetch one full thread");
+        assert!(
+            tick_budget(15) >= FULL_COST,
+            "even the shortest tick can fetch one full thread"
+        );
     }
     use super::*;
 
@@ -2602,7 +2726,11 @@ mod tests {
         drop(old);
         migrate_single_account(&dir).unwrap();
         assert!(!dir.join("mail.sqlite3").exists());
-        std::fs::write(dir.join("accounts").join("bad@x.com.sqlite3"), b"not a database").unwrap();
+        std::fs::write(
+            dir.join("accounts").join("bad@x.com.sqlite3"),
+            b"not a database",
+        )
+        .unwrap();
         let (accounts, broken) = load_accounts(&dir).unwrap();
         assert_eq!(
             accounts
@@ -2612,11 +2740,12 @@ mod tests {
             ["me@x.com"]
         );
         assert_eq!(broken, ["bad@x.com"]);
-        assert!(std::fs::read_dir(dir.join("accounts")).unwrap().any(|e| e
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with("bad@x.com.sqlite3.broken-")));
+        assert!(std::fs::read_dir(dir.join("accounts")).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("bad@x.com.sqlite3.broken-")
+        }));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -186,7 +186,10 @@ impl Message {
 }
 
 fn charset(p: &Part) -> Option<String> {
-    let ct = p.headers.iter().find(|h| h.name.eq_ignore_ascii_case("Content-Type"))?;
+    let ct = p
+        .headers
+        .iter()
+        .find(|h| h.name.eq_ignore_ascii_case("Content-Type"))?;
     ct.value.split(';').find_map(|param| {
         let (k, v) = param.split_once('=')?;
         k.trim()
@@ -199,7 +202,10 @@ fn charset(p: &Part) -> Option<String> {
 fn stored_text<'a>(p: &'a mut Part, out: &mut Vec<&'a mut Body>) {
     if p.filename.is_empty()
         && p.mime_type.starts_with("text/")
-        && let Some(b) = p.body.as_mut().filter(|b| b.data.is_none() && b.attachment_id.is_some())
+        && let Some(b) = p
+            .body
+            .as_mut()
+            .filter(|b| b.data.is_none() && b.attachment_id.is_some())
     {
         out.push(b);
     }
@@ -270,7 +276,8 @@ pub fn is_not_found(e: &anyhow::Error) -> bool {
 /// Whether a failed call may work later as is: the network, a timeout, quota or a Gmail outage. Anything Gmail itself
 /// refused (a bad request, a missing thread) won't, and isn't worth retrying.
 pub fn is_transient(e: &anyhow::Error) -> bool {
-    e.downcast_ref::<ApiError>().is_none_or(|e| retryable(e.status, &e.body))
+    e.downcast_ref::<ApiError>()
+        .is_none_or(|e| retryable(e.status, &e.body))
 }
 
 /// Gmail signals quota exhaustion as 429 or as 403 with a rateLimitExceeded reason.
@@ -363,7 +370,10 @@ impl Gmail<'_> {
             message: Message,
         }
         let r: R = self
-            .get(&format!("/drafts/{id}"), &[("format", "metadata"), ("metadataHeaders", "Bcc")])
+            .get(
+                &format!("/drafts/{id}"),
+                &[("format", "metadata"), ("metadataHeaders", "Bcc")],
+            )
             .await?;
         Ok(r.message.header("Bcc"))
     }
@@ -376,7 +386,10 @@ impl Gmail<'_> {
             #[serde(default)]
             drafts: Vec<DraftRef>,
         }
-        Ok(self.get::<R>("/drafts", &[("maxResults", "500")]).await?.drafts)
+        Ok(self
+            .get::<R>("/drafts", &[("maxResults", "500")])
+            .await?
+            .drafts)
     }
 
     pub async fn labels(&self) -> Result<Vec<Label>> {
@@ -471,7 +484,10 @@ impl Gmail<'_> {
                     let id = b.attachment_id.clone().unwrap_or_default();
                     // A 404 here means the message went after the thread was read, not the thread: its body stays
                     // empty rather than the caller dropping the whole conversation.
-                    match self.get::<Value>(&format!("/messages/{}/attachments/{id}", m.id), &[]).await {
+                    match self
+                        .get::<Value>(&format!("/messages/{}/attachments/{id}", m.id), &[])
+                        .await
+                    {
                         Ok(v) => b.data = v["data"].as_str().map(String::from),
                         Err(e) if is_not_found(&e) => {}
                         Err(e) => return Err(e),
@@ -482,8 +498,16 @@ impl Gmail<'_> {
         }
         let mut q = vec![("format", "metadata")];
         q.extend(
-            ["Subject", "From", "To", "Cc", "Reply-To", "Message-ID", "References"]
-                .map(|h| ("metadataHeaders", h)),
+            [
+                "Subject",
+                "From",
+                "To",
+                "Cc",
+                "Reply-To",
+                "Message-ID",
+                "References",
+            ]
+            .map(|h| ("metadataHeaders", h)),
         );
         self.get(&path, &q).await
     }
@@ -631,7 +655,10 @@ impl Gmail<'_> {
         // would send twice or leave a duplicate draft. (Updating a draft with PUT is safe to repeat.)
         let retry_5xx = method != reqwest::Method::POST;
         if raw.len() <= MAX_JSON_RAW {
-            let (url, body) = (format!("{}/gmail/v1/users/me{path}", host()), wrap(message_json(raw, thread_id)));
+            let (url, body) = (
+                format!("{}/gmail/v1/users/me{path}", host()),
+                wrap(message_json(raw, thread_id)),
+            );
             return self
                 .call_opts(
                     || self.http.request(method.clone(), &url).json(&body),
@@ -643,7 +670,10 @@ impl Gmail<'_> {
         if let Some(t) = thread_id {
             meta["threadId"] = t.into();
         }
-        let (url, body) = (format!("{}/upload/gmail/v1/users/me{path}", host()), upload_body(&wrap(meta), raw));
+        let (url, body) = (
+            format!("{}/upload/gmail/v1/users/me{path}", host()),
+            upload_body(&wrap(meta), raw),
+        );
         self.call_opts(
             || {
                 self.http
@@ -733,7 +763,12 @@ mod tests {
 
     #[test]
     fn transient_errors_are_network_quota_and_outages() {
-        let api = |status, body: &str| anyhow::Error::new(ApiError { status, body: body.into() });
+        let api = |status, body: &str| {
+            anyhow::Error::new(ApiError {
+                status,
+                body: body.into(),
+            })
+        };
         assert!(is_transient(&anyhow::anyhow!("connection refused")));
         assert!(is_transient(&api(503, "")));
         assert!(is_transient(&api(429, "")));
