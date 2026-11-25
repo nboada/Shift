@@ -168,8 +168,8 @@ document.addEventListener("contextmenu", (e) => {
 
 // Dev builds surface uncaught errors on screen, since the webview console isn't visible.
 if (import.meta.env.DEV) {
-  window.addEventListener("error", (e) => toast(`Error: ${e.message}`));
-  window.addEventListener("unhandledrejection", (e) => toast(`Error: ${e.reason}`));
+  window.addEventListener("error", (e) => toast(`Error: ${e.message}`, { kind: "error" }));
+  window.addEventListener("unhandledrejection", (e) => toast(`Error: ${e.reason}`, { kind: "error" }));
 }
 
 /** The first key bound to an action, formatted for display ("⇧R"), if it has one. */
@@ -377,6 +377,9 @@ function sectionOf(t: Thread): Section {
   return t.primary ? "people" : "notifications";
 }
 
+const pinnedFirst = () => settings.inbox.pinnedOnTop && mailbox === "INBOX" && !search;
+const PINNED_HEAD = `${iconHtml("push-pin")}Pinned`;
+
 // "smart" groups the Inbox into Pinned/People/Notifications/Seen; "list" is plain newest-first.
 const smartInbox = () => settings.inbox.view === "smart" && mailbox === "INBOX" && !search;
 
@@ -431,7 +434,24 @@ const PAGE = 80;
 let drawn = PAGE;
 let drawnFor = "";
 
+/** The reader's Pin and Unread buttons follow the open email: a solid pin when it's pinned, labels that say what a click does. */
+function syncToolbar() {
+  const t = threads.find((x) => x.id === selected);
+  const set = (action: string, label: string, on?: boolean) => {
+    const b = document.querySelector<HTMLElement>(`.toolbar [data-action="${action}"]`);
+    if (!b) return;
+    const key = keyLabel(action);
+    b.dataset.label = label;
+    b.dataset.tip = key ? `${label} (${key})` : label;
+    b.setAttribute("aria-label", label);
+    if (on !== undefined) b.setAttribute("aria-pressed", String(on));
+  };
+  set("star", t?.starred ? "Unpin" : "Pin", !!t?.starred);
+  set("unread", t && !t.unread ? "Mark unread" : "Mark read");
+}
+
 function renderThreads() {
+  syncToolbar();
   $("#list-title").textContent = listTitle();
   const emptyBtn = $("#empty-btn");
   emptyBtn.hidden = !!search || (mailbox !== "TRASH" && mailbox !== "SPAM");
@@ -453,7 +473,8 @@ function renderThreads() {
     let last = "";
     threadList.innerHTML = visible
       .map((t) => {
-        const group = search || mailbox === "SCHEDULED" ? "" : dateGroup(t.date);
+        const group =
+          search || mailbox === "SCHEDULED" ? "" : pinnedFirst() && t.starred ? PINNED_HEAD : dateGroup(t.date);
         const head = group !== last ? `<li class="section">${group}</li>` : "";
         last = group;
         return head + threadRow(t);
@@ -470,7 +491,9 @@ function renderThreads() {
 /** Smart Inbox order (pinned, unread people, unread notifications, seen) so j/k follows what's on screen. */
 function sortForInbox(list: Thread[]) {
   const rank = (t: Thread) => SECTIONS.findIndex(([key]) => key === sectionOf(t));
-  return smartInbox() ? [...list].sort((a, b) => rank(a) - rank(b) || b.date - a.date) : list;
+  if (smartInbox()) return [...list].sort((a, b) => rank(a) - rank(b) || b.date - a.date);
+  // The plain Inbox list also keeps pinned mail on top; sort is stable, so each part stays newest first.
+  return pinnedFirst() ? [...list].sort((a, b) => Number(b.starred) - Number(a.starred)) : list;
 }
 
 // Gmail snippets arrive HTML-escaped.
@@ -685,9 +708,9 @@ async function showAiLabels(account: string, id: string) {
     try {
       await invoke("ai_undo_labels", { account, id });
       reader.querySelector(".ai-labelled")?.remove();
-      toast("AI labels removed");
+      toast("AI labels removed", { kind: "success" });
     } catch (err) {
-      toast(String(err));
+      toast(String(err), { kind: "error" });
     }
   });
 }
@@ -944,9 +967,9 @@ reader.addEventListener("click", async (e) => {
   const { account, message, idx } = el.dataset;
   try {
     const path = await invoke<string>("open_attachment", { account, message, idx: Number(idx) });
-    toast(`Saved to ${path.split("/").slice(-2).join("/")}`);
+    toast(`Saved to ${path.split("/").slice(-2).join("/")}`, { kind: "success" });
   } catch (err) {
-    toast(String(err));
+    toast(String(err), { kind: "error" });
   }
 });
 
@@ -974,7 +997,7 @@ async function modify(t: Thread, add: string[], remove: string[], trash = false)
   try {
     await invoke("modify", { account: t.account, id: t.id, add, remove, trash });
   } catch (e) {
-    toast(`Couldn't update message: ${e}`);
+    toast(`Couldn't update message: ${e}`, { kind: "error" });
   }
 }
 
@@ -994,7 +1017,7 @@ function undoableAll(list: Thread[], add: string[], remove: string[], trash = fa
 function undo() {
   const last = undoStack.pop();
   if (!last) return toast("Nothing to undo");
-  toast("Undone");
+  toast("Undone", { kind: "success" });
   // The backend's mail-changed refresh puts the threads back in the list.
   return applyChanges(last.map((u) => ({ t: u.t, add: u.remove, remove: u.add })));
 }
@@ -1015,9 +1038,35 @@ function applyChanges(changes: { t: Thread; add: string[]; remove: string[] }[],
       try {
         await invoke("modify_many", { account: t.account, ids: group.map((c) => c.t.id), add, remove, trash });
       } catch (e) {
-        toast(`Couldn't update ${group.length} emails: ${e}`);
+        toast(`Couldn't update ${group.length} emails: ${e}`, { kind: "error" });
       }
     }),
+  );
+}
+
+/** Delete inside Trash: gone for good in Gmail too, so it always asks and can't be undone. */
+async function deleteForever(list: Thread[]) {
+  const yes = await ask({
+    title: list.length === 1 ? "Delete forever?" : `Delete ${list.length} emails forever?`,
+    message: "This can't be undone.",
+    confirm: "Delete forever",
+    danger: true,
+  });
+  if (!yes) return;
+  if (multiPicked()) {
+    threads = threads.filter((t) => !picked.has(t.id));
+    picked.clear();
+    delete app.dataset.picked;
+    clearReader();
+    setView("list");
+    renderThreads();
+  } else list.forEach((t) => removeAndAdvance(t.id));
+  const byAccount = new Map<string, string[]>();
+  for (const t of list) byAccount.set(t.account, [...(byAccount.get(t.account) ?? []), t.id]);
+  await Promise.all(
+    [...byAccount].map(([account, ids]) =>
+      invoke("delete_forever", { account, ids }).catch((e) => toast(String(e), { kind: "error" })),
+    ),
   );
 }
 
@@ -1051,6 +1100,7 @@ function act(action: string, id = selected) {
       removeAndAdvance(t.id);
       return undoable(t, [], ["INBOX"]);
     case "trash":
+      if (mailbox === "TRASH") return void deleteForever([t]);
       if (settings.general.confirmDelete) {
         ask({
           title: "Delete this email?",
@@ -1061,17 +1111,17 @@ function act(action: string, id = selected) {
         return;
       }
       removeAndAdvance(t.id);
-      return undoable(t, ["TRASH"], ["INBOX"], true);
+      return undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
     case "trashNow":
       removeAndAdvance(t.id);
-      return undoable(t, ["TRASH"], ["INBOX"], true);
+      return undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
     case "unread":
       return modify(t, t.unread ? [] : ["UNREAD"], t.unread ? ["UNREAD"] : []);
     case "star":
       return modify(t, t.starred ? [] : ["STARRED"], t.starred ? ["STARRED"] : []);
     case "spam":
       removeAndAdvance(t.id);
-      return undoable(t, ["SPAM"], ["INBOX"]);
+      return undoable(t, ["SPAM"], ["INBOX", "TRASH"]);
     case "reply":
       return reply("reply");
     case "replyAll":
@@ -1190,17 +1240,18 @@ function actOnPicked(action: string) {
     case "archive":
       return leave([], ["INBOX"]);
     case "spam":
-      return leave(["SPAM"], ["INBOX"]);
+      return leave(["SPAM"], ["INBOX", "TRASH"]);
     case "trash":
+      if (mailbox === "TRASH") return void deleteForever(list);
       if (settings.general.confirmDelete) {
         void ask({ title: `Delete ${n}?`, message: "They will move to Trash.", confirm: "Delete", danger: true }).then(
           (yes) => yes && actOnPicked("trashNow"),
         );
         return;
       }
-      return leave(["TRASH"], ["INBOX"], true);
+      return leave(["TRASH"], ["INBOX", "SPAM"], true);
     case "trashNow":
-      return leave(["TRASH"], ["INBOX"], true);
+      return leave(["TRASH"], ["INBOX", "SPAM"], true);
     case "unread": {
       // Any unread: mark them all read; otherwise all unread.
       const read = list.some((t) => t.unread);
@@ -1360,7 +1411,7 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
           t.labels = `${t.labels} ${created}`.trim();
           await modify(t, [created], []);
         } catch (err) {
-          toast(String(err));
+          toast(String(err), { kind: "error" });
         }
       });
       return;
@@ -1567,7 +1618,7 @@ async function labelAction(run: Promise<unknown>, nextMailbox?: string) {
   try {
     await run;
   } catch (err) {
-    return toast(String(err));
+    return toast(String(err), { kind: "error" });
   }
   if (nextMailbox) openMailbox(nextMailbox);
 }
@@ -1670,6 +1721,8 @@ type ComposeOptions = {
   attachments?: OutFile[];
   /** A scheduled email being edited: its send time, which closing the composer keeps. */
   resumeAt?: number | null;
+  /** The Drafts row it was opened from, dropped from the list when the draft is discarded. */
+  thread?: string | null;
 };
 type ComposeState = Required<ComposeOptions>;
 
@@ -1839,11 +1892,15 @@ async function closeComposer(discard = false) {
   compose = null;
   detachComposer();
   if (discard) {
+    if (state.thread && mailbox === "DRAFT") {
+      threads = threads.filter((t) => t.id !== state.thread);
+      renderThreads();
+    }
     await draftQueue;
     if (state.draftId) invoke("delete_draft", { account: state.account, draftId: state.draftId }).catch(() => {});
   } else if (keep) {
     if (await saveDraft(state, payload)) {
-      if (!state.resumeAt) return toast("Draft saved");
+      if (!state.resumeAt) return showDraftPill(fields, state);
       if (state.resumeAt <= Date.now()) return toast("Its send time passed while you edited, so it's in Drafts");
       return resumeSchedule(state, payload, fields).then(
         () => toast(`Still scheduled for ${formatWhen(new Date(state.resumeAt!))}`),
@@ -1851,14 +1908,44 @@ async function closeComposer(discard = false) {
       );
     }
     // Not in Gmail: bring it back rather than lose it, unless another email was opened meanwhile.
-    if (compose) return toast("Couldn't save a draft to Gmail; it wasn't kept");
+    if (compose) return toast("Couldn't save a draft to Gmail; it wasn't kept", { kind: "error" });
     await openComposer(fields, { ...state, touched: true });
     $("#compose-error").textContent =
       "Couldn't save this draft to Gmail, so it's still open. Check your connection and close it again.";
   }
 }
 
+// The last draft closed with "keep": a corner card that reopens it, until dismissed or another email is written.
+const draftPill = $("#draft-pill");
+let pillDraft: { fields: Fields; state: ComposeState } | null = null;
+function showDraftPill(fields: Fields, state: ComposeState) {
+  pillDraft = { fields, state };
+  $("#draft-pill-subject").textContent = fields.subject || "(no subject)";
+  draftPill.hidden = false;
+}
+function hideDraftPill() {
+  pillDraft = null;
+  draftPill.hidden = true;
+}
+function reopenPillDraft() {
+  const d = pillDraft;
+  if (!d) return;
+  hideDraftPill();
+  void openComposer(d.fields, { ...d.state, touched: false });
+}
+draftPill.addEventListener("click", (e) => {
+  if ((e.target as Element).closest("#draft-pill-close")) return hideDraftPill();
+  reopenPillDraft();
+});
+draftPill.addEventListener("keydown", (e) => {
+  if (e.target === draftPill && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault();
+    reopenPillDraft();
+  }
+});
+
 async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
+  hideDraftPill();
   if (compose) {
     await closeComposer();
     // Its draft couldn't be saved, so it came back open: keep it rather than replace it.
@@ -1874,6 +1961,7 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     account: opts.account ?? defaultAccount(),
     attachments: opts.attachments ?? [],
     resumeAt: opts.resumeAt ?? null,
+    thread: opts.thread ?? null,
   };
   renderComposeFiles();
   renderFromRow();
@@ -2099,7 +2187,7 @@ composeForm.addEventListener("submit", async (e) => {
     await send();
     compose = null;
     detachComposer();
-    toast("Message sent");
+    toast("Message sent", { kind: "success" });
   } catch (err) {
     // Still open: the user can fix the problem and send again.
     submitting.delete(state);
@@ -2298,7 +2386,7 @@ async function aiWrite(run: () => Promise<string>, range: { from: number; to: nu
     markTouched();
   } catch (e) {
     draftStatus("");
-    toast(String(e));
+    toast(String(e), { kind: "error" });
   } finally {
     btn.disabled = false;
     btn.classList.remove("busy");
@@ -2374,7 +2462,7 @@ async function editScheduled(id: string) {
     attachments = await invoke<OutFile[] | null>("take_scheduled", { account: r.account, id: r.id });
   } catch (err) {
     refresh();
-    return toast(String(err));
+    return toast(String(err), { kind: "error" });
   }
   await openComposer(r.ui.fields, {
     ...r.ui.opts,
@@ -2448,26 +2536,48 @@ function attachFrom(m: Message, account: string) {
  * Drafts: reopens the Gmail draft in the composer to keep editing it (saves update the same draft). False when it
  * can't be found, for example in demo mode or once sent, so the email opens read-only instead.
  */
+/**
+ * Opens a Drafts row in the composer straight from the cache; the Gmail draft id and Bcc (which the cache doesn't
+ * keep) are looked up meanwhile, queued ahead of any save so an early save replaces this draft instead of adding one.
+ */
 async function openDraft(id: string): Promise<boolean> {
   const account = threads.find((t) => t.id === id)?.account ?? defaultAccount();
-  const found = await invoke<[string, string, string] | null>("find_draft", { account, thread: id }).catch(() => null);
-  if (!found) return false;
-  const [draftId, messageId, bcc] = found;
+  const lookup = invoke<[string, string, string] | null>("find_draft", { account, thread: id }).catch(() => null);
   const msgs = await invoke<Message[]>("thread", { account, id }).catch(() => [] as Message[]);
-  const m = msgs.find((x) => x.id === messageId);
+  // The draft is the newest message in its conversation; a reply draft answers the one before it.
+  const m = msgs.at(-1);
   if (!m) return false;
-  // A reply draft sits in its conversation: it answers the message before it.
-  const earlier = msgs.filter((x) => x.id !== messageId).at(-1);
+  const earlier = msgs.at(-2);
   await openComposer(
-    { to: m.recipients, cc: m.cc, bcc, subject: m.subject, body: m.html ?? textToHtml(m.text ?? "") },
+    { to: m.recipients, cc: m.cc, subject: m.subject, body: m.html ?? textToHtml(m.text ?? "") },
     {
       title: "Draft",
-      draftId,
       account,
       inline: false,
+      thread: id,
       context: earlier ? { thread_id: id, in_reply_to: earlier.message_id, references: m.refs } : null,
     },
   );
+  const state = compose;
+  if (!state) return true;
+  draftQueue = draftQueue.then(async () => {
+    const found = await lookup;
+    if (!found) {
+      if (compose === state)
+        $("#compose-error").textContent = "Couldn't find this draft in Gmail; saving makes a new one.";
+      return;
+    }
+    const [draftId, , bcc] = found;
+    state.draftId = draftId;
+    if (compose !== state) return;
+    draftStatus("Saved");
+    if (bcc && !rcpt.bcc.value) {
+      rcpt.bcc.set(bcc);
+      showCcRows(!!rcpt.cc.value, true);
+      // A save made before the Bcc arrived went out without it.
+      if (state.touched) markTouched();
+    }
+  });
   void attachFrom(m, account);
   return true;
 }
@@ -2485,7 +2595,7 @@ async function forwardAttachments(m: Message, account: string) {
     const data = await invoke<string>("attachment_data", { account, message: m.id, idx: a.idx }).catch(() => null);
     if (compose !== state || !state) return;
     if (data === null) {
-      toast(`Couldn't attach ${name}`);
+      toast(`Couldn't attach ${name}`, { kind: "error" });
       continue;
     }
     state.attachments.push({ name, mime: a.mime, data, size: a.size });
@@ -2540,6 +2650,19 @@ $("#cc-toggle").addEventListener("click", () => {
 });
 // Escape is handled by the app's keydown handler (escapeComposer); the window never closes itself.
 composer.addEventListener("cancel", (e) => e.preventDefault());
+// A click on the dimmed backdrop closes it and keeps the draft. Both ends of the click must be outside, so a text
+// selection dragged past the edge, or the resize corner, doesn't close it.
+let pressedOutside = false;
+const outsideComposer = (e: MouseEvent) => {
+  if (e.target !== composer) return false;
+  const r = composer.getBoundingClientRect();
+  return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+};
+composer.addEventListener("pointerdown", (e) => (pressedOutside = outsideComposer(e)));
+composer.addEventListener("click", (e) => {
+  if (pressedOutside && outsideComposer(e) && !askOpen()) void closeComposer();
+  pressedOutside = false;
+});
 
 /** Escape: closes an empty composer, otherwise asks whether to keep the draft. A second Escape discards it. */
 async function escapeComposer() {
@@ -2594,7 +2717,7 @@ async function newLabel() {
       }),
     )
   ).flatMap((r, i) => (r.status === "rejected" ? [`${accountName(list[i])}: ${r.reason}`] : []));
-  if (failed.length) toast(`Couldn't create the label in ${failed.join("; ")}`);
+  if (failed.length) toast(`Couldn't create the label in ${failed.join("; ")}`, { kind: "error" });
   await renderMailboxes();
 }
 
@@ -2870,7 +2993,7 @@ async function addAccount() {
     await invoke<string>("add_account");
     start((await invoke<{ accounts: string[] }>("status")).accounts);
   } catch (e) {
-    toast(String(e));
+    toast(String(e), { kind: "error" });
   }
 }
 
@@ -3386,7 +3509,7 @@ listen<boolean>("syncing", (e) =>
   $("#sync-btn").classList.toggle("spinning", (syncs = Math.max(0, syncs + (e.payload ? 1 : -1))) > 0),
 );
 // Undo send and Send later both go out through the scheduled queue.
-listen("scheduled-sent", () => toast("Email sent"));
+listen("scheduled-sent", () => toast("Email sent", { kind: "success" }));
 // A clicked new-mail notification: its email (or, for several, the Inbox), in a view that includes its account.
 listen<{ account?: string; thread?: string }>("open-from-notification", async ({ payload }) => {
   if (settingsOpen()) closeSettings();
@@ -3411,7 +3534,7 @@ const saveBeforeQuit = async () => {
     await resumeSchedule(state, payload, fields).catch(() => {});
   }
 };
-onSaveError((err) => toast(`Couldn't save your settings: ${err}`));
+onSaveError((err) => toast(`Couldn't save your settings: ${err}`, { kind: "error" }));
 // ⌘Q: the backend waits (up to 5 s) for this before quitting.
 listen("before-quit", () => void saveBeforeQuit().finally(() => invoke("quit_now")));
 listen<string>("update-ready", (e) =>
@@ -3427,7 +3550,7 @@ listen<string>("sync-error", (e) => {
   if (now - (syncErrorShown.get(e.payload) ?? 0) < 10 * 60_000) return;
   if (actionToastOpen()) return;
   syncErrorShown.set(e.payload, now);
-  toast(`Sync failed: ${e.payload}`);
+  toast(`Sync failed: ${e.payload}`, { kind: "error" });
 });
 
 loadSettings()

@@ -32,6 +32,7 @@
   --pin: #f29a1f;
   --brand: #ff5a1f;
   --danger: #c4483d;
+  --success: #22a06b;
   --shadow: 0 10px 40px rgb(0 0 0 / 0.18);
   --pane-shadow: 0 0 0 1px rgb(0 0 0 / 0.05), 0 1px 3px rgb(0 0 0 / 0.04);
   color-scheme: light;
@@ -63,6 +64,8 @@
     --selected: #2e2e33;
     --card: #252529;
     --danger: #ff6961;
+  --success: #3ccf8e;
+    --success: #3ccf8e;
     --shadow: 0 10px 40px rgb(0 0 0 / 0.5);
     --pane-shadow: 0 0 0 1px rgb(255 255 255 / 0.04);
     color-scheme: dark;
@@ -188,7 +191,7 @@ button.primary:disabled { opacity: 0.6; }
 .ob-accounts li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--card-line); border-radius: 12px; font-weight: 500; }
 .ob-accounts .account-avatar { width: 32px; height: 32px; font-size: 14px; }
 .ob-accounts li span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ob-accounts li > i { color: var(--success, #22a06b); font-size: 19px; }
+.ob-accounts li > i { color: var(--success); font-size: 19px; }
 .ob-add { display: inline-flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px dashed var(--card-line); border-radius: 12px; color: var(--muted); font-weight: 500; transition: border-color 0.15s, color 0.15s, background-color 0.15s; }
 .ob-add:hover { border-color: var(--brand); color: var(--brand); background: color-mix(in srgb, var(--brand), transparent 94%); }
 .ob-accounts + .ob-add { width: 100%; justify-content: center; }
@@ -578,6 +581,9 @@ button.primary:disabled { opacity: 0.6; }
   overflow: hidden;
 }
 .threads .pin { color: var(--pin); margin-left: 6px; }
+@font-face { font-family: "tabler-icons-filled"; font-display: block; src: url("../node_modules/@tabler/icons-webfont/dist/fonts/tabler-icons-filled.woff2") format("woff2"); }
+.toolbar [data-action="star"][aria-pressed="true"] { color: var(--pin); }
+.toolbar [data-action="star"][aria-pressed="true"] .ti-pinned::before { font-family: "tabler-icons-filled"; content: "\f68e"; }
 .threads .section {
   display: flex;
   align-items: center;
@@ -829,6 +835,9 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .cu-status strong { font-size: 13px; }
 .cu-status small { color: var(--muted); font-size: 12px; }
 .cu-status button { margin: -4px -2px -4px 0; }
+.draft-pill { max-width: 320px; }
+.draft-pill small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#cleanup-status:not([hidden]) ~ .draft-pill { bottom: 88px; }
 .cu-done { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent), transparent 92%); font-size: 13px; }
 .cu-done i { color: var(--accent); font-size: 17px; }
 .cu-done span { flex: 1; }
@@ -1106,22 +1115,25 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
   transform: translateX(-50%);
   width: max-content;
   max-width: min(560px, calc(100vw - 32px));
-  padding: 6px 6px 6px 14px;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--card-line);
   border-radius: 12px;
-  background: var(--text);
-  color: var(--bg);
+  background: var(--card);
+  color: var(--text);
   font-size: 13px;
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.14), 0 2px 6px rgb(0 0 0 / 0.08);
 }
 .toast:popover-open { display: flex; align-items: center; gap: 8px; animation: toast-in 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 12px) scale(0.97); } }
 @media (prefers-reduced-motion: reduce) { .toast:popover-open { animation-name: fade-in; } }
-.toast-icon { font-size: 16px; opacity: 0.8; }
+.toast-icon { font-size: 17px; color: var(--accent); }
+.toast[data-kind="success"] .toast-icon { color: var(--success); }
+.toast[data-kind="error"] .toast-icon { color: var(--danger); }
 .toast-text { flex: 1; min-width: 0; padding: 4px 0; line-height: 1.35; }
-.toast-action { padding: 4px 10px; border-radius: 7px; color: inherit; font-weight: 600; background: rgb(127 127 127 / 0.28); }
-.toast-action:hover { background: rgb(127 127 127 / 0.4); }
+.toast-action { padding: 4px 10px; border-radius: 7px; color: var(--accent); font-weight: 600; background: color-mix(in srgb, var(--accent), transparent 90%); }
+.toast-action:hover { background: color-mix(in srgb, var(--accent), transparent 82%); }
 .toast-close { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: inherit; font-size: 15px; opacity: 0.6; }
-.toast-close:hover { opacity: 1; background: rgb(127 127 127 / 0.25); }
+.toast-close:hover { opacity: 1; background: rgb(127 127 127 / 0.15); }
 
 /* phones and narrow windows: one pane at a time */
 @media (max-width: 760px) {

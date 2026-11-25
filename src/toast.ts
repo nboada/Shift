@@ -5,24 +5,32 @@ export type ToastOptions = {
   action?: { label: string; run: () => void };
   /** How long it stays up. Hovering pauses the countdown. */
   ms?: number;
+  /** Picks the icon and its colour; `icon` overrides the icon. */
+  kind?: "success" | "error" | "info";
   icon?: string;
 };
+
+const KIND_ICONS = { success: "circle-check", error: "alert-circle", info: "info-circle" };
 
 export type Toast = { setMessage: (msg: string) => void; close: () => void; readonly open: boolean };
 
 let current: { el: HTMLElement; timer: number } | null = null;
 
 /** The single toast at the bottom of the window. A new one replaces whatever is showing. */
-export function toast(msg: string, { action, ms = action ? 8000 : 4000, icon }: ToastOptions = {}): Toast {
+export function toast(
+  msg: string,
+  { action, ms = action ? 8000 : 4000, kind = "info", icon = KIND_ICONS[kind] }: ToastOptions = {},
+): Toast {
   current?.el.remove();
   clearTimeout(current?.timer);
 
   // A popover, so it opens in the top layer above any open modal (composer, sheets).
   const el = document.createElement("div");
   el.className = "toast";
+  el.dataset.kind = kind;
   el.popover = "manual";
   el.setAttribute("role", "status");
-  if (icon) el.append(Object.assign(document.createElement("i"), { className: `${iconClass(icon)} toast-icon` }));
+  el.append(Object.assign(document.createElement("i"), { className: `${iconClass(icon)} toast-icon` }));
   const text = Object.assign(document.createElement("span"), { className: "toast-text", textContent: msg });
   el.append(text);
   if (action) {

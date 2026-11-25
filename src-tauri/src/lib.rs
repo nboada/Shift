@@ -1404,6 +1404,62 @@ async fn empty_mailbox(
     Ok(())
 }
 
+/// Permanently deletes the trashed messages of `ids` (Delete inside Trash). Local first: a conversation that's all in
+/// Trash leaves the cache, one with messages elsewhere just leaves Trash; if Gmail fails, the threads are fetched back.
+#[tauri::command]
+async fn delete_forever(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    account: String,
+    ids: Vec<String>,
+) -> R<()> {
+    let a = s.account(&account)?;
+    for id in &ids {
+        db::forget_trash(&a.db(), id)?;
+    }
+    let _ = app.emit(CHANGED, ());
+    if s.demo {
+        return Ok(());
+    }
+    let token = a.access_token(&s.http).await?;
+    let g = Gmail {
+        http: &s.http,
+        token: &token,
+    };
+    if let Err(e) = delete_trashed(&g, &ids).await {
+        let _ = fetch_threads(&app, &a, &g, ids).await;
+        let _ = app.emit(CHANGED, ());
+        if gmail::is_scope_error(&e) {
+            return Err(anyhow::anyhow!(
+                "{} needs to sign in again to allow permanent deletion: Settings → Accounts → Add account, then pick {} again.",
+                a.email,
+                a.email
+            )
+            .into());
+        }
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Gmail's threads.delete would also delete a conversation's messages outside Trash, so only the trashed ones go.
+async fn delete_trashed(g: &Gmail<'_>, threads: &[String]) -> anyhow::Result<()> {
+    let mut msgs = Vec::new();
+    for id in threads {
+        let t = g.thread(id, false).await?;
+        msgs.extend(
+            t.messages
+                .into_iter()
+                .filter(|m| m.label_ids.iter().any(|l| l == "TRASH"))
+                .map(|m| m.id),
+        );
+    }
+    if msgs.is_empty() {
+        return Ok(());
+    }
+    g.batch_delete(&msgs).await
+}
+
 enum LabelEdit<'a> {
     Rename(&'a str),
     Color { background: &'a str, text: &'a str },
@@ -2051,10 +2107,12 @@ async fn find_draft(
     account: String,
     thread: String,
 ) -> R<Option<(String, String, String)>> {
-    if s.demo {
-        return Ok(None);
-    }
     let a = s.account(&account)?;
+    // Demo drafts have no Gmail draft; the thread id stands in for the draft id.
+    if s.demo {
+        let last = db::messages(&a.db(), &thread)?.pop();
+        return Ok(last.map(|m| (thread, m.id, String::new())));
+    }
     let token = a.access_token(&s.http).await?;
     let g = Gmail {
         http: &s.http,
@@ -2205,18 +2263,42 @@ async fn save_draft(
 }
 
 #[tauri::command]
-async fn delete_draft(s: tauri::State<'_, State>, account: String, draft_id: String) -> R<()> {
-    if s.demo || draft_id.is_empty() {
+async fn delete_draft(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    account: String,
+    draft_id: String,
+) -> R<()> {
+    if draft_id.is_empty() {
         return Ok(());
     }
-    let token = s.account(&account)?.access_token(&s.http).await?;
-    Gmail {
+    let a = s.account(&account)?;
+    if s.demo {
+        db::delete_thread(&a.db(), &draft_id)?;
+        let _ = app.emit(CHANGED, ());
+        return Ok(());
+    }
+    let token = a.access_token(&s.http).await?;
+    let g = Gmail {
         http: &s.http,
         token: &token,
-    }
-    .delete_draft(&draft_id)
-    .await?;
+    };
+    discard_draft(&a, &g, &draft_id).await?;
+    let _ = app.emit(CHANGED, ());
     Ok(())
+}
+
+/// Deletes a Gmail draft and brings its conversation in the cache up to date, so Drafts drops it now rather than on
+/// the next sync: a draft on its own leaves no thread behind, a reply draft leaves the conversation without it.
+async fn discard_draft(a: &Account, g: &Gmail<'_>, draft_id: &str) -> anyhow::Result<()> {
+    let thread = g.draft_thread(draft_id).await?;
+    g.delete_draft(draft_id).await?;
+    let full = db::is_full(&a.db(), &thread);
+    match g.thread(&thread, full).await {
+        Ok(t) => db::upsert_thread(&mut a.db(), &t, full),
+        Err(e) if gmail::is_not_found(&e) => db::delete_thread(&a.db(), &thread),
+        Err(e) => Err(e),
+    }
 }
 
 /// An attachment's filename and bytes: from the cache when Gmail sent them inline, else fetched on demand.
@@ -2569,6 +2651,18 @@ pub fn run() {
                 }
                 load_accounts(&dir)?
             };
+            // The demo keeps its own settings, starting from a copy of the real ones: both write the whole file on
+            // every change, so sharing it let a demo left open undo settings changed in the real app.
+            let dir = if demo {
+                let own = dir.join("demo");
+                std::fs::create_dir_all(&own)?;
+                if !settings::path(&own).exists() {
+                    let _ = std::fs::copy(settings::path(&dir), settings::path(&own));
+                }
+                own
+            } else {
+                dir
+            };
             app.manage(State {
                 demo,
                 broken,
@@ -2643,6 +2737,7 @@ pub fn run() {
             quit_now,
             test_notification,
             empty_mailbox,
+            delete_forever,
             create_label,
             rename_label,
             set_label_color,
@@ -2733,6 +2828,47 @@ mod tests {
         );
     }
     use super::*;
+
+    #[test]
+    fn discarding_a_lone_draft_removes_its_thread_from_the_cache() {
+        let a = Account::new(
+            "me@example.com".into(),
+            db::open(std::path::Path::new(":memory:")).unwrap(),
+        );
+        let draft: gmail::Thread =
+            serde_json::from_value(serde_json::json!({ "id": "t9", "messages": [{
+            "id": "m9", "labelIds": ["DRAFT"], "internalDate": "1",
+            "payload": { "headers": [{ "name": "Subject", "value": "hi" }] } }] }))
+            .unwrap();
+        db::upsert_thread(&mut a.db(), &draft, false).unwrap();
+        assert_eq!(db::threads(&a.db(), Some("DRAFT")).unwrap().len(), 1);
+        tauri::async_runtime::block_on(async {
+            let fake = fake_gmail::start(|req, _| {
+                if req.path.starts_with("/gmail/v1/users/me/drafts/d1?") {
+                    return (
+                        200,
+                        r#"{"id":"d1","message":{"id":"m9","threadId":"t9"}}"#.into(),
+                    );
+                }
+                if req.path.contains("/threads/t9") {
+                    return (404, "{}".into());
+                }
+                (200, "{}".into())
+            });
+            let http = reqwest::Client::new();
+            let g = Gmail {
+                http: &http,
+                token: "t",
+            };
+            discard_draft(&a, &g, "d1").await.unwrap();
+            assert!(
+                fake.requests()
+                    .iter()
+                    .any(|r| r.method == "DELETE" && r.path == "/gmail/v1/users/me/drafts/d1")
+            );
+        });
+        assert!(db::threads(&a.db(), Some("DRAFT")).unwrap().is_empty());
+    }
 
     #[test]
     fn label_changes_stay_queued_until_gmail_answers() {

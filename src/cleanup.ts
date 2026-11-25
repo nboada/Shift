@@ -3,6 +3,7 @@
 // it runs in the background: closing the sheet leaves a small card in the corner that says when the results are ready.
 import { invoke } from "@tauri-apps/api/core";
 import { iconHtml } from "./icons";
+import type { ToastOptions } from "./toast";
 
 type Item = {
   account: string;
@@ -14,7 +15,7 @@ type Item = {
 
 type Context = {
   scope: () => string[] | null;
-  toast: (msg: string) => void;
+  toast: (msg: string, opts?: ToastOptions) => void;
 };
 
 const GROUPS: [Item["group"], string, string, string][] = [
@@ -180,7 +181,8 @@ async function archive(group: HTMLElement) {
   const { done: archived, error } = await setInbox(list, false);
   const left = new Set(archived.map((i) => `${i.account}:${i.id}`));
   boxes.forEach((b) => left.has(`${b.dataset.account}:${b.dataset.id}`) && b.closest("li")!.remove());
-  if (error) ctx.toast(`Couldn't archive ${list.length - archived.length} of ${list.length}: ${error}`);
+  if (error)
+    ctx.toast(`Couldn't archive ${list.length - archived.length} of ${list.length}: ${error}`, { kind: "error" });
   button.disabled = false;
   if (archived.length) {
     // In the sheet, next to the group it came from, so Undo stays at hand while reviewing the rest.
@@ -203,7 +205,7 @@ async function restore(button: HTMLButtonElement) {
     done.querySelector("span")!.textContent = "Moved back to your Inbox";
     button.remove();
   } catch (err) {
-    ctx.toast(String(err));
+    ctx.toast(String(err), { kind: "error" });
     button.disabled = false;
   }
 }

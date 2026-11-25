@@ -106,6 +106,11 @@
       <div class="cu-body"></div>
     </dialog>
     <div id="cleanup-status" class="cu-status" role="status" hidden></div>
+    <div id="draft-pill" class="cu-status draft-pill" role="button" tabindex="0" aria-label="Reopen draft" hidden>
+      <i class="ti ti-file"></i>
+      <span><strong>Draft saved</strong><small id="draft-pill-subject"></small></span>
+      <button type="button" class="icon" id="draft-pill-close" data-tip="Dismiss" aria-label="Dismiss"><i class="ti ti-x"></i></button>
+    </div>
     <dialog id="composer" class="composer" aria-labelledby="compose-title">
       <form id="compose-form" class="compose-form">
         <header>
