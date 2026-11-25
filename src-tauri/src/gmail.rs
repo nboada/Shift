@@ -151,6 +151,18 @@ impl Message {
         walk(self.payload.as_ref()?, mime)
     }
 
+    /// The calendar data of an invite: the first `text/calendar` part, inline or attached as an .ics file.
+    pub fn calendar(&self) -> Option<String> {
+        fn walk(p: &Part) -> Option<String> {
+            if is_calendar(p) {
+                let bytes = B64.decode(p.body.as_ref()?.data.as_ref()?).ok()?;
+                return Some(String::from_utf8_lossy(&bytes).into_owned());
+            }
+            p.parts.iter().find_map(walk)
+        }
+        walk(self.payload.as_ref()?)
+    }
+
     /// Every part with a filename, plus inline non-text parts referenced by Content-ID.
     pub fn attachments(&self) -> Vec<Attachment> {
         fn walk(p: &Part, out: &mut Vec<Attachment>) {
@@ -198,10 +210,15 @@ fn charset(p: &Part) -> Option<String> {
     })
 }
 
-/// Text bodies Gmail stored apart from the message: an `attachmentId` and no `data`.
+fn is_calendar(p: &Part) -> bool {
+    p.mime_type.eq_ignore_ascii_case("text/calendar")
+        || p.mime_type.eq_ignore_ascii_case("application/ics")
+}
+
+/// Text bodies Gmail stored apart from the message: an `attachmentId` and no `data`. Includes an invite's .ics
+/// file, which the reader shows as the event.
 fn stored_text<'a>(p: &'a mut Part, out: &mut Vec<&'a mut Body>) {
-    if p.filename.is_empty()
-        && p.mime_type.starts_with("text/")
+    if (is_calendar(p) || p.filename.is_empty() && p.mime_type.starts_with("text/"))
         && let Some(b) = p
             .body
             .as_mut()
@@ -853,6 +870,20 @@ mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].attachment_id.as_deref(), Some("B1"));
         assert!(m.attachments().is_empty());
+    }
+
+    #[test]
+    fn invite_calendar_is_read_inline_and_fetched_when_attached() {
+        let raw = r#"{"id":"m","payload":{"mimeType":"multipart/mixed","parts":[
+            {"mimeType":"multipart/alternative","parts":[
+                {"mimeType":"text/plain","body":{"data":"aGk"}},
+                {"mimeType":"text/calendar","body":{"data":"QkVHSU46VkNBTEVOREFS"}}]},
+            {"mimeType":"application/ics","filename":"invite.ics","body":{"attachmentId":"A1","size":900}}]}}"#;
+        let mut m: Message = serde_json::from_str(raw).unwrap();
+        assert_eq!(m.calendar().as_deref(), Some("BEGIN:VCALENDAR"));
+        let mut stored = Vec::new();
+        stored_text(m.payload.as_mut().unwrap(), &mut stored);
+        assert_eq!(stored.len(), 1);
     }
 
     #[test]
