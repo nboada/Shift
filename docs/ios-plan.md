@@ -13,9 +13,9 @@ Tried on 2026-11-25:
   - Updates are off on iOS (`updates_enabled`): they come through TestFlight and the App Store.
   - The Mac app is unchanged: clippy is clean, all 65 tests pass, and `cargo fmt` is clean.
 - **Xcode project generated:** `bun run tauri ios init` created `src-tauri/gen/apple` (bundle id `au.com.talkk.shift`).
-- **The UI already has a phone layout.** Under 760px it shows one column: mailboxes → list → reader, with Back buttons, safe-area padding for the notch, and swipe actions on rows.
+- **The iPhone has its own interface** (issue #42): mailboxes → conversation list → conversation on a navigation stack, in `src/mobile/`, on the same mail core as the Mac.
 - **Runs in the simulator in demo mode** (iPhone 17, iOS 27.0): Inbox, reader and onboarding work. The `demo` cargo feature turns on the demo mailbox, since an iOS app gets no `SHIFT_DEMO` variable.
-- **Run it:** `bun run tauri ios dev "iPhone 17" --features demo` (needs the iOS Simulator runtime that matches Xcode's SDK, from Xcode → Settings → Components).
+- **Run it:** `bun run tauri ios dev "iPhone 18 Pro Max" --features demo` (needs the iOS Simulator runtime that matches Xcode's SDK, from Xcode → Settings → Components).
 
 ## Decisions (Nic, 2026-11-25)
 
@@ -32,7 +32,16 @@ Tried on 2026-11-25:
 
 ### 2. Phone UI pass (2–4 days)
 
-The one-column layout exists; this is about touch.
+Rebuilt as a phone interface on a shared core (issue #42), in six steps:
+
+1. **Shared mail core:** done. `src/core/mail.ts`, tested against a fake backend; `main.ts` is the desktop UI on it.
+2. **Phone shell, list and reader:** done (2026-11-26), checked in the demo on the iPhone 18 Pro Max simulator. `src/mobile/`: a navigation stack (push and pop with the app's easing, edge swipe back, back button named after the screen underneath, scroll kept, large titles), the Mailboxes screen (mailboxes, labels, unread counts, all accounts or one), the conversation list (Smart Inbox sections, pull to refresh, load more, empty states, swipe actions from Settings → Swipes with Undo, basic search, compose) and the conversation (message cards shared with the Mac through `src/email-view.ts`, wide emails scaled to fit, Load images, invites, attachments to the share sheet, archive, delete, move and labels, mark unread, reply, next and previous). Compose, Settings and onboarding still open the Mac's versions.
+3. Compose sheet.
+4. Search screen, organising sheets, multi-select, long-press menus.
+5. Settings, onboarding and AI on the phone.
+6. Remove the old phone overrides from `styles.css`.
+
+The notes below are from before the rebuild; what's left of them belongs to steps 3–6.
 
 - **Hover-only controls need a tap equivalent:**
   - row hover actions: swipe already exists, plus a long press;

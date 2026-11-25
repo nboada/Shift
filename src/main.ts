@@ -1270,7 +1270,9 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     // Its draft couldn't be saved, so it came back open: keep it rather than replace it.
     if (compose) return;
   }
-  const inline = !!opts.inline && !!mail.selected && (!opts.context || opts.context.thread_id === mail.selected);
+  // The phone has no reader pane to reply inside.
+  const inline =
+    !IS_IOS && !!opts.inline && !!mail.selected && (!opts.context || opts.context.thread_id === mail.selected);
   compose = {
     title: opts.title ?? "New Email",
     context: opts.context ?? null,
@@ -2836,14 +2838,26 @@ function start(list: string[]) {
   renderAccountFooter();
   $("#signin").hidden = true;
   clearReader();
-  app.hidden = false;
+  if (IS_IOS) void showPhone();
+  else app.hidden = false;
   mail.refresh();
   // Adding an account from inside the walkthrough calls start() again; the open walkthrough carries on.
   if (onboardingDue() && $("#onboarding").hidden)
     startOnboarding({ accounts: () => mail.accounts, addAccount, keyLabel });
 }
 
+/** The iPhone gets its own screens on the same core (src/mobile), loaded only there; the composer stays this one. */
+let phone: Promise<{ reset: () => void }> | null = null;
+async function showPhone() {
+  phone ??= import("./mobile/phone").then((m) =>
+    m.mountPhone({ mail, compose: () => void openComposer(), reply, openDraft, editScheduled }),
+  );
+  (await phone).reset();
+}
+
 mail.subscribe((e) => {
+  // The desktop panes only draw while they're showing; errors are toasted for either interface.
+  if (app.hidden && e.type !== "error" && e.type !== "sync-error") return;
   switch (e.type) {
     case "labels":
       return drawMailboxes();
