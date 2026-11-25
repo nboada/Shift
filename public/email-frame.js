@@ -104,6 +104,11 @@
     post({ type: "key", key, code, metaKey, ctrlKey, altKey, shiftKey });
   });
 
+  // No WebKit menu (Reload, Open Link) unless text is selected, so Copy and Look Up still work.
+  doc.addEventListener("contextmenu", (e) => {
+    if (doc.getSelection()?.isCollapsed !== false) e.preventDefault();
+  });
+
   // Inline (cid:) images, whose bytes the app fetches after the email shows.
   addEventListener("message", (e) => {
     if (e.source !== parent || e.data?.type !== "cid") return;
