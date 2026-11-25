@@ -15,7 +15,7 @@ Tried on 2026-11-25:
 - **Xcode project generated:** `bun run tauri ios init` created `src-tauri/gen/apple` (bundle id `au.com.talkk.shift`).
 - **The UI already has a phone layout.** Under 760px it shows one column: mailboxes → list → reader, with Back buttons, safe-area padding for the notch, and swipe actions on rows.
 - **Runs in the simulator in demo mode** (iPhone 17, iOS 27.0): Inbox, reader and onboarding work. The `demo` cargo feature turns on the demo mailbox, since an iOS app gets no `SHIFT_DEMO` variable.
-- **How to run it while the installed simulator runtime (27.0) is older than the SDK (27.2):** `tauri ios build` refuses to build, and `tauri ios dev` only opens Xcode. Keep `bun run tauri ios dev "iPhone 17" --features demo` running, then build from `src-tauri/gen/apple` with `xcodebuild -scheme app_iOS -configuration debug -destination 'platform=iOS Simulator,name=iPhone 17' ARCHS=arm64 build` and install the `.app` it produces. Installing the iOS 27.2 runtime (Xcode → Settings → Components) removes the workaround.
+- **Run it:** `bun run tauri ios dev "iPhone 17" --features demo` (needs the iOS Simulator runtime that matches Xcode's SDK, from Xcode → Settings → Components).
 
 ## Decisions (Nic, 2026-11-25)
 
