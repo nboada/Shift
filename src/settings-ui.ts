@@ -953,7 +953,7 @@ export function initSettings(c: Ctx) {
         );
       case "add-account": {
         const label = b.innerHTML;
-        b.textContent = "Finish signing in in your browser…";
+        b.textContent = "Finish signing in with Google…";
         b.setAttribute("disabled", "");
         await ctx.onAddAccount().finally(() => {
           b.innerHTML = label;
