@@ -580,7 +580,6 @@ button.primary:disabled { opacity: 0.6; }
 .reader-head { position: sticky; top: -20px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -20px -28px 14px; padding: 10px 28px; border-bottom: 1px solid var(--line); background: var(--reader); }
 .reader .reader-head h1 { margin: 0; font-size: 17px; font-weight: 650; line-height: 1.3; }
 .reader-head .reader-labels { margin: 0; }
-.reader-head .ai-labelled { flex-basis: 100%; margin: 0; }
 .reader-labels .row-label { max-width: none; padding: 2px 9px; font-size: 12px; }
 .threads li.selected .row-label:not([data-color]) { background: var(--card); }
 .threads li.unread .subject { font-weight: 600; }
@@ -940,10 +939,6 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .ai-rule { display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr); align-items: center; gap: 12px; font-size: 13px; font-weight: 500; }
 .ai-rule span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings .ai-rule input[type="text"] { width: 100%; }
-.ai-labelled { display: flex; align-items: center; gap: 8px; margin: -4px 0 14px; color: var(--muted); font-size: 12.5px; }
-.ai-labelled i { color: var(--brand); font-size: 15px; }
-.ai-labelled button { padding: 2px 8px; border-radius: 6px; color: var(--accent); font-weight: 600; }
-.ai-labelled button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent), transparent 88%); }
 #ai-write.busy i { animation: ai-pulse 1s ease-in-out infinite; color: var(--brand); }
 @keyframes ai-pulse { 50% { opacity: 0.35; } }
 /* On the library's own element: it sets its defaults there, which would override values inherited from a wrapper. */
