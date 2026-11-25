@@ -1,6 +1,8 @@
 // Early access: saves the email, then the page shows the download, which streams from R2.
-// It also serves the app update feed from R2. Everything else is a static file, served before this Worker runs.
+// It also serves the app update feed from R2, and moves pages off the old domain. Everything else is a static file.
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const HOST = "getshiftmail.com";
+const OLD_HOST = "shift.talkk.com.au";
 const FILE = "Shift.dmg";
 
 const json = (body, status = 200) =>
@@ -8,7 +10,15 @@ const json = (body, status = 200) =>
 
 export default {
   async fetch(request, env) {
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname } = url;
+
+    // Pages live on getshiftmail.com. The old shift.talkk.com.au keeps answering the update feed and the download,
+    // which copies of Shift released before the move still ask it for; everything else on it, and www, moves over.
+    const kept = pathname.startsWith("/updates/") || pathname === "/download";
+    if (url.hostname === `www.${HOST}` || (url.hostname === OLD_HOST && !kept)) {
+      return Response.redirect(`https://${HOST}${pathname}${url.search}`, 301);
+    }
 
     if (pathname === "/api/early-access" && request.method === "POST") {
       // A few sign-ups a minute per visitor is plenty; scripts flooding KV with junk addresses get turned away.

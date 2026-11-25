@@ -645,7 +645,7 @@ async fn sync_all(app: &AppHandle) {
     .await;
 }
 
-/// Release builds check shift.talkk.com.au for a newer version at launch and every six hours, install it in the
+/// Release builds check getshiftmail.com for a newer version at launch and every six hours, install it in the
 /// background, then tell the UI so it can offer a restart. Dev and demo builds never update themselves.
 /// Release builds only: dev and demo builds have no signed update feed to install from.
 fn updates_enabled(app: &AppHandle) -> bool {

@@ -75,7 +75,7 @@ cp "$TARBALL" "site/.release/updates/Shift-$VERSION.app.tar.gz"
 VERSION="$VERSION" NOTES="$NOTES" SIG="$(cat "$TARBALL.sig")" python3 - <<'EOF'
 import json, os, datetime
 v = os.environ["VERSION"]
-entry = {"signature": os.environ["SIG"], "url": f"https://shift.talkk.com.au/updates/Shift-{v}.app.tar.gz"}
+entry = {"signature": os.environ["SIG"], "url": f"https://getshiftmail.com/updates/Shift-{v}.app.tar.gz"}
 feed = {
     "version": v,
     "notes": os.environ["NOTES"],

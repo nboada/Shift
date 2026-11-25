@@ -18,7 +18,7 @@ cd src-tauri && cargo fmt         # rustfmt defaults; `cargo fmt --check` is one
 cd src-tauri && cargo audit        # advisories; .cargo/audit.toml lists the Linux-only ones ignored for the Mac build
 cd site && bun run dev           # the Astro site (home, roadmap, changelog, privacy, terms) with hot reload
 cd site && bunx wrangler dev     # the built site plus the early access Worker, local KV and R2
-cd site && bunx wrangler deploy   # manual deploy to shift.talkk.com.au (needs `gh` signed in); pushes to main that touch site/ deploy on their own via Cloudflare Workers Builds
+cd site && bunx wrangler deploy   # manual deploy to getshiftmail.com (needs `gh` signed in); pushes to main that touch site/ deploy on their own via Cloudflare Workers Builds
 scripts/release.sh [--publish] "notes"   # signed, notarized universal build; --publish puts Shift.dmg in R2 and deploys the update feed
 ```
 

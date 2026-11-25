@@ -1,4 +1,4 @@
-// Site for shift.talkk.com.au: an Astro site built to dist/, plus a Worker for early access sign-ups and the download.
+// Site for getshiftmail.com (and the old shift.talkk.com.au, kept for installed apps): an Astro site built to dist/, plus a Worker for early access sign-ups and the download.
 // Deploy: cd site && bunx wrangler deploy (runs the Astro build first; the roadmap build needs GitHub access via gh or GITHUB_TOKEN)
 {
   "name": "shift-site",
@@ -6,8 +6,13 @@
   "compatibility_date": "2026-11-01",
   "main": "src/worker.js",
   "build": { "command": "bun run build" },
-  "assets": { "directory": "./dist", "binding": "ASSETS" },
-  "routes": [{ "pattern": "shift.talkk.com.au", "custom_domain": true }],
+  // The Worker sees every request first, so it can move pages off the old domain (see src/worker.js).
+  "assets": { "directory": "./dist", "binding": "ASSETS", "run_worker_first": true },
+  "routes": [
+    { "pattern": "getshiftmail.com", "custom_domain": true },
+    { "pattern": "www.getshiftmail.com", "custom_domain": true },
+    { "pattern": "shift.talkk.com.au", "custom_domain": true }
+  ],
   "kv_namespaces": [{ "binding": "EARLY_ACCESS", "id": "34cca6bcbe1b4672bc1afeed625cb9d3" }],
   "r2_buckets": [{ "binding": "DOWNLOADS", "bucket_name": "shift-downloads" }],
   // Early-access sign-ups per visitor IP: 5 a minute.
