@@ -367,7 +367,7 @@ button.primary:disabled { opacity: 0.6; }
 }
 .toolbar h2 { flex: 1; margin: 0 6px; font-size: 19px; letter-spacing: -0.01em; }
 .toolbar h2:has(+ .acct-dots:not([hidden])) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acct-dots { flex: 1; display: flex; align-items: center; gap: 0; }
+.acct-dots { flex: 1; display: flex; align-items: center; gap: 0; margin-top: 2px; /* optical: centre on the letters, not the line box */ }
 .acct-pick { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; }
 .acct-pick:hover { background: var(--hover); }
 .acct-pick .account-dot { width: 9px; height: 9px; transition: opacity 0.15s, box-shadow 0.15s; }
