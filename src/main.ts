@@ -1549,7 +1549,21 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
         menuPos,
         (bg) => {
           const text = LABEL_COLORS.find((c) => c[1] === bg)![2];
-          void labelAction(invoke("set_label_color", { label: label.id, background: bg, text, accounts: scope }));
+          // Shown at once, then sent to Gmail; if Gmail refuses, the refresh puts the saved colour back.
+          for (const l of [...userLabels, ...[...accountLabels.values()].flat()])
+            if (l.name === label.name) l.color = bg;
+          const dot = document.querySelector<HTMLElement>(
+            `#mailboxes [data-mailbox="${CSS.escape(label.id)}"] .label-dot`,
+          );
+          if (dot) {
+            dot.className = "label-dot";
+            dot.dataset.color = bg.slice(1).toLowerCase();
+          }
+          renderThreads();
+          invoke("set_label_color", { label: label.id, background: bg, text, accounts: scope }).catch((err) => {
+            toast(String(err), { kind: "error" });
+            refresh();
+          });
         },
       );
       return true;
