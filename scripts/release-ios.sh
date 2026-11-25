@@ -4,8 +4,9 @@
 #   scripts/release-ios.sh --upload   build it and upload it; it shows in TestFlight once Apple has processed it
 # The build number is the commit count, so every upload from a new commit is higher than the last.
 #
-# One-time setup on the release Mac: the App Store Connect API key in the Keychain (see scripts/release.sh). Xcode
-# signs automatically with that key, creating the distribution certificate and profile on the first run.
+# One-time setup on the release Mac: the App Store Connect API key in the Keychain (see scripts/release.sh), and the
+# team's Apple Distribution certificate (with its private key) in the login Keychain plus the "Shift App Store"
+# provisioning profile installed, both made through the App Store Connect API.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -25,8 +26,20 @@ export APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
 
 BUILD=$(git rev-list --count HEAD)
 bun install --frozen-lockfile
-bun run tauri ios build --export-method app-store-connect --config "{\"bundle\":{\"iOS\":{\"bundleVersion\":\"$BUILD\"}}}"
-IPA=$(ls src-tauri/gen/apple/build/arm64/*.ipa)
+ARCHIVE=src-tauri/gen/apple/build/app_iOS.xcarchive
+OUT=src-tauri/gen/apple/build/export
+STARTED=$(mktemp)
+# Tauri's own export uses automatic signing, which asks Apple's cloud signing for a certificate; an App Manager key
+# isn't allowed to. So its export step fails by design, and the archive is exported below with the local Apple
+# Distribution certificate and the "Shift App Store" profile (scripts/ios-export-options.plist).
+bun run tauri ios build --export-method app-store-connect --config "{\"bundle\":{\"iOS\":{\"bundleVersion\":\"$BUILD\"}}}" || true
+if [ -z "$(find "$ARCHIVE/Info.plist" -newer "$STARTED" 2>/dev/null)" ]; then
+  echo "error: the build didn't produce a new archive; see the output above" >&2
+  exit 1
+fi
+rm -rf "$OUT"
+xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportOptionsPlist scripts/ios-export-options.plist -exportPath "$OUT"
+IPA=$OUT/Shift.ipa
 echo "built $IPA (build $BUILD)"
 
 if [ "${1:-}" = "--upload" ]; then
