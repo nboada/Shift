@@ -32,3 +32,21 @@ dist-ssr
 
 # Astro build cache
 .astro
+
+# Never commit secrets or personal data: this repository is public.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.mobileprovision
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.eml
+*.mbox
+*.har
+.wrangler/
