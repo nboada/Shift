@@ -232,7 +232,7 @@ async function renderMailboxes() {
   const unread = new Map(labels.map((l) => [l.id, l.unread]));
   labelColorCss(labels.map((l) => l.color ?? ""));
   const link = (group: string, id: string | null, name: string, icon: string, count = 0, color: string | null = null) =>
-    `<a href="#" draggable="true" data-group="${group}" data-mailbox="${esc(id ?? "")}" class="${!search && id === mailbox ? "active" : ""}" ${!search && id === mailbox ? 'aria-current="page"' : ""}>
+    `<a href="#" draggable="false" data-group="${group}" data-mailbox="${esc(id ?? "")}" class="${!search && id === mailbox ? "active" : ""}" ${!search && id === mailbox ? 'aria-current="page"' : ""}>
       ${icon ? iconHtml(icon) : labelDot(name, color)}<span>${esc(name)}</span>${count ? `<small>${count}</small>` : ""}</a>`;
   const badge = settings.inbox.unreadBadge;
   void updateDockBadge();
@@ -1486,30 +1486,63 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
   });
 });
 
-// Drag a mailbox to reorder it within its group (system mailboxes or labels).
-let draggedMailbox: HTMLElement | null = null;
-$("#mailboxes").addEventListener("dragstart", (e) => {
-  draggedMailbox = (e.target as Element).closest<HTMLElement>("[data-mailbox]");
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+let sortedJustNow = false;
+// Drag a mailbox to reorder it within its group (system mailboxes or labels): the row lifts and follows the pointer,
+// the others slide out of its way, and it drops into the gap. Pointer events, not HTML drag and drop, whose
+// see-through copy floated over the list while the real row jumped between slots.
+$("#mailboxes").addEventListener("pointerdown", (e) => {
+  const item = (e.target as Element).closest<HTMLElement>("[data-mailbox]");
+  if (!item || e.button !== 0) return;
+  const box = $("#mailboxes");
+  const rows = [...box.querySelectorAll<HTMLElement>(`[data-group="${item.dataset.group}"]`)];
+  const tops = rows.map((r) => r.getBoundingClientRect().top);
+  const from = rows.indexOf(item);
+  const pitch = rows.length > 1 ? tops[1] - tops[0] : 0;
+  let to = from;
+  let dragging = false;
+  const move = (ev: PointerEvent) => {
+    const dy = ev.clientY - e.clientY;
+    if (!dragging) {
+      if (Math.abs(dy) < 4) return;
+      dragging = true;
+      item.classList.add("lifted");
+      box.classList.add("sorting");
+    }
+    const y = Math.max(tops[0] - tops[from], Math.min(tops.at(-1)! - tops[from], dy));
+    item.style.transform = `translateY(${y}px)`;
+    to = Math.max(0, Math.min(rows.length - 1, from + Math.round(y / pitch)));
+    rows.forEach((r, i) => {
+      if (r === item) return;
+      const shift = i > from && i <= to ? -pitch : i < from && i >= to ? pitch : 0;
+      r.style.transform = shift ? `translateY(${shift}px)` : "";
+    });
+  };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", up);
+    if (!dragging) return;
+    // The release would otherwise click the row and open that mailbox.
+    sortedJustNow = true;
+    setTimeout(() => (sortedJustNow = false));
+    rows.forEach((r) => (r.style.transform = ""));
+    item.classList.remove("lifted");
+    box.classList.remove("sorting");
+    if (to === from) return;
+    if (to > from) rows[to].after(item);
+    else rows[to].before(item);
+    saveSidebarOrder();
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+  addEventListener("pointercancel", up);
 });
-$("#mailboxes").addEventListener("dragover", (e) => {
-  const over = (e.target as Element).closest<HTMLElement>("[data-mailbox]");
-  if (!draggedMailbox || !over || over.dataset.group !== draggedMailbox.dataset.group) return;
-  e.preventDefault();
-  if (over === draggedMailbox) return;
-  const r = over.getBoundingClientRect();
-  over.before(draggedMailbox);
-  if (e.clientY > r.top + r.height / 2) over.after(draggedMailbox);
-});
-$("#mailboxes").addEventListener("drop", (e) => e.preventDefault());
-$("#mailboxes").addEventListener("dragend", () => {
-  if (!draggedMailbox) return;
-  draggedMailbox = null;
+function saveSidebarOrder() {
   const shown = [...$("#mailboxes").querySelectorAll<HTMLElement>("[data-mailbox]")].map(
     (a) => a.dataset.mailbox || "ALL",
   );
   setSetting("sidebar.order", [...shown, ...settings.sidebar.order.filter((k) => !shown.includes(k))]);
-});
+}
 
 /** " in both accounts" / " in all 3 accounts" when an action reaches every account in the unified view, else "". */
 function inAccounts() {
@@ -2527,6 +2560,7 @@ $("#compose-btn").addEventListener("click", () => openComposer({ body: signature
 $("#mailboxes").addEventListener("click", (e) => {
   // Real links (href="#") so they're focusable and work with Return and VoiceOver; never navigate.
   e.preventDefault();
+  if (sortedJustNow) return;
   if ((e.target as Element).closest(".label-add")) return void newLabel();
   const a = (e.target as Element).closest<HTMLElement>("[data-mailbox]");
   if (a) openMailbox(a.dataset.mailbox || null);

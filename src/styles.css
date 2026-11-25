@@ -321,6 +321,9 @@ button.primary:disabled { opacity: 0.6; }
   text-decoration: none;
 }
 .mailboxes a + a { margin-top: 3px; }
+.mailboxes.sorting { user-select: none; }
+.mailboxes.sorting a { transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1); }
+.mailboxes a.lifted { position: relative; z-index: 1; transition: none; background: var(--card); box-shadow: 0 6px 18px rgb(0 0 0 / 0.14); cursor: grabbing; }
 .mailboxes a i { font-size: 17px; }
 .mailboxes a span:not(.label-dot) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mailboxes a small { color: var(--sidebar-badge); font-weight: 600; }
