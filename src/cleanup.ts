@@ -58,6 +58,11 @@ export function initCleanup(context: Context) {
     const target = e.target as Element;
     const b = target.closest<HTMLButtonElement>("[data-archive]");
     if (b) return void archive(b.closest<HTMLElement>(".cu-group")!);
+    // Suggestions only, so cancelling just drops the run; a late answer is ignored (`run !== mine`).
+    if (target.closest("[data-cu-cancel]")) {
+      run = null;
+      return sheet().close();
+    }
     const undo = target.closest<HTMLButtonElement>("[data-undo]");
     if (undo) return void restore(undo);
     // The header opens and closes its group, except on the checkbox.
@@ -95,7 +100,8 @@ function showCard() {
   if (!run || sheet().open) return void (c.hidden = true);
   c.hidden = false;
   if (!run.result && !run.error) {
-    c.innerHTML = `<span class="cu-spinner small"></span><span><strong>Sorting your Inbox</strong><small>You can keep working</small></span>`;
+    c.innerHTML = `<span class="cu-spinner small"></span><span><strong>Sorting your Inbox</strong><small>You can keep working</small></span>
+      <button type="button" class="icon" data-cu-dismiss aria-label="Cancel" data-tip="Cancel">${iconHtml("x")}</button>`;
     return;
   }
   const n = run.result?.filter((i) => i.group !== "keep").length ?? 0;
@@ -113,7 +119,8 @@ function render() {
   if (!run.result) {
     body().innerHTML = `<div class="cu-loading"><span class="cu-spinner"></span><p>Sorting your Inbox with AI…</p>
       <small>This reads the sender, subject and preview of your newest Inbox emails. It can take a minute: minimise this and keep working, and Shift lets you know when it's done.</small>
-      <button type="button" class="secondary cu-minimize" data-cu-close>${iconHtml("arrows-diagonal-minimize-2")}Minimise</button></div>`;
+      <div class="cu-loading-actions"><button type="button" class="secondary" data-cu-cancel>Cancel</button>
+      <button type="button" class="secondary cu-minimize" data-cu-close>${iconHtml("arrows-diagonal-minimize-2")}Minimise</button></div></div>`;
     return;
   }
   const items = run.result;
