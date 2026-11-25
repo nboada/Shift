@@ -578,6 +578,16 @@ pub fn thread_label_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// Whether a thread has any of the user's own labels, as opposed to Gmail's system ones.
+pub fn has_user_label(conn: &Connection, thread: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM thread_labels t JOIN labels l ON l.id = t.label_id
+           WHERE t.thread_id = ?1 AND l.kind = 'user')",
+        [thread],
+        |r| r.get(0),
+    )?)
+}
+
 pub fn label_id(conn: &Connection, name: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT id FROM labels WHERE name = ?1", [name], |r| {
@@ -1063,6 +1073,23 @@ mod tests {
             "payload": { "headers": [{ "name": "Subject", "value": "subj" }, { "name": "From", "value": "a@b.c" }] }
         })).collect();
         serde_json::from_value(serde_json::json!({ "id": id, "messages": msgs })).unwrap()
+    }
+
+    #[test]
+    fn user_labels_are_told_from_system_ones() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        c.execute_batch(
+            "INSERT INTO labels (id, name, kind) VALUES ('Label_1', 'Invoice', 'user'), ('INBOX', 'INBOX', 'system')",
+        )
+        .unwrap();
+        upsert_thread(&mut c, &convo("filed", &[&["INBOX", "Label_1"]]), false).unwrap();
+        upsert_thread(&mut c, &convo("plain", &[&["INBOX"]]), false).unwrap();
+        assert!(has_user_label(&c, "filed").unwrap());
+        assert!(
+            !has_user_label(&c, "plain").unwrap(),
+            "INBOX isn't a user label"
+        );
     }
 
     #[test]
