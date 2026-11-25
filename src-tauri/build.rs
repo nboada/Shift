@@ -33,6 +33,7 @@ fn main() {
             "quit_now",
             "test_notification",
             "empty_mailbox",
+            "delete_forever",
             "create_label",
             "rename_label",
             "set_label_color",

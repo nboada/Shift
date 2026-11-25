@@ -437,6 +437,16 @@ pub fn delete_threads(conn: &mut Connection, ids: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// A thread's trashed messages were deleted for good: gone if it was all in Trash, otherwise just out of Trash.
+pub fn forget_trash(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM threads WHERE id = ?1 AND live = 0", [id])?;
+    conn.execute(
+        "DELETE FROM thread_labels WHERE thread_id = ?1 AND label_id = 'TRASH'",
+        [id],
+    )?;
+    Ok(())
+}
+
 pub fn delete_thread(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM threads WHERE id = ?1", [id])?;
     Ok(())
@@ -811,7 +821,7 @@ pub fn missing_bodies(conn: &Connection, label: &str, limit: usize) -> Result<Ve
 
 #[derive(Serialize)]
 pub struct MessageRow {
-    id: String,
+    pub id: String,
     sender: String,
     recipients: String,
     cc: String,
@@ -946,6 +956,26 @@ mod tests {
             "payload": { "headers": [{ "name": "Subject", "value": "subj" }, { "name": "From", "value": "a@b.c" }] }
         })).collect();
         serde_json::from_value(serde_json::json!({ "id": id, "messages": msgs })).unwrap()
+    }
+
+    #[test]
+    fn deleting_trash_for_good_keeps_messages_outside_it() {
+        let mut c = Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        upsert_thread(&mut c, &convo("binned", &[&["TRASH"]]), false).unwrap();
+        upsert_thread(&mut c, &convo("part", &[&["INBOX"], &["TRASH"]]), false).unwrap();
+        forget_trash(&c, "binned").unwrap();
+        forget_trash(&c, "part").unwrap();
+        assert!(
+            threads(&c, Some("TRASH")).unwrap().is_empty(),
+            "nothing left in Trash"
+        );
+        assert_eq!(
+            threads(&c, Some("INBOX")).unwrap().len(),
+            1,
+            "the reply outside Trash stays"
+        );
     }
 
     #[test]

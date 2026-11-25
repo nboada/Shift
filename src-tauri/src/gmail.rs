@@ -751,6 +751,18 @@ impl Gmail<'_> {
         Ok(B64.decode(v["data"].as_str().unwrap_or_default())?)
     }
 
+    /// The conversation a draft belongs to.
+    pub async fn draft_thread(&self, id: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        struct R {
+            message: DraftMessage,
+        }
+        let r: R = self
+            .get(&format!("/drafts/{id}"), &[("format", "minimal")])
+            .await?;
+        Ok(r.message.thread_id)
+    }
+
     pub async fn delete_draft(&self, id: &str) -> Result<()> {
         let url = format!("{}/gmail/v1/users/me/drafts/{id}", host());
         let _: Value = self.call(|| self.http.delete(&url)).await?;
