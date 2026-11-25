@@ -21,7 +21,7 @@
   --line: #e6e6ea;
   --blue: #1b78fe;
   --brand: #ff5a1f;
-  --wrap: 1180px;
+  --wrap: 1300px;
   --pane: #ffffff;
   --selected: #efeff2;
   --side-text: #3b3b41;
@@ -198,7 +198,7 @@ kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; 
 /* feature rows: text left, drawn UI right */
 .row { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(32px, 6vw, 96px); align-items: center; padding-top: 140px; }
 .row.flip .row-text { order: 2; }
-.row.flip.wide { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.row.wide { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .row h2 { margin: 0 0 18px; font-size: clamp(36px, 4.6vw, 56px); line-height: 1.02; letter-spacing: -0.045em; }
 .row-text > p { margin: 0; max-width: 400px; color: var(--muted); }
 .points { margin: 32px 0 0; padding: 0; list-style: none; max-width: 400px; }
@@ -206,6 +206,34 @@ kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; 
 .points .ph { grid-row: 1 / 3; margin-top: 2px; font-size: 20px; color: var(--ink); }
 .points b { color: var(--ink); font-weight: 600; font-size: 15px; }
 .row .stage { display: grid; place-items: center; min-height: 460px; padding: 48px 24px; }
+
+/* centred rows: heading and copy above the drawing, points side by side underneath */
+.row.center { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 48px; text-align: center; }
+.row.center .row-text > p { max-width: 580px; margin-inline: auto; }
+.row.center .row-text { width: 100%; }
+.row.center .points { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); column-gap: 32px; max-width: 1040px; margin-inline: auto; text-align: left; }
+.row.center > .stage { width: 100%; min-height: 380px; }
+
+/* AI: three features, each with its own drawing */
+.bento { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; width: 100%; text-align: left; }
+.bento .bento-card { display: flex; flex-direction: column; place-items: stretch; min-height: 0; padding: 28px 24px 24px; }
+.bento-card h3 { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; font-size: 17px; letter-spacing: -0.02em; }
+.bento-card p { margin: 0 0 28px; color: var(--muted); font-size: 14.5px; }
+.bento-card .panel { width: 100%; margin-top: auto; }
+.bento-card .mini time { color: var(--blue); font-weight: 600; }
+
+/* The labels card plays its feature on a loop: labels land one by one. Still for anyone who prefers less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .ai-labels .chip { animation: ai-chip 6s infinite backwards; }
+  .ai-labels .mini:nth-child(2) .chip { animation-delay: 0.5s; }
+  .ai-labels .mini:nth-child(3) .chip { animation-delay: 1s; }
+}
+@keyframes ai-chip { 0%, 14% { opacity: 0; transform: scale(0.8); } 22%, 86% { opacity: 1; transform: none; } 94%, 100% { opacity: 0; } }
+
+
+/* privacy: a soft grey band that fades in and out of the page */
+.band { margin-top: 140px; padding: 0 0 120px; background: linear-gradient(var(--paper), var(--mist) 22%, var(--mist) 78%, var(--paper)); }
+.band .row.center > .stage { min-height: 300px; background: var(--pane); box-shadow: var(--pane-shadow); }
 .panel { width: min(400px, 100%); padding: 8px; }
 
 .acct { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-weight: 500; }
@@ -340,7 +368,10 @@ kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; 
 @media (max-width: 900px) {
   .row { grid-template-columns: minmax(0, 1fr); padding-top: 100px; }
   .row.flip .row-text { order: 0; }
-  .row.flip.wide { grid-template-columns: minmax(0, 1fr); }
+  .row.wide { grid-template-columns: minmax(0, 1fr); }
+  .bento { grid-template-columns: minmax(0, 1fr); }
+  .row .bento .bento-card { min-height: 0; }
+  .band { margin-top: 100px; padding-bottom: 90px; }
   .row .stage { min-height: 380px; }
   .app-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
   .app-side, .float { display: none; }
@@ -359,6 +390,9 @@ kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; 
   .app-reader { display: none; }
   .mini { grid-template-columns: 9px 70px minmax(0, 1fr); }
   .mini time { display: none; }
+  .bento-card .mini { grid-template-columns: 9px 76px minmax(0, 1fr) auto; }
+  .bento-card .mini time { display: block; }
+  .flow .tag { white-space: normal; }
   .closing { padding-top: 110px; }
   .site-footer .wrap { grid-template-columns: 1fr 1fr; }
 }
