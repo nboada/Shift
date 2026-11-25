@@ -159,7 +159,7 @@ Google Auth Platform: `https://console.cloud.google.com/auth/overview?project=sh
 
 1. **Branding** page. Fill in:
    - App name: `Shift`
-   - User support email: a TALKK address (e.g. `hello@talkk.com.au`)
+   - User support email: `hello@getshiftmail.com`
    - App logo: the Shift icon, 120×120 px square (size **unconfirmed** for the current console)
    - Application home page: `https://getshiftmail.com`
    - Application privacy policy link: `https://getshiftmail.com/privacy`
