@@ -31,6 +31,7 @@ import DOMPurify from "dompurify";
 import { Recipients, isValidAddress, splitList } from "./recipients";
 import { rank } from "./palette-match";
 import { formatWhen, quickTimes } from "./schedule";
+import { type Invite, inviteCard } from "./invite";
 import { actionToastOpen, toast } from "./toast";
 import { Menu } from "@tauri-apps/api/menu";
 import AirDatepicker from "air-datepicker";
@@ -74,6 +75,8 @@ type Message = {
   attachments: Attachment[];
   /** Where replies go when the sender set Reply-To (mailing lists, help desks); empty otherwise. */
   reply_to: string;
+  /** The calendar event when the email is an invite, or an answer to one. */
+  invite: Invite | null;
 };
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
@@ -852,7 +855,7 @@ async function openThread(id: string) {
         ${avatar(m.sender)}
         <div class="meta"><strong>${esc(name)}</strong><span class="to">To: ${esc(m.recipients)}${m.cc ? `, Cc: ${esc(m.cc)}` : ""}</span><span class="preview">${esc(preview(m))}</span></div>
         <time>${new Date(m.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time>${toggles ? '<i class="ti ti-chevron-down toggle-caret" aria-hidden="true"></i>' : ""}
-      </header>`;
+      </header>${inviteCard(m.invite, messages.indexOf(m))}`;
     const account = thread?.account ?? defaultAccount();
     if (m.html) {
       const frame = document.createElement("iframe");
@@ -959,6 +962,34 @@ function showInlineImages(frame: HTMLIFrameElement, m: Message, account: string)
 reader.addEventListener("click", (e) => {
   const b = (e.target as Element).closest<HTMLElement>("[data-reply]");
   if (b) reply(b.dataset.reply as "reply" | "all" | "forward", messages[Number(b.dataset.msg)]);
+});
+
+// Yes, Maybe or No on an invite: shown as chosen at once, put back if the answer couldn't be sent.
+reader.addEventListener("click", async (e) => {
+  const b = (e.target as Element).closest<HTMLButtonElement>("[data-rsvp]");
+  if (!b || b.getAttribute("aria-pressed") === "true") return;
+  const m = messages[Number(b.dataset.msg)];
+  const account = threads.find((t) => t.id === selected)?.account ?? defaultAccount();
+  const group = [...b.parentElement!.querySelectorAll<HTMLButtonElement>("[data-rsvp]")];
+  const before = group.find((x) => x.getAttribute("aria-pressed") === "true");
+  const press = (on: HTMLButtonElement | undefined) =>
+    group.forEach((x) => x.setAttribute("aria-pressed", String(x === on)));
+  press(b);
+  group.forEach((x) => (x.disabled = true));
+  try {
+    await invoke("rsvp", {
+      account,
+      message: m.id,
+      status: b.dataset.rsvp,
+      fromName: accountSettings(account).name,
+    });
+    toast(`Sent “${b.textContent}” to ${m.invite?.organizer.name || m.invite?.organizer.email}`, { kind: "success" });
+  } catch (err) {
+    press(before);
+    toast(`Couldn't send your answer: ${err}`, { kind: "error" });
+  } finally {
+    group.forEach((x) => (x.disabled = false));
+  }
 });
 
 reader.addEventListener("click", async (e) => {

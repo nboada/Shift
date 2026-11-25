@@ -672,6 +672,18 @@ body.resizing iframe { pointer-events: none; }
 .images-bar button { padding: 3px 9px; border-radius: 6px; color: var(--accent); font-weight: 600; }
 .images-bar button:hover { background: color-mix(in srgb, var(--accent), transparent 88%); }
 .message-actions { display: flex; justify-content: flex-end; gap: 2px; padding: 0 10px 8px; }
+.invite { display: flex; align-items: center; gap: 12px; margin: 0 14px 10px; padding: 10px 12px; border: 1px solid var(--card-line); border-radius: 10px; background: var(--hover); }
+.invite > i { align-self: flex-start; margin-top: 1px; font-size: 20px; color: var(--accent); }
+.invite.cancelled > i { color: var(--muted); }
+.invite.cancelled strong { text-decoration: line-through; color: var(--muted); }
+.invite-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; color: var(--muted); }
+.invite-info strong { font-size: 13.5px; color: var(--text); }
+.invite-note { font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.invite-answers { display: flex; flex: none; padding: 2px; gap: 2px; border-radius: 8px; background: var(--search); }
+.invite-answers button { padding: 4px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.invite-answers button:hover:not(:disabled) { color: var(--text); }
+.invite-answers button[aria-pressed="true"] { background: var(--card); color: var(--accent); box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
+@media (max-width: 560px) { .invite { flex-wrap: wrap; } .invite-answers { margin-left: 32px; } }
 .avatar {
   position: relative;
   flex: none;

@@ -5,12 +5,16 @@ mod demo;
 #[cfg(test)]
 mod fake_gmail;
 mod gmail;
+mod invite;
 mod settings;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures::StreamExt;
 use gmail::Gmail;
-use mail_builder::{MessageBuilder, headers::address::Address, headers::message_id::MessageId};
+use mail_builder::{
+    MessageBuilder, headers::address::Address, headers::content_type::ContentType,
+    headers::message_id::MessageId, mime::MimePart,
+};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -1921,7 +1925,7 @@ fn bare_ids(s: &str) -> Vec<String> {
         .collect()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct Draft {
     to: String,
     #[serde(default)]
@@ -1939,6 +1943,9 @@ struct Draft {
     html: Option<String>,
     #[serde(default)]
     attachments: Vec<OutgoingFile>,
+    /// An invite answer's iCalendar REPLY, sent beside the text as `text/calendar; method=REPLY`.
+    #[serde(skip)]
+    calendar: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1973,8 +1980,22 @@ fn build_message(from: String, draft: &Draft) -> anyhow::Result<Vec<u8>> {
             from_name.map(str::to_string),
             from.clone(),
         ))
-        .subject(draft.subject.clone())
-        .text_body(draft.body.clone());
+        .subject(draft.subject.clone());
+    msg = match &draft.calendar {
+        Some(ics) => msg.body(MimePart::new(
+            "multipart/alternative",
+            vec![
+                MimePart::new("text/plain", draft.body.as_str()),
+                MimePart::new(
+                    ContentType::new("text/calendar")
+                        .attribute("method", "REPLY")
+                        .attribute("charset", "utf-8"),
+                    ics.as_str(),
+                ),
+            ],
+        )),
+        None => msg.text_body(draft.body.clone()),
+    };
     // Drafts may be saved before any recipient is added.
     if !parse_addresses(&draft.to).is_empty() {
         msg = msg.to(address(&draft.to));
@@ -2057,6 +2078,51 @@ async fn deliver(
         Some(id) => g.send_draft(id, &raw, draft.thread_id.as_deref()).await,
         None => g.send(&raw, draft.thread_id.as_deref()).await,
     }
+}
+
+/// Answers the invite in `message` (`ACCEPTED`, `TENTATIVE` or `DECLINED`) with an email to its organizer, which
+/// their calendar reads. Recorded first so the reader shows it at once, and forgotten again if sending fails.
+#[tauri::command]
+async fn rsvp(
+    app: AppHandle,
+    s: tauri::State<'_, State>,
+    account: String,
+    message: String,
+    status: String,
+    from_name: Option<String>,
+) -> R<()> {
+    let a = s.account(&account)?;
+    let (ics, thread_id, message_id, refs) = db::invite_source(&a.db(), &message)?;
+    let name = from_name.as_deref().map(str::trim).unwrap_or_default();
+    let reply = invite::reply(&ics, &a.email, name, &status, jiff::Timestamp::now())
+        .ok_or_else(|| anyhow::anyhow!("Couldn't read this invite's organizer"))?;
+    let before = db::rsvp(&a.db(), &reply.uid)?;
+    db::set_rsvp(&a.db(), &reply.uid, Some(&(reply.sequence, status.clone())))?;
+    let _ = app.emit(CHANGED, ());
+    let who = if name.is_empty() { &a.email } else { name };
+    let (verb, line) = match status.as_str() {
+        "ACCEPTED" => ("Accepted", "accepted"),
+        "TENTATIVE" => ("Tentative", "tentatively accepted"),
+        _ => ("Declined", "declined"),
+    };
+    let draft = Draft {
+        to: reply.to,
+        subject: format!("{verb}: {}", reply.summary),
+        body: format!("{who} has {line} this invitation."),
+        thread_id: Some(thread_id),
+        in_reply_to: Some(message_id),
+        references: Some(refs),
+        from_name,
+        calendar: Some(reply.ics),
+        ..Draft::default()
+    };
+    if let Err(e) = deliver(&s, &a, &draft, None).await {
+        db::set_rsvp(&a.db(), &reply.uid, before.as_ref())?;
+        let _ = app.emit(CHANGED, ());
+        return Err(e.into());
+    }
+    spawn_sync(&app);
+    Ok(())
 }
 
 fn has_recipients(d: &Draft) -> bool {
@@ -2747,6 +2813,7 @@ pub fn run() {
             modify_many,
             search,
             send,
+            rsvp,
             get_settings,
             search_local,
             suggest_senders,
@@ -3015,8 +3082,7 @@ mod tests {
             in_reply_to: None,
             references: None,
             from_name: Some("Me".into()),
-            html: None,
-            attachments: Vec::new(),
+            ..Draft::default()
         };
         let empty =
             String::from_utf8(build_message("me@x.com".into(), &d("", "")).unwrap()).unwrap();
@@ -3052,6 +3118,7 @@ mod tests {
                 mime: "text/plain".into(),
                 data: STANDARD.encode("hello file"),
             }],
+            calendar: None,
         };
         let raw = String::from_utf8(build_message("me@x.com".into(), &d).unwrap()).unwrap();
         assert!(raw.contains("multipart/mixed"), "{raw}");
@@ -3061,6 +3128,25 @@ mod tests {
         assert!(id.ends_with("@x.com>"), "{id}");
         d.attachments[0].data = STANDARD.encode(vec![0u8; MAX_ATTACHMENTS + 1]);
         assert!(build_message("me@x.com".into(), &d).is_err());
+    }
+
+    #[test]
+    fn invite_answers_carry_a_calendar_reply_beside_the_text() {
+        let d = Draft {
+            to: "ella@x.com".into(),
+            subject: "Accepted: Standup".into(),
+            body: "Me has accepted this invitation.".into(),
+            calendar: Some("BEGIN:VCALENDAR\r\nMETHOD:REPLY\r\nEND:VCALENDAR\r\n".into()),
+            ..Draft::default()
+        };
+        let raw = String::from_utf8(build_message("me@x.com".into(), &d).unwrap()).unwrap();
+        assert!(
+            raw.contains("multipart/alternative")
+                && raw.contains("Content-Type: text/calendar; method=\"REPLY\"")
+                && raw.contains("METHOD:REPLY")
+                && raw.contains("accepted this invitation"),
+            "{raw}"
+        );
     }
 
     #[test]
