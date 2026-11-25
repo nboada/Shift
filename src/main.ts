@@ -394,21 +394,22 @@ function renderViewButton() {
   btn.querySelector("i")!.className = smart ? "ti ti-stack-2" : "ti ti-list";
 }
 
-/** The thread's own labels as small chips after the subject: two at most, then "+N". The label being viewed is left out. */
-function rowLabels(t: Thread) {
+/** The thread's own (user) labels as coloured chips. */
+function labelChips(t: Thread) {
   const ids = t.labels.split(" ");
-  const own = (accountLabels.get(t.account) ?? []).filter(
-    (l) => ids.includes(l.id) && mailbox !== l.id && mailbox !== `name:${l.name}`,
-  );
-  if (!own.length) return "";
-  const chips = own
-    .slice(0, 2)
+  return (accountLabels.get(t.account) ?? [])
+    .filter((l) => ids.includes(l.id))
     .map(
       (l) =>
         `<span class="row-label"${isHex(l.color) ? ` data-color="${l.color.slice(1).toLowerCase()}"` : ""}>${esc(l.name)}</span>`,
-    )
-    .join("");
-  return `<span class="row-labels">${chips}${own.length > 2 ? `<span class="row-label more">+${own.length - 2}</span>` : ""}</span>`;
+    );
+}
+
+/** The thread's labels after the subject in the list: two at most, then "+N". */
+function rowLabels(t: Thread) {
+  const chips = labelChips(t);
+  if (!chips.length) return "";
+  return `<span class="row-labels">${chips.slice(0, 2).join("")}${chips.length > 2 ? `<span class="row-label more">+${chips.length - 2}</span>` : ""}</span>`;
 }
 
 /** Hover buttons on a row: reply, archive (Inbox mail only) and delete, each with its shortcut in the tooltip. */
@@ -451,6 +452,17 @@ function syncToolbar() {
   };
   set("star", t?.starred ? "Unpin" : "Pin", !!t?.starred);
   set("unread", t && !t.unread ? "Mark unread" : "Mark read");
+  // The open email's labels under its subject, kept current as labels are added or removed.
+  const h1 = reader.querySelector("h1");
+  if (!t || !h1) return;
+  const chips = labelChips(t).join("");
+  let row = reader.querySelector<HTMLElement>(".reader-labels");
+  if (!chips) return row?.remove();
+  if (!row) {
+    row = Object.assign(document.createElement("div"), { className: "reader-labels" });
+    h1.after(row);
+  }
+  row.innerHTML = chips;
 }
 
 function renderThreads() {
@@ -844,6 +856,7 @@ async function openThread(id: string) {
   if (selected !== id) return;
   messages = loaded;
   reader.innerHTML = `<h1>${esc(messages[0]?.subject || thread?.subject || "(no subject)")}</h1>`;
+  syncToolbar();
   for (const m of messages) {
     const el = document.createElement("section");
     el.className = "message";
