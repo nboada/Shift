@@ -3,6 +3,8 @@ name = "app"
 version = "0.2.11"
 description = "Shift, a Gmail client for macOS"
 authors = ["Nicolas Boada"]
+license = "MIT"
+repository = "https://github.com/nboada/Shift"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
