@@ -17,7 +17,8 @@ fi
 APPLE_API_KEY=48ZXPM47P5
 APPLE_API_ISSUER=e93b6d82-6953-48c7-b0e0-e62e78812854
 KEY_DIR=$(mktemp -d)
-trap 'rm -rf "$KEY_DIR"' EXIT
+# The build writes its build number into the tracked Info.plist; put it back so the tree stays clean.
+trap 'rm -rf "$KEY_DIR"; git checkout -- src-tauri/gen/apple/app_iOS/Info.plist' EXIT
 APPLE_API_KEY_PATH=$KEY_DIR/AuthKey_$APPLE_API_KEY.p8
 (umask 077 && security find-generic-password -s shift-asc-api -a "$APPLE_API_KEY" -w | base64 -d >"$APPLE_API_KEY_PATH")
 export APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
