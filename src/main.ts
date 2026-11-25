@@ -1667,6 +1667,8 @@ threadList.addEventListener("contextmenu", (e) => {
     );
   }
   const binned = mailbox === "SPAM" || mailbox === "TRASH";
+  // Your own sent mail is never unread and never spam.
+  const sent = mailbox === "SENT";
   const items: MenuItem[] = [
     { id: "reply", label: "Reply", icon: "arrow-bend-up-left", key: keyLabel("reply") },
     { id: "replyAll", label: "Reply all", icon: "arrow-bend-double-up-left", key: keyLabel("replyAll") },
@@ -1676,12 +1678,16 @@ threadList.addEventListener("contextmenu", (e) => {
     ...(binned
       ? []
       : ([
-          {
-            id: "unread",
-            label: t.unread ? "Mark as read" : "Mark as unread",
-            icon: t.unread ? "envelope-simple-open" : "envelope-simple",
-            key: keyLabel("unread"),
-          },
+          ...(sent
+            ? []
+            : [
+                {
+                  id: "unread",
+                  label: t.unread ? "Mark as read" : "Mark as unread",
+                  icon: t.unread ? "envelope-simple-open" : "envelope-simple",
+                  key: keyLabel("unread"),
+                },
+              ]),
           { id: "star", label: t.starred ? "Unpin" : "Pin", icon: "push-pin", key: keyLabel("star") },
           "-",
         ] as MenuItem[])),
@@ -1695,9 +1701,13 @@ threadList.addEventListener("contextmenu", (e) => {
       key: keyLabel("archive"),
       disabled: !t.labels.split(" ").includes("INBOX"),
     },
-    mailbox === "SPAM"
-      ? { id: "spam", label: "Not spam", icon: "inbox", key: keyLabel("spam") }
-      : { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
+    ...(sent
+      ? []
+      : [
+          mailbox === "SPAM"
+            ? { id: "spam", label: "Not spam", icon: "inbox", key: keyLabel("spam") }
+            : { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
+        ]),
     {
       id: "trash",
       label: mailbox === "TRASH" ? "Delete forever" : "Delete",
