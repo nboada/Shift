@@ -586,6 +586,8 @@ button.primary:disabled { opacity: 0.6; }
 .reader-labels .row-label { max-width: none; padding: 2px 9px; font-size: 12px; }
 .threads li.selected .row-label:not([data-color]) { background: var(--card); }
 .threads li.unread .subject { font-weight: 600; }
+.threads .snippet:has(+ .row-labels) { grid-column: 3; }
+.threads li > .row-labels { grid-column: 4; align-self: end; justify-self: end; }
 .threads .snippet {
   grid-column: 3 / 5;
   color: var(--muted);
@@ -1230,6 +1232,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 :root[data-layout="wide"] .threads .subject { order: 1; flex: 0 1 auto; max-width: 50%; font-size: 14px; font-weight: 500; }
 :root[data-layout="wide"] .threads li.unread .subject { font-weight: 650; }
 :root[data-layout="wide"] .threads .snippet { order: 2; flex: 1; min-width: 0; display: block; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
+:root[data-layout="wide"] .threads li > .row-labels { order: 2; align-self: center; }
 :root[data-layout="wide"] .threads .date { order: 3; flex: none; margin-left: 12px; font-size: 11.5px; font-weight: 500; }
 :root[data-layout="wide"] .threads .row-actions { top: 50%; bottom: auto; transform: translateY(-50%); }
 :root[data-reduce-motion="true"] *, :root[data-reduce-motion="true"] *::before { transition: none !important; animation: none !important; }
