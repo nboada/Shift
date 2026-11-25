@@ -2,6 +2,3 @@ node_modules
 dist
 .astro
 .wrangler
-# Release artifacts from scripts/release.sh; they go to R2, not git
-.release
-public/updates

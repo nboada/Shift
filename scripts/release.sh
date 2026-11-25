@@ -1,10 +1,11 @@
 #!/bin/sh
 # Builds a Shift release for Apple silicon and Intel, signed with the Developer ID and notarized by Apple. It stages
-# the update bundle and latest.json (which installed copies check every six hours) in site/.release/updates, and the
-# .dmg in site/.release. Bump "version" in src-tauri/tauri.conf.json first, then:
+# Shift.dmg, the update bundle and latest.json (which installed copies check every six hours) in .release. Bump
+# "version" in src-tauri/tauri.conf.json, commit and push, then:
 #   scripts/release.sh "What changed, in a line"             build and stage only
-#   scripts/release.sh --publish "What changed, in a line"   also put the .dmg in R2 (live at /download at once)
-#                                                            and deploy the site (live update feed)
+#   scripts/release.sh --publish "What changed, in a line"   also publish them as GitHub release v<version>, which
+#                                                            getshiftmail.com/download and /updates point at
+# Needs `gh` signed in with access to the repository.
 #
 # One-time setup on the release Mac:
 #   security add-generic-password -s shift-notary -a apple-id -w '<Apple ID email>'
@@ -63,19 +64,18 @@ codesign --force --sign "$IDENTITY" "$DMG"
 xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM" --wait
 xcrun stapler staple "$DMG"
 
-# Staged outside site/public on purpose: anything there is deployed with the site, and Cloudflare serves static files
-# before the Worker, so a staged-but-unpublished build would go live on the next site deploy.
-# The old staging folder, if this checkout still has one: left there it would be deployed and shadow the R2 feed.
-rm -rf site/public/updates
-mkdir -p site/.release/updates
-cp "$DMG" site/.release/Shift.dmg
-cp "$TARBALL" "site/.release/updates/Shift-$VERSION.app.tar.gz"
+REPO=nboada/Shift
+STAGE=.release
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+cp "$DMG" "$STAGE/Shift.dmg"
+cp "$TARBALL" "$STAGE/Shift-$VERSION.app.tar.gz"
 
-
-VERSION="$VERSION" NOTES="$NOTES" SIG="$(cat "$TARBALL.sig")" python3 - <<'EOF'
+REPO="$REPO" VERSION="$VERSION" NOTES="$NOTES" SIG="$(cat "$TARBALL.sig")" python3 - <<'EOF'
 import json, os, datetime
 v = os.environ["VERSION"]
-entry = {"signature": os.environ["SIG"], "url": f"https://getshiftmail.com/updates/Shift-{v}.app.tar.gz"}
+url = f"https://github.com/{os.environ['REPO']}/releases/download/v{v}/Shift-{v}.app.tar.gz"
+entry = {"signature": os.environ["SIG"], "url": url}
 feed = {
     "version": v,
     "notes": os.environ["NOTES"],
@@ -83,20 +83,19 @@ feed = {
     # One universal build serves both architectures.
     "platforms": {"darwin-aarch64": entry, "darwin-x86_64": entry},
 }
-json.dump(feed, open("site/.release/updates/latest.json", "w"), indent=2)
+json.dump(feed, open(".release/latest.json", "w"), indent=2)
 EOF
 
 if [ "$PUBLISH" = 1 ]; then
-  # The Worker serves /updates/* from R2, so the feed works however the site itself is deployed.
-  (cd site && bunx wrangler r2 object put shift-downloads/Shift.dmg --file .release/Shift.dmg --remote \
-    --content-type application/x-apple-diskimage \
-    && bunx wrangler r2 object put "shift-downloads/updates/Shift-$VERSION.app.tar.gz" --file ".release/updates/Shift-$VERSION.app.tar.gz" --remote \
-    && bunx wrangler r2 object put shift-downloads/updates/latest.json --file .release/updates/latest.json --remote \
-      --content-type application/json \
-    && bunx wrangler deploy)
-  git tag -a "v$VERSION" -m "Shift $VERSION" && git push -q origin "v$VERSION"
-  echo "Published Shift $VERSION (tagged v$VERSION)."
+  # The release's tag is made on GitHub at this commit, so it has to be there already.
+  if [ "$(git rev-parse HEAD)" != "$(git rev-parse '@{upstream}' 2>/dev/null)" ]; then
+    echo "error: push this commit first; the release is tagged on GitHub at it" >&2
+    exit 1
+  fi
+  gh release create "v$VERSION" "$STAGE/Shift.dmg" "$STAGE/Shift-$VERSION.app.tar.gz" "$STAGE/latest.json" \
+    --repo "$REPO" --target "$(git rev-parse HEAD)" --title "Shift $VERSION" --notes "$NOTES"
+  git fetch -q --tags origin
+  echo "Published Shift $VERSION: https://github.com/$REPO/releases/tag/v$VERSION"
 else
-  echo "Staged Shift $VERSION. Publish with: scripts/release.sh --publish, or by hand:"
-  echo "  cd site && bunx wrangler r2 object put shift-downloads/Shift.dmg --file .release/Shift.dmg --remote && bunx wrangler deploy"
+  echo "Staged Shift $VERSION in $STAGE. Publish with: scripts/release.sh --publish \"notes\""
 fi
