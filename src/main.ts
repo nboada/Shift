@@ -1121,6 +1121,7 @@ function act(action: string, id = selected) {
       return modify(t, t.starred ? [] : ["STARRED"], t.starred ? ["STARRED"] : []);
     case "spam":
       removeAndAdvance(t.id);
+      if (mailbox === "SPAM") return undoable(t, ["INBOX"], ["SPAM"]);
       return undoable(t, ["SPAM"], ["INBOX", "TRASH"]);
     case "reply":
       return reply("reply");
@@ -1665,21 +1666,27 @@ threadList.addEventListener("contextmenu", (e) => {
       (id) => void scheduledAction(id, t.id),
     );
   }
+  const binned = mailbox === "SPAM" || mailbox === "TRASH";
   const items: MenuItem[] = [
     { id: "reply", label: "Reply", icon: "arrow-bend-up-left", key: keyLabel("reply") },
     { id: "replyAll", label: "Reply all", icon: "arrow-bend-double-up-left", key: keyLabel("replyAll") },
     { id: "forward", label: "Forward", icon: "arrow-bend-up-right", key: keyLabel("forward") },
     "-",
-    {
-      id: "unread",
-      label: t.unread ? "Mark as read" : "Mark as unread",
-      icon: t.unread ? "envelope-simple-open" : "envelope-simple",
-      key: keyLabel("unread"),
-    },
-    { id: "star", label: t.starred ? "Unpin" : "Pin", icon: "push-pin", key: keyLabel("star") },
-    "-",
+    // Spam and Trash are on their way out: no reading state, pins or labels, just where the email goes next.
+    ...(binned
+      ? []
+      : ([
+          {
+            id: "unread",
+            label: t.unread ? "Mark as read" : "Mark as unread",
+            icon: t.unread ? "envelope-simple-open" : "envelope-simple",
+            key: keyLabel("unread"),
+          },
+          { id: "star", label: t.starred ? "Unpin" : "Pin", icon: "push-pin", key: keyLabel("star") },
+          "-",
+        ] as MenuItem[])),
     { id: "move", label: "Move to…", icon: "folder", key: keyLabel("move") },
-    { id: "label", label: "Label…", icon: "tag", key: keyLabel("label") },
+    ...(binned ? [] : [{ id: "label", label: "Label…", icon: "tag", key: keyLabel("label") }]),
     "-",
     {
       id: "archive",
@@ -1688,8 +1695,16 @@ threadList.addEventListener("contextmenu", (e) => {
       key: keyLabel("archive"),
       disabled: !t.labels.split(" ").includes("INBOX"),
     },
-    { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
-    { id: "trash", label: "Delete", icon: "trash", key: keyLabel("trash"), danger: true },
+    mailbox === "SPAM"
+      ? { id: "spam", label: "Not spam", icon: "inbox", key: keyLabel("spam") }
+      : { id: "spam", label: "Spam", icon: "warning-octagon", key: keyLabel("spam") },
+    {
+      id: "trash",
+      label: mailbox === "TRASH" ? "Delete forever" : "Delete",
+      icon: "trash",
+      key: keyLabel("trash"),
+      danger: true,
+    },
   ];
   showMenu(null, items, { x: e.clientX, y: e.clientY }, (id) => {
     if (id === "move" || id === "label") {
