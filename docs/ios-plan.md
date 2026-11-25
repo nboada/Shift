@@ -17,16 +17,11 @@ Tried on 2026-11-25:
 - **Runs in the simulator in demo mode** (iPhone 17, iOS 27.0): Inbox, reader and onboarding work. The `demo` cargo feature turns on the demo mailbox, since an iOS app gets no `SHIFT_DEMO` variable.
 - **How to run it while the installed simulator runtime (27.0) is older than the SDK (27.2):** `tauri ios build` refuses to build, and `tauri ios dev` only opens Xcode. Keep `bun run tauri ios dev "iPhone 17" --features demo` running, then build from `src-tauri/gen/apple` with `xcodebuild -scheme app_iOS -configuration debug -destination 'platform=iOS Simulator,name=iPhone 17' ARCHS=arm64 build` and install the `.app` it produces. Installing the iOS 27.2 runtime (Xcode → Settings → Components) removes the workaround.
 
-## Decisions for Nic
+## Decisions (Nic, 2026-11-25)
 
-1. **New mail while Shift is closed.**
-   - **Recommended: iOS Background App Refresh plus local notifications.** iOS wakes the app a few times an hour at its own discretion, it syncs and announces new mail, and there's still no Shift server. Notifications can arrive minutes late.
-   - **Real push:** Gmail `users.watch` → Google Pub/Sub → a small relay → Apple's push service. Instant, but it's a server that receives your mailbox's change notices. That breaks "Shift servers: 0" and the privacy policy would need to say so.
-2. **Google sign-in on iOS.**
-   - Google doesn't allow the desktop flow's loopback redirect (`127.0.0.1:<port>`) for iOS apps. Add an **iOS OAuth client** in the same Google Cloud project: no secret, redirect `com.googleusercontent.apps.<id>:/oauthredirect`.
-   - Catch the redirect with `ASWebAuthenticationSession`, through a small Swift plugin or `tauri-plugin-deep-link`.
-   - The restricted `mail.google.com` scope stays the same, and the project's verification and CASA cover it. Ask Google whether adding a client during the current review needs a note.
-3. **iPhone only at first.** iPad can use the Mac's three-column layout later. Recommended: iPhone only for TestFlight.
+1. **New mail while Shift is closed: real push.** Gmail `users.watch` → Google Pub/Sub → a small relay (a Cloudflare Worker beside the site's) → Apple's push service (APNs). Instant, but the relay sees which mailbox changed (a Gmail history id, no mail content), so "Shift servers: 0" and the privacy policy change before it ships. IMAP accounts have no push hook: they refresh when the app opens or iOS gives it background time.
+2. **Google sign-in on iOS: an iOS OAuth client** in the same Google Cloud project: no secret, redirect `com.googleusercontent.apps.<id>:/oauthredirect`, caught with `ASWebAuthenticationSession`. The `mail.google.com` scope and the project's verification stay the same.
+3. **iPhone only** for TestFlight. iPad later.
 
 ## Phases
 
@@ -60,7 +55,7 @@ The one-column layout exists; this is about touch.
 - **IMAP accounts:** they work as they are (password in the Keychain; plain TCP + TLS is allowed on iOS).
 - **Attachments:** iOS has no Downloads folder and no `xattr` quarantine. `open_attachment` gets an iOS branch: write to the app's temp folder, then open Quick Look or the share sheet (a small Swift plugin, or the opener plugin if it covers it).
 - **Notifications:** ask for permission on first launch after sign-in. Tapping a notification opens the email; the existing `open-from-notification` event already does this, without the desktop window calls.
-- **Background refresh (decision 1):** a Swift plugin registers a `BGAppRefreshTask`, runs one `sync` with a time limit, then reschedules.
+- **Push (decision 1):** register for remote notifications (a Swift plugin hands the APNs device token to Rust), send it with the account's watch to the relay, and renew `users.watch` every few days. A push wakes the app for one `sync` with a time limit, then a local notification as today. An APNs key (.p8) from the developer account goes to the relay as a Worker secret.
 - **Keychain:** items stay readable after first unlock (`kSecAttrAccessibleAfterFirstUnlock`), so background refresh can sign in.
 - **Storage:** IMAP accounts keep raw messages. On a phone, cap the window (`imap::WINDOW`) or keep bodies only for recent mail. Gmail accounts already fetch bodies on demand.
 
@@ -82,11 +77,11 @@ The one-column layout exists; this is about touch.
 
 ### Later
 
-iPad layout, a share extension (share to Shift), widgets (unread count), and real push if decision 1 changes.
+iPad layout, a share extension (share to Shift), widgets (unread count).
 
 ## Risks
 
 - **Google's review.** If they want the iOS client reviewed separately, TestFlight for Gmail accounts waits on them. IMAP accounts don't depend on Google.
 - **WKWebView on iOS.** The UI uses `popover`, `:has()`, `color-mix()` and `dialog`, all supported in recent iOS Safari, but test them in phase 1.
-- **Background refresh is best effort.** iOS decides when it runs, and less often for apps that are rarely opened.
+- **Push needs a server.** The relay is the first Shift server: it must keep no mail, and its outage only delays alerts (the app still syncs when opened). iOS also limits background wake-ups for apps that are rarely opened.
 - **Memory and storage on older phones** with several large accounts. Measure in phase 1.
