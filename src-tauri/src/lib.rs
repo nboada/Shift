@@ -703,7 +703,8 @@ async fn sync_all(app: &AppHandle) {
 /// background, then tell the UI so it can offer a restart. Dev and demo builds never update themselves.
 /// Release builds only: dev and demo builds have no signed update feed to install from.
 fn updates_enabled(app: &AppHandle) -> bool {
-    !cfg!(debug_assertions) && !app.state::<State>().demo
+    // iOS updates come through the App Store / TestFlight; the updater plugin is desktop-only.
+    cfg!(desktop) && !cfg!(debug_assertions) && !app.state::<State>().demo
 }
 
 /// Checks the update feed and installs a newer version if there is one. Returns its version; the restart is the user's.
@@ -737,6 +738,7 @@ fn spawn_update_checks(app: &AppHandle) {
 }
 
 /// Shift → Check for Updates…: the same check, now, with the outcome shown as a toast either way.
+#[cfg(desktop)]
 fn check_for_updates_now(app: &AppHandle) {
     if !updates_enabled(app) {
         let _ = app.emit("app-toast", "Updates only work in release builds");
@@ -760,6 +762,7 @@ fn check_for_updates_now(app: &AppHandle) {
 }
 
 /// macOS's default menu (About, Edit, Window…) with Check for Updates… under About Shift.
+#[cfg(desktop)]
 fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem};
     let menu = Menu::default(app)?;
@@ -774,8 +777,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     Ok(menu)
 }
 
+#[cfg(desktop)]
 const CHECK_UPDATES: &str = "check-updates";
 /// Shift → Settings…: the UI opens its settings window (`open-settings`).
+#[cfg(desktop)]
 const OPEN_SETTINGS: &str = "open-settings";
 
 /// Settings → Notifications → Send a test: shows a notification the way new mail would, sound setting included.
@@ -1195,6 +1200,7 @@ const LAUNCHED_AT_LOGIN: &str = "--hidden";
 
 /// The login item: a LaunchAgent tied to Shift's bundle id, so macOS names it "Shift" in Login Items and in its
 /// "can run in the background" notice, rather than the developer on the signing certificate.
+#[cfg(desktop)]
 fn login_item(app: &AppHandle) -> anyhow::Result<auto_launch::AutoLaunch> {
     let exe = std::env::current_exe()?;
     Ok(auto_launch::AutoLaunchBuilder::new()
@@ -1208,6 +1214,12 @@ fn login_item(app: &AppHandle) -> anyhow::Result<auto_launch::AutoLaunch> {
 
 #[tauri::command(async)]
 fn open_at_login(app: AppHandle) -> R<bool> {
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Ok(false)
+    }
+    #[cfg(desktop)]
     Ok(login_item(&app)?.is_enabled()?)
 }
 
@@ -1220,13 +1232,21 @@ fn set_open_at_login(app: AppHandle, enabled: bool) -> R<()> {
         )
         .into());
     }
-    let item = login_item(&app)?;
-    if enabled {
-        item.enable()?
-    } else {
-        item.disable()?
+    #[cfg(mobile)]
+    {
+        let _ = (app, enabled);
+        Err(anyhow::anyhow!("Open at login is for the Mac app").into())
     }
-    Ok(())
+    #[cfg(desktop)]
+    {
+        let item = login_item(&app)?;
+        if enabled {
+            item.enable()?
+        } else {
+            item.disable()?
+        }
+        Ok(())
+    }
 }
 
 /// Restarts into the update `spawn_update_checks` installed.
@@ -2995,14 +3015,20 @@ fn delete_ai_key(provider: String) -> R<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+    // The updater, window size and position, and the app menu are Mac-only; iOS has none of them.
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Size, position and full screen come back on launch; visibility doesn't, so a launch at login stays hidden.
         .plugin(
             tauri_plugin_window_state::Builder::new()
-                .with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE)
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        - tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
                 .build(),
         )
         .on_menu_event(|app, event| {
@@ -3011,8 +3037,10 @@ pub fn run() {
             } else if event.id() == OPEN_SETTINGS {
                 let _ = app.emit(OPEN_SETTINGS, ());
             }
-        })
+        });
+    builder
         .setup(|app| {
+            #[cfg(desktop)]
             app.set_menu(build_menu(app.handle())?)?;
             // The window is created hidden (tauri.conf.json) so a launch at login can stay in the Dock without a flash.
             if !std::env::args().any(|a| a == LAUNCHED_AT_LOGIN)
@@ -3031,6 +3059,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             allow_test_banner();
             // Rewrites a login item saved by 0.2.0 and earlier, which had no bundle id and showed as the developer's name.
+            #[cfg(desktop)]
             if !cfg!(debug_assertions)
                 && let Ok(item) = login_item(app.handle())
                 && item.is_enabled().unwrap_or(false)
@@ -3113,6 +3142,7 @@ pub fn run() {
                     let Some(extra) = action.notification().map(tauri_plugin_notification::ActiveNotification::extra) else {
                         return;
                     };
+                    #[cfg(desktop)]
                     if let Some(window) = handle.get_webview_window("main") {
                         let _ = window.unminimize();
                         let _ = window.show();

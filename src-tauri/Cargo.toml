@@ -49,6 +49,10 @@ tauri-plugin-window-state = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 
+# iOS has only the data-protection keychain, which keyring reaches through this feature.
+[target.'cfg(target_os = "ios")'.dependencies]
+apple-native-keyring-store = { version = "1.0.3", features = ["protected"] }
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
