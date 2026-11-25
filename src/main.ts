@@ -227,7 +227,10 @@ async function updateDockBadge() {
   const count = settings.inbox.unreadBadge
     ? ((await invoke<Label[]>("labels", { accounts: null })).find((l) => l.id === "INBOX")?.unread ?? 0)
     : 0;
-  await getCurrentWindow().setBadgeCount(count || undefined);
+  // The window plugin is desktop-only; iOS has no Dock badge to set.
+  await getCurrentWindow()
+    .setBadgeCount(count || undefined)
+    .catch(() => {});
 }
 
 async function renderMailboxes() {

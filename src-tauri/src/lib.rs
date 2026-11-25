@@ -3072,7 +3072,7 @@ pub fn run() {
             {
                 let _ = item.enable();
             }
-            let demo = std::env::var_os("SHIFT_DEMO").is_some();
+            let demo = cfg!(feature = "demo") || std::env::var_os("SHIFT_DEMO").is_some();
             let (accounts, broken) = if demo {
                 // Two in-memory demo accounts, fresh every launch.
                 let mut you = db::open(Path::new(":memory:"))?;

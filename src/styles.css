@@ -540,7 +540,7 @@ button.primary:disabled { opacity: 0.6; }
   border-radius: 999px;
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.06);
 }
-.threads li[data-id]:hover .row-actions { display: flex; }
+@media (hover: hover) { .threads li[data-id]:hover .row-actions { display: flex; } }
 /* Shorter than a toolbar button so they stay on the snippet line, clear of the subject and its label chips. */
 .threads .row-actions button.icon { width: 28px; height: 22px; border-radius: 999px; }
 .threads .row-actions button.icon:hover { background: var(--hover); }
@@ -1205,7 +1205,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
   .app { grid-template-columns: 1fr; grid-template-rows: 1fr; padding: 0; }
   .topbar { display: none; }
   .sidebar-top { display: block; }
-  .list-pane, .reader-pane { border-radius: 0; box-shadow: none; }
+  .list-pane, .reader-pane { border-radius: 0; box-shadow: none; padding-top: env(safe-area-inset-top); }
   .app > * { grid-area: 1 / 1; }
   .app[data-view="mailboxes"] > :not(.sidebar),
   .app[data-view="list"] > :not(.list-pane),
