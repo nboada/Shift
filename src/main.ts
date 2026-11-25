@@ -3142,7 +3142,7 @@ $("#cleanup-btn").addEventListener("click", () => void openCleanup());
 $("#signin-btn").addEventListener("click", async () => {
   const btn = $<HTMLButtonElement>("#signin-btn");
   btn.disabled = true;
-  $("#signin-error").textContent = "Finish signing in in your browser…";
+  $("#signin-error").textContent = "Finish signing in with Google…";
   try {
     await invoke<string>("add_account");
     start((await loadStatus()).accounts);

@@ -182,7 +182,7 @@ export function initOnboarding() {
       case "skip":
         return finish();
       case "add":
-        status("Finish signing in in your browser…");
+        status("Finish signing in with Google…");
         await ctx.addAccount();
         return render();
       case "test":
