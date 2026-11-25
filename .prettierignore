@@ -1,0 +1,7 @@
+# Prettier formats only the TypeScript and the email frame script. The CSS keeps its one-line rules, and HTML,
+# Markdown and JSON are formatted by hand, so editors leave them alone on save.
+*
+!src/
+!src/**/*.ts
+!public/
+!public/*.js
