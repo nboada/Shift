@@ -168,6 +168,13 @@ function dateGroup(ms: number) {
 
 const setView = (v: "mailboxes" | "list" | "reader") => (app.dataset.view = v);
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+// The iOS keyboard covers the page without resizing it; full-screen sheets size to what's still visible (--visible-height).
+if (IS_IOS && window.visualViewport) {
+  const vv = window.visualViewport;
+  const fit = () => document.documentElement.style.setProperty("--visible-height", `${vv.height}px`);
+  vv.addEventListener("resize", fit);
+  fit();
+}
 
 // WebKit's own menu (Reload, Inspect Element, Open Link) only where Shift has none: text fields and selected text keep
 // it for Copy, Paste and Look Up. Reload would restart the app and Open Link would load the page inside it. In dev
