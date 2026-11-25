@@ -59,21 +59,12 @@ The one-column layout exists; this is about touch.
 - **Keychain:** items stay readable after first unlock (`kSecAttrAccessibleAfterFirstUnlock`), so background refresh can sign in.
 - **Storage:** IMAP accounts keep raw messages. On a phone, cap the window (`imap::WINDOW`) or keep bodies only for recent mail. Gmail accounts already fetch bodies on demand.
 
-### 4. TestFlight (1–2 days, mostly Apple's paperwork)
+### 4. TestFlight: done (build 174, 2026-11-26)
 
-- **App Store Connect:**
-  - Apple Developer Program: the same membership (team `65AK786Q34`) that signs the Mac app.
-  - Register the bundle id `au.com.talkk.shift` for iOS, and create the app record. It can be one record with the Mac app later (universal purchase).
-  - Signing: Xcode automatic signing with the team; an Apple Distribution certificate and an App Store provisioning profile.
-- **The app bundle:**
-  - The app icon at 1024px, no transparency (the generated set comes from `icons/`).
-  - A privacy manifest (`PrivacyInfo.xcprivacy`) listing the required-reason APIs used.
-  - `ITSAppUsesNonExemptEncryption = NO`: Shift uses only standard TLS.
-  - App Privacy answers matching the site's privacy policy, with the privacy policy URL.
-- **Release script:** `scripts/release-ios.sh`:
-  1. `bun run tauri ios build --export-method app-store-connect`
-  2. upload with `xcrun altool --upload-app`, using an App Store Connect API key from the Keychain.
-- **Testers:** internal TestFlight testers (up to 100 people on the team) need no review. External testers need a short beta review.
+- App Store Connect app "Shift Mail" (`6839177782`), bundle id `au.com.talkk.shift`, iPhone only, portrait.
+- Internal group "Shift team" gets every build. Internal testers need no review.
+- `scripts/release-ios.sh --upload` builds, exports with the team's Apple Distribution certificate and the "Shift App Store" profile, and uploads with the App Store Connect API key. Every build number is the commit count.
+- Before external testers or the App Store: App Privacy answers matching the privacy policy, screenshots, and a beta review.
 
 ### Later
 
