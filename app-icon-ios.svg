@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- iOS variant of app-icon.svg: full-bleed and opaque, since iOS applies its own mask; caret scaled with the tile. -->
+  <rect width="1024" height="1024" fill="#FF5A1F"/>
+  <path d="M368.6 573.4 L512 430.1 L655.4 573.4" fill="none" stroke="#fff" stroke-width="71.7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
