@@ -721,29 +721,6 @@ window.addEventListener("message", (e) => {
   }
 });
 
-/** Under the subject: which labels AI auto-label added to this email, with Undo. */
-async function showAiLabels(account: string, id: string) {
-  const ids = await invoke<string[]>("ai_labels", { account, id }).catch(() => [] as string[]);
-  if (!ids.length || selected !== id) return;
-  const names = ids.map((l) => accountLabels.get(account)?.find((x) => x.id === l)?.name ?? l);
-  reader
-    .querySelector("h1")
-    ?.insertAdjacentHTML(
-      "afterend",
-      `<div class="ai-labelled">${iconHtml("message-ai")}<span>Labelled by AI: ${esc(names.join(", "))}</span><button type="button">Undo</button></div>`,
-    );
-  reader.querySelector(".ai-labelled button")!.addEventListener("click", async (e) => {
-    (e.currentTarget as HTMLButtonElement).disabled = true;
-    try {
-      await invoke("ai_undo_labels", { account, id });
-      reader.querySelector(".ai-labelled")?.remove();
-      toast("AI labels removed", { kind: "success" });
-    } catch (err) {
-      toast(String(err), { kind: "error" });
-    }
-  });
-}
-
 /** One line of the email's text for its collapsed header. */
 function preview(m: Message) {
   const text = m.text ?? new DOMParser().parseFromString(m.html ?? "", "text/html").body.textContent ?? "";
@@ -932,7 +909,6 @@ async function openThread(id: string) {
   reader.scrollTop = 0;
   scrollToLatest();
   prefetchAround(id);
-  void showAiLabels(thread?.account ?? defaultAccount(), id);
   if (thread?.unread && settings.general.markReadOnOpen) {
     keptUnread.add(id);
     modify(thread, [], ["UNREAD"]);
