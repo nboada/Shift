@@ -874,6 +874,8 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .draft-pill { max-width: 320px; }
 .draft-pill small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #cleanup-status:not([hidden]) ~ .draft-pill { bottom: 88px; }
+#cleanup-status:not([hidden]) ~ #ai-label-card { bottom: 88px; }
+#ai-label-card { cursor: default; }
 .cu-done { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent), transparent 92%); font-size: 13px; }
 .cu-done i { color: var(--accent); font-size: 17px; }
 .cu-done span { flex: 1; }
