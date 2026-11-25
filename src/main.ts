@@ -2052,8 +2052,27 @@ function reopenPillDraft() {
 }
 draftPill.addEventListener("click", (e) => {
   if ((e.target as Element).closest("#draft-pill-close")) return hideDraftPill();
+  if ((e.target as Element).closest("#draft-pill-delete")) return void discardPillDraft();
   reopenPillDraft();
 });
+async function discardPillDraft() {
+  const d = pillDraft;
+  if (!d) return;
+  const sure = await ask({
+    title: "Discard this draft?",
+    message: "It will be deleted from Drafts too.",
+    confirm: "Discard",
+    danger: true,
+  });
+  if (!sure || pillDraft !== d) return;
+  hideDraftPill();
+  const { state } = d;
+  if (state.thread && mailbox === "DRAFT") {
+    threads = threads.filter((t) => t.id !== state.thread);
+    renderThreads();
+  }
+  if (state.draftId) invoke("delete_draft", { account: state.account, draftId: state.draftId }).catch(() => {});
+}
 draftPill.addEventListener("keydown", (e) => {
   if (e.target === draftPill && (e.key === "Enter" || e.key === " ")) {
     e.preventDefault();
@@ -2104,6 +2123,9 @@ async function openComposer(fields: Fields = {}, opts: ComposeOptions = {}) {
     reader.append(host);
   } else {
     composer.append(composeForm);
+    composer.style.removeProperty("--drag-x");
+    composer.style.removeProperty("--drag-y");
+    dock(false);
     composer.showModal();
   }
   if (fields.to || opts.context) {
@@ -2495,9 +2517,22 @@ async function aiWrite(run: () => Promise<string>, range: { from: number; to: nu
   btn.disabled = true;
   btn.classList.add("busy");
   draftStatus("Writing with AI…");
+  // A skeleton stands in for the text being replaced; the editor is locked meanwhile so the range stays valid.
+  const replaced: HTMLElement[] = [];
+  editor.state.doc.forEach((_, offset, i) => {
+    if (offset < range.to) replaced.push(editor.view.dom.children[i] as HTMLElement);
+  });
+  const writing = (on: boolean) => {
+    $("#ai-skeleton").hidden = !on;
+    $("#compose-body").classList.toggle("ai-writing", on);
+    replaced.forEach((el) => el.classList.toggle("ai-replacing", on));
+    editor.setEditable(!on);
+  };
+  writing(true);
   try {
     const text = await run();
     if (!text) throw new Error("The AI returned nothing");
+    writing(false);
     editor.chain().focus().insertContentAt(range, textToHtml(text)).run();
     draftStatus("");
     markTouched();
@@ -2505,6 +2540,7 @@ async function aiWrite(run: () => Promise<string>, range: { from: number; to: nu
     draftStatus("");
     toast(String(e), { kind: "error" });
   } finally {
+    writing(false);
     btn.disabled = false;
     btn.classList.remove("busy");
   }
@@ -2785,6 +2821,83 @@ composer.addEventListener("click", (e) => {
   if (pressedOutside && outsideComposer(e) && !askOpen()) void closeComposer();
   pressedOutside = false;
 });
+// The window moves by its header; each new composer opens centred again (openComposer clears the offset).
+composer.addEventListener("pointerdown", (e) => {
+  const head = (e.target as Element).closest<HTMLElement>(".compose-form > header");
+  if (!head || e.button !== 0 || composer.classList.contains("docked")) return;
+  if ((e.target as Element).closest("button, input")) return;
+  e.preventDefault();
+  const x0 = e.clientX - (parseFloat(composer.style.getPropertyValue("--drag-x")) || 0);
+  const y0 = e.clientY - (parseFloat(composer.style.getPropertyValue("--drag-y")) || 0);
+  const start = composer.getBoundingClientRect();
+  const base = { left: start.left - (e.clientX - x0), top: start.top - (e.clientY - y0) };
+  const move = (m: PointerEvent) => {
+    // Keep the header reachable: at least 80px of it on screen, and never above the top edge.
+    const x = Math.min(Math.max(m.clientX - x0, 80 - base.left - start.width), innerWidth - 80 - base.left);
+    const y = Math.min(Math.max(m.clientY - y0, -base.top), innerHeight - 48 - base.top);
+    composer.style.setProperty("--drag-x", `${x}px`);
+    composer.style.setProperty("--drag-y", `${y}px`);
+  };
+  head.setPointerCapture(e.pointerId);
+  head.addEventListener("pointermove", move);
+  head.addEventListener("lostpointercapture", () => head.removeEventListener("pointermove", move), { once: true });
+});
+// Docked: a smaller, non-modal window in the bottom-right corner, so the email behind it can be read and used. It
+// keeps its own size; the centred window's size comes back when it's undocked.
+let undockedSize = ["", ""];
+function dock(on: boolean) {
+  if (on === composer.classList.contains("docked")) return;
+  if (on) {
+    undockedSize = [composer.style.width, composer.style.height];
+    composer.style.width = composer.style.height = "";
+  } else [composer.style.width, composer.style.height] = undockedSize;
+  composer.classList.toggle("docked", on);
+  const button = $("#compose-dock");
+  button.dataset.tip = on ? "Move to centre" : "Move to corner";
+  button.setAttribute("aria-label", button.dataset.tip);
+  button.querySelector("i")!.className = `ti ${on ? "ti-arrows-diagonal" : "ti-picture-in-picture"}`;
+}
+$("#compose-dock").addEventListener("click", () => {
+  const focused = document.activeElement as HTMLElement | null;
+  const on = !composer.classList.contains("docked");
+  composer.close();
+  dock(on);
+  if (on) composer.show();
+  else composer.showModal();
+  focused?.focus();
+});
+// Resizing from any edge or corner. The dialog is centred, so a size change grows both sides; shifting the offset by
+// half of it keeps the opposite edge still.
+for (const grip of composer.querySelectorAll<HTMLElement>(".resize-edge")) {
+  grip.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const edge = grip.dataset.edge!;
+    const r = composer.getBoundingClientRect();
+    const ox = parseFloat(composer.style.getPropertyValue("--drag-x")) || 0;
+    const oy = parseFloat(composer.style.getPropertyValue("--drag-y")) || 0;
+    const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
+    const move = (m: PointerEvent) => {
+      const dx = m.clientX - e.clientX;
+      const dy = m.clientY - e.clientY;
+      if (edge.includes("e") || edge.includes("w")) {
+        const sign = edge.includes("e") ? 1 : -1;
+        const w = clamp(r.width + sign * dx, 420, innerWidth - 32);
+        composer.style.width = `${w}px`;
+        composer.style.setProperty("--drag-x", `${ox + (sign * (w - r.width)) / 2}px`);
+      }
+      if (edge.includes("n") || edge.includes("s")) {
+        const sign = edge.includes("s") ? 1 : -1;
+        const h = clamp(r.height + sign * dy, 360, innerHeight - 32);
+        composer.style.height = `${h}px`;
+        composer.style.setProperty("--drag-y", `${oy + (sign * (h - r.height)) / 2}px`);
+      }
+    };
+    grip.setPointerCapture(e.pointerId);
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("lostpointercapture", () => grip.removeEventListener("pointermove", move), { once: true });
+  });
+}
 
 /** Escape: closes an empty composer, otherwise asks whether to keep the draft. A second Escape discards it. */
 async function escapeComposer() {
@@ -3386,8 +3499,9 @@ document.addEventListener("keydown", (e) => {
     }
     return;
   }
-  // Writing an email (window or inline reply): only send and Escape act, everything else is typing.
-  if (composer.open || composeForm.contains(document.activeElement)) {
+  // Writing an email (window or inline reply): only send and Escape act, everything else is typing. A docked window
+  // leaves the app's shortcuts working while focus is outside it.
+  if ((composer.open && !composer.classList.contains("docked")) || composeForm.contains(document.activeElement)) {
     if (SEND.has(combo)) {
       e.preventDefault();
       composeForm.requestSubmit();
