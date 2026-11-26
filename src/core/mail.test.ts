@@ -1,6 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
 import { settings } from "../settings";
-import { type CoreEvent, type Label, type Message, type Thread, createMailCore } from "./mail";
+import {
+  type CoreEvent,
+  type Label,
+  type Message,
+  type Thread,
+  createMailCore,
+  labelToggle,
+  moveChanges,
+  relabel,
+} from "./mail";
 
 const ANA = "ana@example.com";
 const WORK = "ops@example.org";
@@ -348,4 +357,58 @@ test("delete forever goes to each account once and reports failures", async () =
   backend.failing.add("delete_forever");
   await core.deleteForever(core.threads.filter((t) => t.id === "w1"));
   expect(events).toContainEqual({ type: "error", message: "offline" });
+});
+
+// Label ids per account, as Gmail numbers them: the same name has a different id in each account.
+const RECEIPTS: Record<string, string> = { [ANA]: "Label_1", [WORK]: "Label_9" };
+
+test("moving several threads into a label uses each account's own id and is undone in one step", async () => {
+  const { core, backend, next } = setup();
+  await core.loadThreads();
+  const changes = moveChanges(core.threads, "Receipts", (a) => RECEIPTS[a]);
+  expect(changes.map((c) => [c.t.id, c.add, c.remove]).sort()).toEqual([
+    ["t1", ["Label_1"], ["INBOX"]],
+    ["t2", ["Label_1"], ["INBOX"]],
+    ["w1", ["Label_9"], ["INBOX"]],
+  ]);
+  let refreshed = next("refreshed");
+  await core.undoableChanges(changes);
+  await refreshed;
+  expect(core.threads).toEqual([]);
+  expect([...backend.mail.find((s) => s.id === "w1")!.labels].sort()).toEqual(["Label_9", "UNREAD"]);
+
+  refreshed = next("refreshed");
+  await core.undo();
+  await refreshed;
+  expect(ids(core.threads)).toEqual(["t1", "t2", "w1"]);
+  expect(core.undo()).toBeNull();
+});
+
+test("moving to Archive takes threads out of their folder, and skips accounts without the label", () => {
+  const t = (id: string, account: string, labels: string) => ({ id, account, labels }) as Thread;
+  const list = [t("a", ANA, "SPAM UNREAD"), t("b", WORK, "SENT")];
+  expect(moveChanges(list, "ARCHIVE").map((c) => [c.add, c.remove])).toEqual([
+    [[], ["SPAM"]],
+    [[], []],
+  ]);
+  expect(moveChanges(list, "INBOX").map((c) => c.remove)).toEqual([["SPAM"], []]);
+  expect(moveChanges(list, "Receipts", (a) => (a === ANA ? "Label_1" : undefined)).map((c) => c.t.id)).toEqual(["a"]);
+});
+
+test("a label on several threads: off for all when all have it, otherwise on for the rest", () => {
+  const t = (id: string, account: string, labels: string) => ({ id, account, labels }) as Thread;
+  const id = (a: string) => RECEIPTS[a];
+  const some = [t("a", ANA, "INBOX Label_1"), t("b", WORK, "INBOX")];
+  const toggle = labelToggle(some, id);
+  expect(toggle.state).toBe("some");
+  expect(toggle.changes.map((c) => [c.t.id, c.add, c.remove])).toEqual([["b", ["Label_9"], []]]);
+  toggle.changes.forEach(relabel);
+  expect(some[1].labels).toBe("INBOX Label_9");
+
+  const all = labelToggle(some, id);
+  expect(all.state).toBe("all");
+  all.changes.forEach(relabel);
+  expect(some.map((x) => x.labels)).toEqual(["INBOX", "INBOX"]);
+  expect(labelToggle(some, id).state).toBe("none");
+  expect(labelToggle(some, () => undefined)).toEqual({ state: "none", changes: [] });
 });

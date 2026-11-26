@@ -91,6 +91,9 @@ export const SECTIONS: [Section, string, string][] = [
   ["seen", "Seen", "eye"],
 ];
 
+/** Gmail labels that act as folders: mail sits in at most one, and Archive is none of them. */
+export const FOLDERS = ["INBOX", "SPAM", "TRASH"];
+
 export type MailCore = ReturnType<typeof createMailCore>;
 
 /**
@@ -350,6 +353,11 @@ export function createMailCore(
     undoableAll(list: Thread[], add: string[], remove: string[], trash = false) {
       // Only labels the thread has are removed, so Undo after deleting from Sent doesn't put it in the Inbox.
       const changes = list.map((t) => ({ t, add, remove: remove.filter((l) => t.labels.split(" ").includes(l)) }));
+      return mail.undoableChanges(changes, trash);
+    },
+
+    /** Changes that differ per thread (a move into a label whose id differs by account), undone together. */
+    undoableChanges(changes: Change[], trash = false) {
       undoStack.push(changes);
       if (undoStack.length > 50) undoStack.shift();
       return mail.applyChanges(changes, trash);
@@ -448,6 +456,45 @@ export function createMailCore(
   void listen<string>("sync-error", (e) => emit({ type: "sync-error", message: e.payload }));
 
   return mail;
+}
+
+/**
+ * Moving threads into a mailbox: into `target`'s label (looked up per account, since ids differ; "ARCHIVE" is none)
+ * and out of the folders they're in. Threads whose account lacks the label are left out.
+ */
+export function moveChanges(list: Thread[], target: string, labelId: (account: string) => string | undefined = () => target) {
+  return list.flatMap((t): Change[] => {
+    const id = target === "ARCHIVE" ? null : labelId(t.account);
+    if (id === undefined) return [];
+    const has = t.labels.split(" ");
+    return [{ t, add: id ? [id] : [], remove: FOLDERS.filter((f) => f !== id && has.includes(f)) }];
+  });
+}
+
+/**
+ * A label for several threads at once: whether all, some or none of them have it (`labelId` finds it in each thread's
+ * account), and the changes a tap makes: off for all when all have it, otherwise on for the ones without it.
+ */
+export function labelToggle(list: Thread[], labelId: (account: string) => string | undefined) {
+  const own = list.flatMap((t) => {
+    const id = labelId(t.account);
+    return id ? [{ t, id, on: t.labels.split(" ").includes(id) }] : [];
+  });
+  const on = own.filter((x) => x.on).length;
+  const state = !own.length || !on ? "none" : on === own.length ? "all" : "some";
+  const changes: Change[] =
+    state === "all"
+      ? own.map(({ t, id }) => ({ t, add: [], remove: [id] }))
+      : own.filter((x) => !x.on).map(({ t, id }) => ({ t, add: [id], remove: [] }));
+  return { state, changes } as const;
+}
+
+/** A thread's label list after a change, so its chips and menus are right before the list reloads. */
+export function relabel({ t, add, remove }: Change) {
+  const has = new Set(t.labels.split(" ").filter(Boolean));
+  remove.forEach((l) => has.delete(l));
+  add.forEach((l) => has.add(l));
+  t.labels = [...has].join(" ");
 }
 
 function changeLocally(t: Thread, add: string[], remove: string[]) {
