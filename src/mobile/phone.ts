@@ -3,10 +3,21 @@
 import "./mobile.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { type MailCore, type Thread, SECTIONS, SYSTEM } from "../core/mail";
-import { ask } from "../dialog";
+import {
+  type Change,
+  FOLDERS,
+  type Label,
+  type MailCore,
+  type Thread,
+  SECTIONS,
+  SYSTEM,
+  labelToggle,
+  moveChanges,
+  relabel,
+} from "../core/mail";
 import {
   avatar,
+  bareEmail,
   dateGroup,
   decodeEntities,
   displayName,
@@ -15,6 +26,7 @@ import {
   labelColorCss,
   labelDot,
   renderMessages,
+  type ReplyKind,
   shortDate,
   wireReader,
 } from "../email-view";
@@ -23,9 +35,10 @@ import { type SwipeAction, accountSettings, onSettingsChange, settings } from ".
 import { openSettings } from "../settings-ui";
 import { arrange } from "../sidebar";
 import { toast } from "../toast";
-import { actionSheet } from "./sheet";
-import { type Page, barButton, createStack } from "./stack";
 import { createComposeSheet } from "./compose-sheet";
+import { loadRecent, remember, saveRecent } from "./recent";
+import { type Choice, type Item, actionSheet, confirmSheet, contextMenu, listSheet } from "./sheet";
+import { type Page, barButton, createStack } from "./stack";
 
 /** Rows drawn at a time; more as the list nears its end. */
 const PAGE = 60;
@@ -33,6 +46,11 @@ const PAGE = 60;
 const SWIPE_AT = 80;
 /** How far the list is pulled down past its top before letting go checks for mail. */
 const PULL_AT = 70;
+/** How long a row is held before its menu opens. */
+const PRESS_MS = 450;
+/** Pauses in typing before the search screen asks the cache, and then Gmail. */
+const LOCAL_AFTER = 120;
+const REMOTE_AFTER = 800;
 
 const SWIPES: Record<Exclude<SwipeAction, "none">, [label: string, icon: string]> = {
   archive: ["Archive", "archive"],
@@ -41,14 +59,24 @@ const SWIPES: Record<Exclude<SwipeAction, "none">, [label: string, icon: string]
   star: ["Pin", "push-pin"],
   spam: ["Spam", "warning-octagon"],
 };
-/** Gmail labels that act as folders: mail sits in at most one, and Archive is none of them. */
-const FOLDERS = ["INBOX", "SPAM", "TRASH"];
 
 /** Icons are decoration here: every control already has a name, so VoiceOver skips the glyph. */
 const icon = (name: string) => `<i class="${iconClass(name)}" aria-hidden="true"></i>`;
+const labelsOf = (t: Thread) => t.labels.split(" ");
+const emails = (n: number) => `${n} ${n === 1 ? "email" : "emails"}`;
+/** Label changes that only take off labels a thread has, so Undo doesn't add ones it never had. */
+const changesFor = (ts: Thread[], add: string[], remove: string[]): Change[] =>
+  ts.map((t) => ({ t, add, remove: remove.filter((l) => labelsOf(t).includes(l)) }));
+
+type Notified = { account?: string; thread?: string };
 
 export function mountPhone(mail: MailCore) {
-  const host = createComposeSheet(mail);
+  const host = createComposeSheet(mail, {
+    discarded: (id) => {
+      const t = mail.mailbox === "DRAFT" ? mail.threads.find((x) => x.id === id) : undefined;
+      if (t) removeAll([t]);
+    },
+  });
   document.documentElement.classList.add("phone-ui");
   const root = document.createElement("div");
   root.className = "phone";
@@ -59,7 +87,8 @@ export function mountPhone(mail: MailCore) {
   const accountName = (a: string) => accountSettings(a).title || a;
   const boxName = (id: string | null) =>
     SYSTEM.find(([s]) => s === id)?.[1] ?? mail.userLabels.find((l) => l.id === id)?.name ?? "Mail";
-  const listTitle = () => (mail.search ? "Search" : boxName(mail.mailbox));
+  const inView = () => mail.scope ?? mail.accounts.filter((a) => accountSettings(a).unified !== false);
+  const inMail = () => (inView().some((a) => mail.imapAccounts.has(a)) ? "on your mail server" : "in Gmail");
 
   // ---- Mailboxes
 
@@ -68,7 +97,7 @@ export function mountPhone(mail: MailCore) {
   boxes.end.addEventListener("click", () => openSettings());
 
   function renderBoxes() {
-    labelColorCss(mail.labels.map((l) => l.color ?? ""));
+    labelColorCss([...mail.labels, ...[...mail.accountLabels.values()].flat()].map((l) => l.color ?? ""));
     const unread = new Map(mail.labels.map((l) => [l.id, l.unread]));
     const badge = settings.inbox.unreadBadge;
     const row = (id: string | null, name: string, glyph: string, count = 0, color?: string | null) =>
@@ -114,31 +143,69 @@ export function mountPhone(mail: MailCore) {
   let drawn = PAGE;
   let loaded = false;
   let syncing = 0;
+  /** Edit mode: conversations picked for a bulk action, by id. */
+  let editing = false;
+  const picked = new Set<string>();
 
   function openBox(id: string | null, animate = true) {
     if (id !== mail.mailbox || mail.search) mail.openMailbox(id);
     loaded = false;
     drawn = PAGE;
+    editing = false;
+    picked.clear();
     list = stack.page(boxName(id), "m-list-page");
     const page = list;
-    page.content.innerHTML = `<form class="m-search" role="search">${icon("magnifying-glass")}<input type="search" placeholder="Search" aria-label="Search mail" autocomplete="off" spellcheck="false" enterkeyhint="search" /></form>
+    page.bar.insertAdjacentHTML(
+      "afterbegin",
+      `<button type="button" class="m-text m-select-all" data-act="select-all" hidden>Select All</button>`,
+    );
+    page.end.innerHTML = `<button type="button" class="m-text" data-act="edit">Edit</button>`;
+    page.content.innerHTML = `<button type="button" class="m-search m-search-open" aria-label="Search mail">${icon("magnifying-glass")}<span>Search</span></button>
       <ul class="m-list" aria-label="Conversations"></ul>`;
     page.scroller.insertAdjacentHTML(
       "afterbegin",
-      `<div class="m-pull" aria-hidden="true">${icon("arrows-clockwise")}</div>`,
+      `<div class="m-pull" aria-hidden="true"><span>${icon("arrows-clockwise")}</span></div>`,
     );
     page.el.insertAdjacentHTML(
       "beforeend",
-      `<footer class="m-toolbar"><span class="m-status" aria-live="polite"></span>${barButton("compose", "pencil-simple-line", "New email")}</footer>`,
+      `<footer class="m-toolbar m-list-tools">
+        <button type="button" class="m-text quiet-danger m-empty-box" data-act="empty" hidden></button>
+        <span class="m-status" aria-live="polite"></span>${barButton("compose", "pencil-simple-line", "New email")}
+      </footer>
+      <footer class="m-toolbar m-edit-tools" role="toolbar" aria-label="Selected conversations" hidden>
+        ${tool("mark", "envelope-simple-open", "Mark")}${tool("move", "folder", "Move")}${tool("label", "tag", "Label")}${tool("archive", "archive", "Archive")}${tool("trash", "trash", "Delete")}
+      </footer>`,
     );
-    page.el.querySelector("[data-act=compose]")!.addEventListener("click", () => void host.write());
+    page.el.addEventListener("click", (e) => {
+      const b = (e.target as Element).closest<HTMLButtonElement>("[data-act], [data-edit]");
+      if (!b || b.disabled) return;
+      if (b.dataset.edit) return void editAction(b.dataset.edit);
+      switch (b.dataset.act) {
+        case "compose":
+          return void host.write();
+        case "edit":
+          return setEditing(!editing);
+        case "select-all":
+          if (picked.size === mail.threads.length) picked.clear();
+          else mail.threads.forEach((t) => picked.add(t.id));
+          return syncEdit();
+        case "empty":
+          return void emptyBox();
+      }
+    });
+    page.content.querySelector(".m-search-open")!.addEventListener("click", openSearch);
     page.onClose = () => {
       if (list === page) list = null;
     };
-    wireList(page);
+    wireRows(page.content.querySelector<HTMLElement>(".m-list")!, page);
+    wireScroll(page);
+    syncListTools();
     renderList();
     void stack.push(page, animate);
   }
+
+  const tool = (act: string, glyph: string, label: string) =>
+    `<button type="button" class="m-tool" data-edit="${act}">${icon(glyph)}<span>${label}</span></button>`;
 
   function rowHtml(t: Thread) {
     const ring = multi() && mail.scope?.length !== 1 ? ` acct-${accountSettings(t.account).color}` : "";
@@ -146,9 +213,13 @@ export function mountPhone(mail: MailCore) {
     const subject = t.subject || "(no subject)";
     const chips = labelChips(t, mail.accountLabels.get(t.account) ?? []);
     const said = `${t.unread ? "Unread. " : ""}${t.starred ? "Pinned. " : ""}${name}. ${subject}. ${shortDate(t.date)}`;
-    return `<li class="m-row${t.unread ? " unread" : ""}" data-id="${esc(t.id)}">
+    const label = multi() ? `${said}. ${accountName(t.account)}` : said;
+    const on = picked.has(t.id);
+    const role = editing && !searchView ? `role="checkbox" aria-checked="${on}"` : `role="button"`;
+    return `<li class="m-row${t.unread ? " unread" : ""}${on ? " picked" : ""}" data-id="${esc(t.id)}">
       <div class="m-swipe" aria-hidden="true"><i></i><span></span></div>
-      <div class="m-row-body" role="button" tabindex="0" aria-label="${esc(multi() ? `${said}. ${accountName(t.account)}` : said)}">
+      <div class="m-row-body" ${role} tabindex="0" aria-label="${esc(label)}">
+        <span class="m-check" aria-hidden="true">${icon("check")}</span>
         <span class="m-unread-dot"></span>
         ${settings.appearance.showAvatars ? `<span class="m-ava${ring}">${avatar(t.sender)}</span>` : ""}
         <span class="m-row-main">
@@ -176,12 +247,15 @@ export function mountPhone(mail: MailCore) {
     return [SYSTEM.find(([s]) => s === mail.mailbox)?.[2] ?? "tag", title, text];
   }
 
+  /** Draws the list on screen: the search results while searching, otherwise the mailbox. */
   function renderList() {
+    if (searchView) return renderResults();
     if (!list) return;
-    list.setTitle(listTitle());
+    if (!editing) list.setTitle(boxName(mail.mailbox));
     const ul = list.content.querySelector<HTMLElement>(".m-list")!;
+    syncListTools();
     if (!mail.threads.length) {
-      if (!loaded && !mail.search) return void (ul.innerHTML = "");
+      if (!loaded) return void (ul.innerHTML = "");
       const [glyph, title, text] = emptyState();
       ul.innerHTML = `<li class="m-empty">${icon(glyph)}<strong>${esc(title)}</strong><span>${esc(text)}</span></li>`;
       return;
@@ -200,7 +274,7 @@ export function mountPhone(mail: MailCore) {
     ul.innerHTML = visible
       .map((t) => {
         const group =
-          mail.search || mail.mailbox === "SCHEDULED" ? "" : mail.pinnedFirst() && t.starred ? "Pinned" : dateGroup(t.date);
+          mail.mailbox === "SCHEDULED" ? "" : mail.pinnedFirst() && t.starred ? "Pinned" : dateGroup(t.date);
         const h = group && group !== last ? head(group, group === "Pinned" ? "push-pin" : "") : "";
         last = group;
         return h + rowHtml(t);
@@ -212,31 +286,40 @@ export function mountPhone(mail: MailCore) {
     const s = list?.el.querySelector(".m-status");
     if (!s) return;
     const unread = mail.threads.filter((t) => t.unread).length;
-    s.textContent = syncing ? "Checking for mail…" : unread ? `${unread} unread` : "";
+    s.textContent = syncing ? "Checking for mail…" : unread && !mail.search ? `${unread} unread` : "";
   }
 
-  function wireList(page: Page) {
-    const ul = page.content.querySelector<HTMLElement>(".m-list")!;
-    const sc = page.scroller;
+  /** The list's bars: Edit where it applies, and Empty Trash or Empty Spam in those two. */
+  function syncListTools() {
+    if (!list) return;
+    const el = list.el;
+    const edit = el.querySelector<HTMLButtonElement>("[data-act=edit]")!;
+    edit.hidden = mail.mailbox === "SCHEDULED";
+    edit.disabled = !editing && !mail.threads.length;
+    const empty = el.querySelector<HTMLButtonElement>("[data-act=empty]")!;
+    const box = mail.mailbox === "TRASH" || mail.mailbox === "SPAM" ? boxName(mail.mailbox) : null;
+    empty.hidden = !box;
+    if (box) {
+      empty.textContent = `Empty ${box}`;
+      empty.disabled = !mail.threads.length;
+    }
+  }
 
-    sc.addEventListener(
-      "scroll",
-      () => {
-        if (sc.scrollTop + sc.clientHeight < sc.scrollHeight - 600) return;
-        if (drawn < mail.threads.length) {
-          drawn += PAGE;
-          return renderList();
-        }
-        void mail.loadMore();
-      },
-      { passive: true },
-    );
+  // ---- Rows: tap, swipe and long press, in the mailbox list and the search results alike
 
+  function wireRows(ul: HTMLElement, page: Page) {
     let suppressTap = false;
     const tap = (e: Event) => {
       if (suppressTap) return void (suppressTap = false);
-      const id = (e.target as Element).closest<HTMLElement>(".m-row")?.dataset.id;
-      if (id) void openRow(id);
+      const li = (e.target as Element).closest<HTMLElement>(".m-row");
+      const id = li?.dataset.id;
+      if (!id) return;
+      if (editing && page === list && !searchView) {
+        if (picked.has(id)) picked.delete(id);
+        else picked.add(id);
+        return syncEdit();
+      }
+      void openRow(id);
     };
     ul.addEventListener("click", tap);
     ul.addEventListener("keydown", (e) => {
@@ -247,23 +330,34 @@ export function mountPhone(mail: MailCore) {
     });
 
     // Row swipes: the row slides over a strip in the colour of the action it will run, with its icon, which grows
-    // once letting go would run it. Archive and delete slide the row away; the others spring back.
+    // once letting go would run it. Archive and delete slide the row away; the others spring back. Holding still
+    // instead opens the row's menu.
     ul.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "mouse" || e.clientX < 24) return;
       const li = (e.target as Element).closest<HTMLElement>(".m-row");
-      if (!li || mail.mailbox === "SCHEDULED") return;
+      if (!li || mail.mailbox === "SCHEDULED" || (editing && page === list)) return;
       const body = li.querySelector<HTMLElement>(".m-row-body")!;
       const strip = li.querySelector<HTMLElement>(".m-swipe")!;
       const x0 = e.clientX;
       const y0 = e.clientY;
       let dx = 0;
       let swiping = false;
+      li.classList.add("pressing");
+      const press = window.setTimeout(() => {
+        done();
+        suppressTap = true;
+        setTimeout(() => (suppressTap = false), 600);
+        const t = mail.threads.find((x) => x.id === li.dataset.id);
+        if (t) rowMenu(t, li);
+      }, PRESS_MS);
       const move = (ev: PointerEvent) => {
         dx = ev.clientX - x0;
         if (!swiping) {
           if (Math.abs(ev.clientY - y0) > 10) return done();
           if (Math.abs(dx) < 10) return;
           swiping = true;
+          clearTimeout(press);
+          li.classList.remove("pressing");
           li.setPointerCapture(ev.pointerId);
         }
         const action = dx < 0 ? settings.swipes.left : settings.swipes.right;
@@ -283,7 +377,8 @@ export function mountPhone(mail: MailCore) {
         const action = dx < 0 ? settings.swipes.left : settings.swipes.right;
         const t = mail.threads.find((x) => x.id === li.dataset.id);
         const go = t && action !== "none" && Math.abs(dx) > SWIPE_AT;
-        const away = go && ["archive", "trash", "spam"].includes(action) && !(action === "trash" && confirmsDelete());
+        const asks = action === "trash" && (settings.general.confirmDelete || labelsOf(t!).includes("TRASH"));
+        const away = go && ["archive", "trash", "spam"].includes(action) && !asks;
         const to = away ? Math.sign(dx) * li.clientWidth : 0;
         const anim = body.animate([{ transform: `translateX(${dx}px)` }, { transform: `translateX(${to}px)` }], {
           duration: away ? 220 : 320,
@@ -292,7 +387,7 @@ export function mountPhone(mail: MailCore) {
         });
         body.style.transform = "";
         void anim.finished.then(() => {
-          if (go) act(action, t);
+          if (go) void act(action, [t]);
           if (!away || !li.isConnected) {
             anim.cancel();
             li.classList.remove("armed");
@@ -301,6 +396,8 @@ export function mountPhone(mail: MailCore) {
         });
       };
       const done = () => {
+        clearTimeout(press);
+        li.classList.remove("pressing");
         li.removeEventListener("pointermove", move);
         li.removeEventListener("pointerup", up);
         li.removeEventListener("pointercancel", up);
@@ -309,16 +406,33 @@ export function mountPhone(mail: MailCore) {
       li.addEventListener("pointerup", up);
       li.addEventListener("pointercancel", up);
     });
+  }
 
-    // Pull to refresh rides on the scroll view's own bounce: pulled far enough past the top, letting go checks for mail.
-    const pull = page.scroller.querySelector<HTMLElement>(".m-pull")!;
+  function wireScroll(page: Page) {
+    const sc = page.scroller;
+    sc.addEventListener(
+      "scroll",
+      () => {
+        if (sc.scrollTop + sc.clientHeight < sc.scrollHeight - 600 || mail.search) return;
+        if (drawn < mail.threads.length) {
+          drawn += PAGE;
+          return renderList();
+        }
+        void mail.loadMore();
+      },
+      { passive: true },
+    );
+
+    // Pull to refresh rides on the scroll view's own bounce: pulled far enough past the top, letting go checks for
+    // mail, with the spinner holding the list down until it's done.
+    const pull = sc.querySelector<HTMLElement>(".m-pull")!;
     let armed = false;
     sc.addEventListener(
       "scroll",
       () => {
         const over = Math.max(0, -sc.scrollTop);
         pull.style.setProperty("--pull", String(Math.min(1, over / PULL_AT)));
-        if (over > PULL_AT && !armed) {
+        if (over > PULL_AT && !armed && !editing) {
           armed = true;
           pull.classList.add("armed");
         }
@@ -331,35 +445,6 @@ export function mountPhone(mail: MailCore) {
       pull.classList.remove("armed");
       void refreshNow(pull);
     });
-
-    const search = page.content.querySelector<HTMLInputElement>(".m-search input")!;
-    let timer = 0;
-    let seq = 0;
-    const local = async (q: string) => {
-      const n = ++seq;
-      const rows = await invoke<Thread[]>("search_local", { query: q, accounts: mail.scope }).catch(() => []);
-      if (n === seq && search.value.trim() === q) mail.showResults(q, rows);
-    };
-    search.addEventListener("input", () => {
-      clearTimeout(timer);
-      const q = search.value.trim();
-      if (q) return void (timer = window.setTimeout(() => void local(q), 150));
-      seq++;
-      if (mail.search !== null) mail.openMailbox(mail.mailbox);
-    });
-    search.form!.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      search.blur();
-      const q = search.value.trim();
-      if (!q) return;
-      clearTimeout(timer);
-      await local(q);
-      try {
-        await mail.loadThreads();
-      } catch (err) {
-        toast(`Some results may be missing: ${err}`);
-      }
-    });
   }
 
   function swipeIcon(action: Exclude<SwipeAction, "none">, li: HTMLElement) {
@@ -369,26 +454,80 @@ export function mountPhone(mail: MailCore) {
   }
 
   async function refreshNow(pull: HTMLElement) {
+    if (pull.classList.contains("spinning")) return;
     pull.classList.add("spinning");
     await invoke("sync_now").catch((e) => toast(String(e), { kind: "error" }));
     setTimeout(() => pull.classList.remove("spinning"), 400);
   }
 
   async function openRow(id: string) {
-    if (mail.mailbox === "SCHEDULED") return host.editScheduled(id);
-    if (mail.mailbox === "DRAFT" && (await host.openDraft(id))) return;
+    if (mail.mailbox === "SCHEDULED" && !mail.search) return host.editScheduled(id);
+    if (searchView && mail.search) rememberSearch(mail.search);
+    const t = mail.threads.find((x) => x.id === id);
+    if ((mail.mailbox === "DRAFT" || t?.labels.split(" ").includes("DRAFT")) && (await host.openDraft(id))) return;
     openConversation(id);
+  }
+
+  // ---- Edit mode
+
+  function setEditing(on: boolean) {
+    if (!list) return;
+    editing = on;
+    picked.clear();
+    const el = list.el;
+    el.classList.toggle("m-editing", on);
+    el.querySelector<HTMLElement>("[data-act=edit]")!.textContent = on ? "Done" : "Edit";
+    el.querySelector<HTMLElement>("[data-act=edit]")!.classList.toggle("m-strong", on);
+    el.querySelector<HTMLElement>(".m-list-tools")!.hidden = on;
+    el.querySelector<HTMLElement>(".m-edit-tools")!.hidden = !on;
+    syncEdit();
+  }
+
+  /** The title, Select All and the toolbar follow what's picked. */
+  function syncEdit() {
+    if (!list) return;
+    const el = list.el;
+    for (const id of picked) if (!mail.threads.some((t) => t.id === id)) picked.delete(id);
+    const all = el.querySelector<HTMLElement>("[data-act=select-all]")!;
+    all.hidden = !editing;
+    el.querySelector<HTMLElement>(".m-back")!.classList.toggle("m-gone", editing);
+    all.textContent = picked.size && picked.size === mail.threads.length ? "Deselect All" : "Select All";
+    list.setTitle(editing ? (picked.size ? `${picked.size} Selected` : "Select Emails") : boxName(mail.mailbox));
+    const none = !picked.size;
+    el.querySelectorAll<HTMLButtonElement>("[data-edit]").forEach((b) => (b.disabled = none));
+    const ts = pickedThreads();
+    el.querySelector<HTMLButtonElement>("[data-edit=archive]")!.disabled = !ts.some((t) => labelsOf(t).includes("INBOX"));
+    renderList();
+  }
+
+  const pickedThreads = () => mail.threads.filter((t) => picked.has(t.id));
+
+  function editAction(action: string) {
+    const ts = pickedThreads();
+    if (!ts.length) return;
+    const finish = () => setEditing(false);
+    switch (action) {
+      case "mark":
+        return markSheet(ts, finish);
+      case "move":
+        return moveSheet(ts, finish);
+      case "label":
+        return labelSheet(ts, finish);
+      default:
+        return void act(action, ts).then((ok) => ok && finish());
+    }
   }
 
   // ---- Actions
 
-  const confirmsDelete = () => settings.general.confirmDelete || mail.mailbox === "TRASH";
-
-  /** Takes a thread off the list; if it's open, shows the next one (or goes back when there's none). */
-  function remove(t: Thread) {
-    const i = mail.threads.findIndex((x) => x.id === t.id);
-    mail.threads = mail.threads.filter((x) => x.id !== t.id);
-    if (convo?.id === t.id) {
+  /** Takes threads off the list; if the open one goes, shows the next (or goes back when there's none). */
+  function removeAll(ts: Thread[]) {
+    if (!ts.length) return;
+    const gone = new Set(ts.map((t) => t.id));
+    const i = mail.threads.findIndex((x) => x.id === convo?.id);
+    mail.threads = mail.threads.filter((x) => !gone.has(x.id));
+    gone.forEach((id) => picked.delete(id));
+    if (convo && gone.has(convo.id)) {
       const next = mail.threads[Math.min(i, mail.threads.length - 1)];
       if (next) showConversation(next.id);
       else void stack.pop();
@@ -405,86 +544,445 @@ export function mountPhone(mail: MailCore) {
       },
     });
 
-  async function act(action: string, t: Thread) {
+  /** Whether a change takes a thread out of the list on screen. */
+  function leaves(c: Change) {
+    const away = c.add.includes("TRASH") || c.add.includes("SPAM");
+    if (mail.search || mail.mailbox === null) return away;
+    return c.remove.includes(mail.mailbox) || (away && mail.mailbox !== "TRASH" && mail.mailbox !== "SPAM");
+  }
+
+  /** Label changes that can be undone: the list shows them at once, then the core sends them. */
+  function change(changes: Change[], msg: string, trash = false) {
+    if (!changes.length) return;
+    changes.forEach(relabel);
+    removeAll(changes.filter(leaves).map((c) => c.t));
+    void mail.undoableChanges(changes, trash);
+    undoToast(msg);
+  }
+
+  /** Runs an action on one or more threads; false when it was cancelled. */
+  async function act(action: string, ts: Thread[]): Promise<boolean> {
+    const n = ts.length;
+    const many = n > 1 ? ` ${emails(n)}` : "";
     switch (action) {
       case "archive":
-        remove(t);
-        void mail.undoable(t, [], ["INBOX"]);
-        return undoToast("Archived");
-      case "trash":
-        if (mail.mailbox === "TRASH") {
-          const yes = await ask({
-            title: "Delete forever?",
-            message: "This can't be undone.",
-            confirm: "Delete forever",
-            danger: true,
+        change(changesFor(ts, [], ["INBOX"]).filter((c) => c.remove.length), n > 1 ? `Archived${many}` : "Archived");
+        return true;
+      case "trash": {
+        if (ts.every((t) => labelsOf(t).includes("TRASH"))) {
+          const yes = await confirmSheet({
+            title: n > 1 ? `Delete${many} forever?` : "Delete forever?",
+            message: `${n > 1 ? "They're" : "It's"} deleted ${inMail()} too. This can't be undone.`,
+            confirm: "Delete Forever",
           });
-          if (!yes) return;
-          remove(t);
-          return void mail.deleteForever([t]);
+          if (!yes) return false;
+          removeAll(ts);
+          void mail.deleteForever(ts);
+          toast(n > 1 ? `Deleted${many} forever` : "Deleted forever", { kind: "success" });
+          return true;
         }
         if (settings.general.confirmDelete) {
-          const yes = await ask({
-            title: "Delete this email?",
-            message: `“${t.subject || "(no subject)"}” will move to Trash.`,
+          const yes = await confirmSheet({
+            title: n > 1 ? `Delete${many}?` : "Delete this email?",
+            message:
+              n > 1 ? "They'll move to Trash." : `“${ts[0].subject || "(no subject)"}” will move to Trash.`,
             confirm: "Delete",
-            danger: true,
           });
-          if (!yes) return;
+          if (!yes) return false;
         }
-        remove(t);
-        void mail.undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
-        return undoToast("Moved to Trash");
-      case "spam":
-        remove(t);
-        if (mail.mailbox === "SPAM") void mail.undoable(t, ["INBOX"], ["SPAM"]);
-        else void mail.undoable(t, ["SPAM"], ["INBOX", "TRASH"]);
-        return undoToast(mail.mailbox === "SPAM" ? "Not spam: moved to Inbox" : "Marked as spam");
-      case "unread":
-        return void mail.modify(t, t.unread ? [] : ["UNREAD"], t.unread ? ["UNREAD"] : []);
-      case "star":
-        return void mail.modify(t, t.starred ? [] : ["STARRED"], t.starred ? ["STARRED"] : []);
+        change(changesFor(ts, ["TRASH"], ["INBOX", "SPAM"]), n > 1 ? `Moved${many} to Trash` : "Moved to Trash", true);
+        return true;
+      }
+      case "spam": {
+        const back = ts.every((t) => labelsOf(t).includes("SPAM"));
+        if (back) change(changesFor(ts, ["INBOX"], ["SPAM"]), "Not spam: moved to Inbox");
+        else change(changesFor(ts, ["SPAM"], ["INBOX", "TRASH"]), n > 1 ? `Marked${many} as spam` : "Marked as spam");
+        return true;
+      }
+      case "read":
+      case "unread": {
+        const read = action === "read" || (n === 1 && ts[0].unread);
+        void mail.applyChanges(ts.map((t) => ({ t, add: read ? [] : ["UNREAD"], remove: read ? ["UNREAD"] : [] })));
+        return true;
+      }
+      case "pin":
+      case "unpin":
+      case "star": {
+        const pin = action === "pin" || (action === "star" && ts.some((t) => !t.starred));
+        void mail.applyChanges(ts.map((t) => ({ t, add: pin ? ["STARRED"] : [], remove: pin ? [] : ["STARRED"] })));
+        return true;
+      }
     }
+    return false;
   }
 
-  function moveTo(t: Thread, id: string) {
-    if (id === "TRASH") return void act("trash", t);
-    if (id === "SPAM") return void act("spam", t);
-    const has = new Set(t.labels.split(" "));
-    if (mail.mailbox !== null && mail.mailbox !== id) remove(t);
-    void mail.undoable(t, id === "ARCHIVE" ? [] : [id], FOLDERS.filter((f) => f !== id && has.has(f)));
-    undoToast(id === "ARCHIVE" ? "Archived" : `Moved to ${boxName(id)}`);
+  /** Every label of the accounts these threads belong to, once per name (ids differ between accounts). */
+  function labelsFor(ts: Thread[]) {
+    const byName = new Map<string, Label>();
+    for (const a of new Set(ts.map((t) => t.account)))
+      for (const l of mail.accountLabels.get(a) ?? []) if (!byName.has(l.name)) byName.set(l.name, l);
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  }
+  const labelIn = (name: string) => (account: string) =>
+    mail.accountLabels.get(account)?.find((l) => l.name === name)?.id;
+
+  function moveTo(ts: Thread[], target: string) {
+    if (target === "TRASH") return void act("trash", ts);
+    if (target === "SPAM") return void act("spam", ts);
+    const name = target.startsWith("label:") ? target.slice(6) : null;
+    const changes = name ? moveChanges(ts, target, labelIn(name)) : moveChanges(ts, target);
+    // From a label, moving to another one takes it out of this one, like Gmail's Move to.
+    const here = mail.mailbox && !SYSTEM.some(([id]) => id === mail.mailbox) && !mail.search ? mail.mailbox : null;
+    if (here) for (const c of changes) if (!c.add.includes(here) && labelsOf(c.t).includes(here)) c.remove.push(here);
+    const to = name ?? boxName(target);
+    const n = ts.length > 1 ? ` ${emails(ts.length)}` : "";
+    change(
+      changes.filter((c) => c.add.length || c.remove.length),
+      target === "ARCHIVE" ? `Archived${n}` : `Moved${n} to ${to}`,
+    );
   }
 
-  function moveSheet(t: Thread) {
-    const has = new Set(t.labels.split(" "));
-    actionSheet("Move to", [
-      { label: "Inbox", icon: "tray", disabled: has.has("INBOX"), run: () => moveTo(t, "INBOX") },
-      { label: "Archive", icon: "archive", disabled: !FOLDERS.some((f) => has.has(f)), run: () => moveTo(t, "ARCHIVE") },
-      { label: "Spam", icon: "warning-octagon", disabled: has.has("SPAM"), run: () => moveTo(t, "SPAM") },
-      { label: "Trash", icon: "trash", danger: true, disabled: has.has("TRASH"), run: () => moveTo(t, "TRASH") },
-      { label: "Labels…", icon: "tag", run: () => labelSheet(t) },
+  function moveSheet(ts: Thread[], then = () => {}) {
+    const every = (l: string) => ts.every((t) => labelsOf(t).includes(l));
+    const mailboxes: Choice[] = [
+      { id: "INBOX", label: "Inbox", icon: "tray", disabled: every("INBOX") },
+      {
+        id: "ARCHIVE",
+        label: "Archive",
+        icon: "archive",
+        disabled: ts.every((t) => !FOLDERS.some((f) => labelsOf(t).includes(f))),
+      },
+      { id: "SPAM", label: "Spam", icon: "warning-octagon", disabled: every("SPAM") },
+      { id: "TRASH", label: "Trash", icon: "trash", disabled: every("TRASH") },
+    ];
+    const labels = labelsFor(ts).map(
+      (l): Choice => ({
+        id: `label:${l.name}`,
+        label: l.name,
+        color: l.color,
+        disabled: ts.every((t) => {
+          const id = labelIn(l.name)(t.account);
+          return !id || (labelsOf(t).includes(id) && !FOLDERS.some((f) => labelsOf(t).includes(f)));
+        }),
+      }),
+    );
+    listSheet({
+      title: ts.length > 1 ? `Move ${emails(ts.length)}` : "Move to",
+      groups: [{ items: mailboxes }, ...(labels.length ? [{ title: "Labels", items: labels }] : [])],
+      pick: (id) => {
+        moveTo(ts, id);
+        then();
+      },
+    });
+  }
+
+  function labelSheet(ts: Thread[], then = () => {}) {
+    const labels = labelsFor(ts);
+    if (!labels.length) return toast("No labels yet. Add them on your Mac or in Gmail.");
+    let changed = false;
+    const d = listSheet({
+      title: ts.length > 1 ? `Label ${emails(ts.length)}` : "Labels",
+      toggle: true,
+      groups: [
+        {
+          items: labels.map((l) => ({
+            id: l.name,
+            label: l.name,
+            color: l.color,
+            state: labelToggle(ts, labelIn(l.name)).state,
+          })),
+        },
+      ],
+      pick: (name) => {
+        const { changes } = labelToggle(ts, labelIn(name));
+        changes.forEach(relabel);
+        void mail.applyChanges(changes);
+        changed = true;
+        renderList();
+        syncConvoTools();
+        return labelToggle(ts, labelIn(name)).state;
+      },
+    });
+    d.addEventListener("close", () => changed && then());
+  }
+
+  function markSheet(ts: Thread[], then: () => void) {
+    const run = (action: string) => () => void act(action, ts).then((ok) => ok && then());
+    const inSpam = ts.every((t) => labelsOf(t).includes("SPAM"));
+    actionSheet(emails(ts.length), [
+      { label: "Mark as Read", icon: "envelope-simple-open", disabled: !ts.some((t) => t.unread), run: run("read") },
+      { label: "Mark as Unread", icon: "envelope-simple", disabled: ts.every((t) => t.unread), run: run("unread") },
+      { label: "Pin", icon: "push-pin", disabled: ts.every((t) => t.starred), run: run("pin") },
+      { label: "Unpin", icon: "pinned-off", disabled: !ts.some((t) => t.starred), run: run("unpin") },
+      { label: inSpam ? "Not Spam" : "Report Spam", icon: "warning-octagon", run: run("spam") },
     ]);
   }
 
-  function labelSheet(t: Thread) {
-    const own = mail.accountLabels.get(t.account) ?? [];
-    if (!own.length) return toast("No labels yet. Add them on your Mac or in Gmail.");
-    const has = new Set(t.labels.split(" "));
-    actionSheet(
-      "Labels",
-      own.map((l) => ({
-        label: l.name,
-        icon: "tag",
-        checked: has.has(l.id),
-        run: () => {
-          const on = !has.has(l.id);
-          t.labels = on ? `${t.labels} ${l.id}`.trim() : [...has].filter((x) => x !== l.id).join(" ");
-          void mail.modify(t, on ? [l.id] : [], on ? [] : [l.id]);
-          labelSheet(t);
-        },
-      })),
+  async function emptyBox() {
+    const id = mail.mailbox;
+    if (id !== "TRASH" && id !== "SPAM") return;
+    const name = boxName(id);
+    const n = inView().length;
+    const where = n < 2 ? "" : n === 2 ? " in both accounts" : ` in all ${n} accounts`;
+    const yes = await confirmSheet({
+      title: `Empty ${name}?`,
+      message: `Everything in ${name}${where} is deleted for good, ${inMail()} too. This can't be undone.`,
+      confirm: `Empty ${name}`,
+    });
+    if (!yes) return;
+    try {
+      await mail.emptyMailbox(id);
+      if (mail.mailbox === id) removeAll([...mail.threads]);
+      toast(`${name} emptied`, { kind: "success" });
+    } catch (e) {
+      toast(`Couldn't empty ${name}: ${e}`, { kind: "error" });
+    }
+  }
+
+  /** Reply, Reply All or Forward from the list, without opening the conversation. */
+  async function replyFromList(t: Thread, kind: ReplyKind) {
+    try {
+      const messages = await mail.loadMessages(t.account, t.id);
+      mail.selected = t.id;
+      mail.messages = messages;
+      await host.reply(kind, messages.at(-1));
+    } catch (e) {
+      toast(`Couldn't open this email: ${e}`, { kind: "error" });
+    } finally {
+      if (!convo) mail.closeThread();
+    }
+  }
+
+  /** The long-press menu of a row. */
+  function rowMenu(t: Thread, row: HTMLElement) {
+    const has = labelsOf(t);
+    const draft = mail.mailbox === "DRAFT";
+    const inTrash = has.includes("TRASH");
+    const inSpam = has.includes("SPAM");
+    const one = [t];
+    const run = (action: string) => () => void act(action, one);
+    contextMenu(row, t.subject || "(no subject)", [
+      draft
+        ? []
+        : [
+            { label: "Reply", icon: "arrow-bend-up-left", run: () => void replyFromList(t, "reply") },
+            { label: "Reply All", icon: "arrow-bend-double-up-left", run: () => void replyFromList(t, "all") },
+            { label: "Forward", icon: "arrow-bend-up-right", run: () => void replyFromList(t, "forward") },
+          ],
+      [
+        t.unread
+          ? { label: "Mark as Read", icon: "envelope-simple-open", run: run("read") }
+          : { label: "Mark as Unread", icon: "envelope-simple", run: run("unread") },
+        t.starred
+          ? { label: "Unpin", icon: "pinned-off", run: run("unpin") }
+          : { label: "Pin", icon: "push-pin", run: run("pin") },
+        { label: "Move…", icon: "folder", run: () => moveSheet(one) },
+        { label: "Label…", icon: "tag", run: () => labelSheet(one) },
+      ],
+      [
+        ...(has.includes("INBOX") ? [{ label: "Archive", icon: "archive", run: run("archive") }] : []),
+        ...(inTrash || inSpam ? [] : [{ label: "Report Spam", icon: "warning-octagon", run: run("spam") }]),
+        inSpam
+          ? { label: "Not Spam", icon: "tray", run: run("spam") }
+          : { label: inTrash ? "Delete Forever" : "Delete", icon: "trash", danger: true, run: run("trash") },
+      ],
+    ]);
+  }
+
+  // ---- Search
+
+  type SearchView = { page: Page; input: HTMLInputElement; ul: HTMLElement; status: HTMLElement };
+  let searchView: SearchView | null = null;
+  let recent = loadRecent();
+  let senders: string[] = [];
+  let searchSeq = 0;
+  let searching = false;
+  let localTimer = 0;
+  let remoteTimer = 0;
+
+  function rememberSearch(q: string) {
+    recent = remember(recent, q);
+    saveRecent(recent);
+  }
+
+  /** The search screen: over the list, with recent searches until something is typed, then results as you type. */
+  function openSearch() {
+    if (searchView || !list) return;
+    if (editing) setEditing(false);
+    const page = stack.page("Search", "m-search-page");
+    page.bar.insertAdjacentHTML(
+      "beforeend",
+      `<form class="m-search-bar" role="search">
+        <label class="m-search">${icon("magnifying-glass")}<input type="search" placeholder="Search" aria-label="Search mail" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" /><button type="button" class="m-search-clear" aria-label="Clear search" hidden>${icon("circle-x")}</button></label>
+        <button type="button" class="m-text" data-act="cancel">Cancel</button>
+      </form>`,
     );
+    page.content.innerHTML = `<div class="m-search-help"></div><p class="m-search-status" aria-live="polite"></p><ul class="m-list" aria-label="Results"></ul>`;
+    const input = page.bar.querySelector<HTMLInputElement>("input")!;
+    const view: SearchView = {
+      page,
+      input,
+      ul: page.content.querySelector(".m-list")!,
+      status: page.content.querySelector(".m-search-status")!,
+    };
+    searchView = view;
+    const clear = page.bar.querySelector<HTMLButtonElement>(".m-search-clear")!;
+
+    input.addEventListener("input", () => {
+      clear.hidden = !input.value;
+      typed(input.value.trim());
+    });
+    clear.addEventListener("click", () => {
+      input.value = "";
+      clear.hidden = true;
+      typed("");
+      input.focus();
+    });
+    page.bar.querySelector("form")!.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = input.value.trim();
+      input.blur();
+      if (!q) return;
+      rememberSearch(q);
+      void runSearch(q, true);
+    });
+    page.bar.querySelector("[data-act=cancel]")!.addEventListener("click", () => void closeSearch());
+    page.content.addEventListener("click", (e) => {
+      const b = (e.target as Element).closest<HTMLElement>("[data-query], [data-clear-recent]");
+      if (!b) return;
+      if (b.dataset.clearRecent !== undefined) {
+        recent = [];
+        saveRecent(recent);
+        return renderResults();
+      }
+      input.value = b.dataset.query!;
+      clear.hidden = false;
+      input.blur();
+      rememberSearch(input.value);
+      void runSearch(input.value, true);
+    });
+    wireRows(view.ul, page);
+    page.onClose = () => {
+      if (searchView !== view) return;
+      searchView = null;
+      searchSeq++;
+      clearTimeout(localTimer);
+      clearTimeout(remoteTimer);
+      senders = [];
+      // Back to the mailbox as it was; its rows weren't redrawn meanwhile, so the scroll position is still there.
+      mail.search = null;
+      mail.refresh();
+    };
+    renderResults();
+    void stack.push(page, false);
+    if (!settings.accessibility.reduceMotion) page.el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 });
+    input.focus();
+  }
+
+  async function closeSearch() {
+    const view = searchView;
+    if (!view) return;
+    view.input.blur();
+    if (!settings.accessibility.reduceMotion)
+      await view.page.el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: "forwards" }).finished;
+    if (list) stack.popTo(list);
+  }
+
+  /** Each keystroke: the cache's results and matching senders straight away, then Gmail once typing pauses. */
+  function typed(q: string) {
+    clearTimeout(localTimer);
+    clearTimeout(remoteTimer);
+    const n = ++searchSeq;
+    if (!q) {
+      senders = [];
+      searching = false;
+      mail.showResults("", []);
+      mail.search = null;
+      return renderResults();
+    }
+    localTimer = window.setTimeout(() => void searchLocal(q, n), LOCAL_AFTER);
+    remoteTimer = window.setTimeout(() => void runSearch(q, false, n), REMOTE_AFTER);
+  }
+
+  async function searchLocal(q: string, n: number) {
+    const [rows, found] = await Promise.all([
+      invoke<Thread[]>("search_local", { query: q, accounts: mail.scope }).catch(() => [] as Thread[]),
+      q.includes("from:")
+        ? Promise.resolve([] as string[])
+        : invoke<string[]>("suggest_senders", { query: q, accounts: mail.scope }).catch(() => [] as string[]),
+    ]);
+    if (n !== searchSeq || !searchView) return false;
+    senders = found.slice(0, 3);
+    mail.showResults(q, rows);
+    return true;
+  }
+
+  /** Gmail search in every account in view, through the core, which merges each account's results as they come. */
+  async function runSearch(q: string, now: boolean, n = ++searchSeq) {
+    if (now) {
+      clearTimeout(localTimer);
+      clearTimeout(remoteTimer);
+      senders = [];
+      if (!(await searchLocal(q, n))) return;
+    }
+    if (n !== searchSeq || !searchView) return;
+    searching = true;
+    renderResults();
+    try {
+      mail.search = q;
+      await mail.loadThreads();
+    } catch (e) {
+      if (n === searchSeq) toast(`Some results may be missing: ${e}`);
+    } finally {
+      if (n === searchSeq) {
+        searching = false;
+        renderResults();
+      }
+    }
+  }
+
+  function renderResults() {
+    const view = searchView;
+    if (!view) return;
+    const help = view.page.content.querySelector<HTMLElement>(".m-search-help")!;
+    const q = view.input.value.trim();
+    if (!q) {
+      view.status.textContent = "";
+      view.ul.innerHTML = "";
+      help.innerHTML = recent.length
+        ? `<div class="m-search-head"><h3 class="m-group-title" id="m-recent">Recent</h3><button type="button" class="m-text" data-clear-recent>Clear</button></div>
+          <div class="m-group" role="group" aria-labelledby="m-recent">${recent
+            .map(
+              (r) =>
+                `<button type="button" class="m-cell" data-query="${esc(r)}">${icon("history")}<span>${esc(r)}</span></button>`,
+            )
+            .join("")}</div>`
+        : `<div class="m-empty">${icon("magnifying-glass")}<strong>Search your mail</strong><span>${esc(
+            multi() && !mail.scope ? "Results come from all your accounts." : "Search by words, a sender or a subject.",
+          )}</span></div>`;
+      return;
+    }
+    help.innerHTML = senders.length
+      ? `<h3 class="m-group-title" id="m-suggest">Suggestions</h3><div class="m-group" role="group" aria-labelledby="m-suggest">${senders
+          .map(
+            (s) =>
+              `<button type="button" class="m-cell m-suggest" data-query="from:${esc(bareEmail(s))}" aria-label="${esc(`Mail from ${displayName(s) || bareEmail(s)}`)}"><span class="m-ava">${avatar(s)}</span><span><strong>${esc(displayName(s) || bareEmail(s))}</strong><small>${esc(bareEmail(s))}</small></span></button>`,
+          )
+          .join("")}</div>`
+      : "";
+    const shown = mail.search === q ? mail.threads : [];
+    const where = multi() && !mail.scope ? " in all accounts" : "";
+    view.status.textContent = searching
+      ? `Searching ${inMail() === "in Gmail" ? "Gmail" : "your mail"}${where}…`
+      : shown.length
+        ? `${shown.length === 100 ? "100+" : shown.length} ${shown.length === 1 ? "result" : "results"}${where}`
+        : "";
+    if (!shown.length && !searching && mail.search === q) {
+      const [glyph, title, text] = emptyState();
+      view.ul.innerHTML = `<li class="m-empty">${icon(glyph)}<strong>${esc(title)}</strong><span>${esc(text)}</span></li>`;
+      return;
+    }
+    view.ul.innerHTML = shown.map(rowHtml).join("");
   }
 
   // ---- Conversation
@@ -504,21 +1002,22 @@ export function mountPhone(mail: MailCore) {
     page.el.insertAdjacentHTML(
       "beforeend",
       `<footer class="m-toolbar m-convo-tools">
-        ${barButton("archive", "archive", "Archive")}${barButton("trash", "trash", "Delete")}${barButton("move", "folder", "Move or label")}${barButton("unread", "envelope-simple", "Mark unread")}${barButton("reply", "arrow-bend-up-left", "Reply")}
+        ${barButton("archive", "archive", "Archive")}${barButton("trash", "trash", "Delete")}${barButton("move", "folder", "Move")}${barButton("more", "dots-circle-horizontal", "More actions")}${barButton("reply", "arrow-bend-up-left", "Reply")}
       </footer>`,
     );
     page.el.querySelector(".m-convo-tools")!.addEventListener("click", (e) => {
       const action = (e.target as Element).closest<HTMLElement>("[data-act]")?.dataset.act;
       const t = mail.threads.find((x) => x.id === convo?.id);
       if (!action || !t) return;
-      if (action === "move") return moveSheet(t);
+      if (action === "move") return moveSheet([t]);
+      if (action === "more") return moreSheet(t);
       if (action === "reply")
         return actionSheet("Reply", [
           { label: "Reply", icon: "arrow-bend-up-left", run: () => host.reply("reply") },
-          { label: "Reply all", icon: "arrow-bend-double-up-left", run: () => host.reply("all") },
+          { label: "Reply All", icon: "arrow-bend-double-up-left", run: () => host.reply("all") },
           { label: "Forward", icon: "arrow-bend-up-right", run: () => host.reply("forward") },
         ]);
-      void act(action, t);
+      void act(action, [t]);
     });
     wireReader(page.content, mail, (kind, m) => host.reply(kind, m));
     page.onClose = () => {
@@ -530,6 +1029,24 @@ export function mountPhone(mail: MailCore) {
     convo = { id, page };
     showConversation(id);
     void stack.push(page);
+  }
+
+  function moreSheet(t: Thread) {
+    const has = labelsOf(t);
+    const run = (action: string) => () => void act(action, [t]);
+    const items: Item[] = [
+      t.unread
+        ? { label: "Mark as Read", icon: "envelope-simple-open", run: run("read") }
+        : { label: "Mark as Unread", icon: "envelope-simple", run: run("unread") },
+      t.starred
+        ? { label: "Unpin", icon: "pinned-off", run: run("unpin") }
+        : { label: "Pin", icon: "push-pin", run: run("pin") },
+      { label: "Label…", icon: "tag", run: () => labelSheet([t]) },
+    ];
+    if (has.includes("SPAM")) items.push({ label: "Not Spam", icon: "tray", run: run("spam") });
+    else if (has.includes("TRASH")) items.push({ label: "Move to Inbox", icon: "tray", run: () => moveTo([t], "INBOX") });
+    else items.push({ label: "Report Spam", icon: "warning-octagon", run: run("spam") });
+    actionSheet("", items);
   }
 
   /** Fills the open conversation page with thread `id` (opening, or moving to the next or previous one). */
@@ -546,9 +1063,9 @@ export function mountPhone(mail: MailCore) {
       .openThread(id, (messages) => {
         if (convo?.id !== id) return;
         page.setTitle(messages[0]?.subject || t?.subject || "(no subject)");
-        const chips = t ? labelChips(t, mail.accountLabels.get(t.account) ?? []).join("") : "";
-        page.content.innerHTML = chips ? `<div class="m-chips">${chips}</div>` : "";
+        page.content.innerHTML = `<div class="m-chips"></div>`;
         renderMessages(page.content, messages, t?.account ?? mail.defaultAccount(), true);
+        syncConvoTools();
         // The newest email is open at the bottom; start at the one before it, for context, like the Mac.
         const cards = page.content.querySelectorAll<HTMLElement>(".message");
         const anchor = cards[cards.length - 2];
@@ -566,11 +1083,11 @@ export function mountPhone(mail: MailCore) {
     const i = mail.threads.findIndex((x) => x.id === convo!.id);
     tools.querySelector<HTMLButtonElement>("[data-act=prev]")!.disabled = i <= 0;
     tools.querySelector<HTMLButtonElement>("[data-act=next]")!.disabled = i < 0 || i >= mail.threads.length - 1;
-    const unread = tools.querySelector<HTMLElement>("[data-act=unread]")!;
-    const label = t?.unread ? "Mark read" : "Mark unread";
-    unread.setAttribute("aria-label", label);
-    unread.innerHTML = icon(t?.unread ? "envelope-simple-open" : "envelope-simple");
     tools.querySelector<HTMLElement>("[data-act=archive]")!.hidden = !t?.labels.split(" ").includes("INBOX");
+    const trash = tools.querySelector<HTMLElement>("[data-act=trash]")!;
+    trash.setAttribute("aria-label", t && labelsOf(t).includes("TRASH") ? "Delete forever" : "Delete");
+    const chips = convo.page.content.querySelector(".m-chips");
+    if (chips && t) chips.innerHTML = labelChips(t, mail.accountLabels.get(t.account) ?? []).join("");
   }
 
   // ---- Wiring
@@ -579,18 +1096,22 @@ export function mountPhone(mail: MailCore) {
     switch (e.type) {
       case "labels":
         renderBoxes();
-        return list?.setTitle(listTitle());
+        if (list && !editing) list.setTitle(boxName(mail.mailbox));
+        return;
       case "threads":
-        renderList();
+        if (editing) syncEdit();
+        else renderList();
         setStatus();
         return syncConvoTools();
       case "loaded": {
         loaded = true;
         renderList();
         const sc = list?.scroller;
-        if (sc && sc.scrollHeight <= sc.clientHeight) void mail.loadMore();
+        if (sc && !searchView && sc.scrollHeight <= sc.clientHeight) void mail.loadMore();
         return;
       }
+      case "searching":
+        return renderResults();
       case "refreshed": {
         const open = mail.threads.find((t) => t.id === convo?.id);
         if (open && open.count !== mail.messages.length) showConversation(open.id);
@@ -615,5 +1136,15 @@ export function mountPhone(mail: MailCore) {
     openBox("INBOX", false);
   }
 
-  return { reset };
+  /** A tapped new-mail notification: its conversation (or, for several emails, the Inbox) in a view with its account. */
+  async function openFromNotification(p: Notified) {
+    if (p.account && mail.scope && !mail.scope.includes(p.account)) mail.setScope(null);
+    stack.popTo(boxes);
+    renderBoxes();
+    openBox("INBOX", false);
+    await mail.loadThreads();
+    if (p.thread && mail.threads.some((t) => t.id === p.thread)) openConversation(p.thread);
+  }
+
+  return { reset, openFromNotification };
 }
