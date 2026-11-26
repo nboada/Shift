@@ -820,6 +820,7 @@ body.resizing iframe { pointer-events: none; }
   min-width: 0;
   min-height: 0;
 }
+.composer.moving[open] { animation: none; transform-origin: 0 0; }
 .composer.docked .resize-edge { display: none; }
 .composer.docked > .compose-form > header { cursor: default; }
 .compose-inline #compose-dock { display: none; }
