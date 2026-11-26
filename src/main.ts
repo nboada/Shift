@@ -144,8 +144,8 @@ function drawMailboxes() {
   const toggle = `<span class="mb-toggle" data-toggle aria-hidden="true">${iconHtml("chevron-right")}</span>`;
   const system = arrange(SYSTEM, ([id]) => boxKey(id), order, hidden).map(([id, name, icon]) => {
     const count = badge && id === "INBOX" ? (nested ? inboxTotal : (labels.find((l) => l.id === id)?.unread ?? 0)) : 0;
-    // The open folder shows its account rows even when collapsed, so the selected one stays in view.
-    const open = nested && (expanded.includes(boxKey(id)) || (here(id) && !!only));
+    // One folder at a time shows its account rows; going to an account row opens its folder (openMailbox).
+    const open = nested && expanded[0] === boxKey(id);
     const row = `<a href="#" draggable="false" data-group="system" data-mailbox="${esc(id ?? "")}"${current(here(id) && !only)}${nested ? ` aria-expanded="${open}"` : ""}>
       ${nested ? toggle : ""}${iconHtml(icon)}<span>${esc(name)}</span>${nested ? `<span class="acct-stack">${unifiedAccounts().map(accountAvatar).join("")}</span>` : ""}${count ? `<small>${count}</small>` : ""}</a>`;
     if (!nested) return row;
@@ -173,18 +173,30 @@ function drawMailboxes() {
 const reduceMotion = () =>
   settings.accessibility.reduceMotion || matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/** Opens or closes a folder's account rows in place, sliding them, and remembers it in settings. */
+/** Opens or closes a folder's account rows in place, sliding them, and remembers it in settings. Only one folder is
+ * open at a time, so opening one slides the other shut. */
 function toggleFolder(id: string | null) {
   const key = boxKey(id);
-  const { expanded } = settings.sidebar;
   const box = $("#mailboxes");
   const rows = box.querySelector<HTMLElement>(`[data-accts-for="${CSS.escape(key)}"]`);
   if (!rows) return;
-  const opening = rows.hidden;
+  // By the chevron's state rather than `hidden`, which stays false while a closing slide runs.
+  const opening =
+    box.querySelector(`[data-mailbox="${CSS.escape(id ?? "")}"]`)?.getAttribute("aria-expanded") !== "true";
   // Saved without redrawing the sidebar (see onSettingsChange), so nothing interrupts the slide.
-  setSetting("sidebar.expanded", opening ? [...new Set([...expanded, key])] : expanded.filter((k) => k !== key));
+  setSetting("sidebar.expanded", opening ? [key] : []);
+  if (opening)
+    box.querySelectorAll<HTMLElement>("[data-accts-for]").forEach((other) => {
+      if (other !== rows && !other.hidden) slideFolder(other, false);
+    });
+  slideFolder(rows, opening);
+}
+
+function slideFolder(rows: HTMLElement, opening: boolean) {
+  const box = $("#mailboxes");
   // The chevron turns and the combined avatars fade by CSS on aria-expanded.
-  box.querySelector(`[data-mailbox="${CSS.escape(id ?? "")}"]`)?.setAttribute("aria-expanded", String(opening));
+  const id = rows.dataset.acctsFor === "ALL" ? "" : rows.dataset.acctsFor!;
+  box.querySelector(`[data-mailbox="${CSS.escape(id)}"]`)?.setAttribute("aria-expanded", String(opening));
   // From wherever a slide still running left off, so a quick second click reverses smoothly.
   const from = rows.hidden ? 0 : rows.getBoundingClientRect().height;
   rows.getAnimations().forEach((a) => a.cancel());
@@ -1947,6 +1959,9 @@ function showMailbox(id: string | null, account: string | null) {
 }
 
 function openMailbox(id: string | null) {
+  // An account row's folder stays open, so the selected row stays in view.
+  if (multi() && scopedAccount() && SYSTEM.some(([s]) => s === id) && settings.sidebar.expanded[0] !== boxKey(id))
+    setSetting("sidebar.expanded", [boxKey(id)]);
   mail.openMailbox(id);
   searchInputs.forEach((i) => (i.value = ""));
   clearReader();
