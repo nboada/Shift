@@ -29,7 +29,7 @@ import { addImapAccount } from "./imap-signin";
 import { Recipients } from "./recipients";
 import { rank } from "./palette-match";
 import { formatWhen, quickTimes } from "./schedule";
-import { actionToastOpen, toast } from "./toast";
+import { type Toast, actionToastOpen, toast } from "./toast";
 import { Menu } from "@tauri-apps/api/menu";
 import AirDatepicker from "air-datepicker";
 import localeEnModule from "air-datepicker/locale/en";
@@ -113,25 +113,97 @@ async function updateDockBadge() {
     .catch(() => {});
 }
 
+/** An account's small round avatar: its initial in its colour. */
+const accountAvatar = (a: string) =>
+  `<span class="acct-av acct-${accountSettings(a).color}" aria-hidden="true">${esc(accountName(a).trim().charAt(0).toUpperCase() || "?")}</span>`;
+
+/** The one account on screen, when the list is narrowed to a single account. */
+const scopedAccount = () => (mail.scope?.length === 1 ? mail.scope[0] : null);
+
+/** Accounts the combined view (no scope) covers. */
+const unifiedAccounts = () => mail.accounts.filter((a) => accountSettings(a).unified !== false);
+
+/** Folder key used by `settings.sidebar.expanded` and the order/hidden lists. */
+const boxKey = (id: string | null) => id ?? "ALL";
+
 function drawMailboxes() {
   const labels = mail.labels;
-  const unread = new Map(labels.map((l) => [l.id, l.unread]));
   labelColorCss(labels.map((l) => l.color ?? ""));
-  const link = (group: string, id: string | null, name: string, icon: string, count = 0, color: string | null = null) =>
-    `<a href="#" draggable="false" data-group="${group}" data-mailbox="${esc(id ?? "")}" class="${!mail.search && id === mail.mailbox ? "active" : ""}" ${!mail.search && id === mail.mailbox ? 'aria-current="page"' : ""}>
-      ${icon ? iconHtml(icon) : labelDot(name, color)}<span>${esc(name)}</span>${count ? `<small>${count}</small>` : ""}</a>`;
   const badge = settings.inbox.unreadBadge;
   void updateDockBadge();
-  const { order, hidden } = settings.sidebar;
-  const system = arrange(SYSTEM, ([id]) => id ?? "ALL", order, hidden).map(([id, name, icon]) =>
-    link("system", id, name, icon, badge && id === "INBOX" ? unread.get(id) : 0),
+  const { order, hidden, expanded } = settings.sidebar;
+  // With several accounts each folder can open into a row per account, like Spark: the folder row is every account
+  // together, an account row narrows the folder to that account.
+  const nested = multi();
+  const only = scopedAccount();
+  const unreadIn = (a: string, id: string) => mail.accountUnread.get(a)?.get(id) ?? 0;
+  const inboxTotal = unifiedAccounts().reduce((n, a) => n + unreadIn(a, "INBOX"), 0);
+  const here = (id: string | null) => !mail.search && id === mail.mailbox;
+  const current = (on: boolean) => (on ? ' class="active" aria-current="page"' : "");
+  // One chevron, turned by CSS when its row is open, so toggling can rotate it.
+  const toggle = `<span class="mb-toggle" data-toggle aria-hidden="true">${iconHtml("chevron-right")}</span>`;
+  const system = arrange(SYSTEM, ([id]) => boxKey(id), order, hidden).map(([id, name, icon]) => {
+    const count = badge && id === "INBOX" ? (nested ? inboxTotal : (labels.find((l) => l.id === id)?.unread ?? 0)) : 0;
+    // The open folder shows its account rows even when collapsed, so the selected one stays in view.
+    const open = nested && (expanded.includes(boxKey(id)) || (here(id) && !!only));
+    const row = `<a href="#" draggable="false" data-group="system" data-mailbox="${esc(id ?? "")}"${current(here(id) && !only)}${nested ? ` aria-expanded="${open}"` : ""}>
+      ${nested ? toggle : ""}${iconHtml(icon)}<span>${esc(name)}</span>${nested ? `<span class="acct-stack">${unifiedAccounts().map(accountAvatar).join("")}</span>` : ""}${count ? `<small>${count}</small>` : ""}</a>`;
+    if (!nested) return row;
+    const accounts = mail.accounts.map((a) => {
+      const n = badge && id === "INBOX" ? unreadIn(a, "INBOX") : 0;
+      return `<a href="#" draggable="false" class="mb-acct${here(id) && only === a ? " active" : ""}" data-box="${esc(id ?? "")}" data-acct="${esc(a)}"${here(id) && only === a ? ' aria-current="page"' : ""}>
+        ${accountAvatar(a)}<span>${esc(accountName(a))}</span>${n ? `<small>${n}</small>` : ""}</a>`;
+    });
+    // Closed folders keep their rows, hidden, so toggling slides them in place without a redraw.
+    return `${row}<div class="mb-accts" data-accts-for="${esc(boxKey(id))}"${open ? "" : " hidden"}>${accounts.join("")}</div>`;
+  });
+  const user = arrange(mail.userLabels, (l) => l.id, order, hidden).map(
+    (l) =>
+      `<a href="#" draggable="false" data-group="label" data-mailbox="${esc(l.id)}"${current(here(l.id))}>
+      ${labelDot(l.name, l.color)}<span>${esc(l.name)}</span>${badge && l.unread ? `<small>${l.unread}</small>` : ""}</a>`,
   );
-  const user = arrange(mail.userLabels, (l) => l.id, order, hidden).map((l) =>
-    link("label", l.id, l.name, "", badge ? l.unread : 0, l.color),
-  );
-  $("#mailboxes").innerHTML =
+  const box = $("#mailboxes");
+  box.classList.toggle("nested", nested);
+  $("#sidebar").classList.toggle("nested", nested);
+  box.innerHTML =
     system.join("") +
     `<h3><span>Labels</span><button type="button" class="label-add" data-tip="New label" aria-label="New label">${iconHtml("plus")}</button></h3>${user.join("")}`;
+}
+
+const reduceMotion = () =>
+  settings.accessibility.reduceMotion || matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** Opens or closes a folder's account rows in place, sliding them, and remembers it in settings. */
+function toggleFolder(id: string | null) {
+  const key = boxKey(id);
+  const { expanded } = settings.sidebar;
+  const box = $("#mailboxes");
+  const rows = box.querySelector<HTMLElement>(`[data-accts-for="${CSS.escape(key)}"]`);
+  if (!rows) return;
+  const opening = rows.hidden;
+  // Saved without redrawing the sidebar (see onSettingsChange), so nothing interrupts the slide.
+  setSetting("sidebar.expanded", opening ? [...new Set([...expanded, key])] : expanded.filter((k) => k !== key));
+  // The chevron turns and the combined avatars fade by CSS on aria-expanded.
+  box.querySelector(`[data-mailbox="${CSS.escape(id ?? "")}"]`)?.setAttribute("aria-expanded", String(opening));
+  // From wherever a slide still running left off, so a quick second click reverses smoothly.
+  const from = rows.hidden ? 0 : rows.getBoundingClientRect().height;
+  rows.getAnimations().forEach((a) => a.cancel());
+  rows.hidden = false;
+  const full = rows.scrollHeight;
+  if (!opening && reduceMotion()) return void (rows.hidden = true);
+  if (reduceMotion()) return;
+  rows.style.overflow = "hidden";
+  const slide = rows.animate(
+    [
+      { height: `${from}px`, opacity: full ? from / full : 0 },
+      { height: opening ? `${full}px` : "0px", opacity: opening ? 1 : 0 },
+    ],
+    { duration: 220, easing: "ease" },
+  );
+  slide.onfinish = () => {
+    rows.style.removeProperty("overflow");
+    if (!opening) rows.hidden = true;
+  };
 }
 
 function listTitle() {
@@ -213,7 +285,41 @@ function syncToolbar() {
   row.innerHTML = chips;
 }
 
+/** The list's identity: rows only slide between redraws of the same list, not when switching mailboxes. */
+const listKey = () => `${mail.mailbox}|${mail.search}|${mail.scope?.join(",") ?? ""}`;
+const rowKey = (li: HTMLElement) => li.dataset.id ?? `section:${li.textContent}`;
+const LIST_ROWS = "li[data-id], li.section";
+
+/** Redraws the list; when it's the same list, rows glide from their old places to their new ones (FLIP), so pinning,
+ * archiving or new mail moves them instead of making them jump. */
 function renderThreads() {
+  const before =
+    !reduceMotion() && listKey() === drawnFor
+      ? new Map(
+          [...threadList.querySelectorAll<HTMLElement>(LIST_ROWS)].map((li) => [
+            rowKey(li),
+            li.getBoundingClientRect().top,
+          ]),
+        )
+      : null;
+  drawThreads();
+  if (!before?.size) return;
+  for (const li of threadList.querySelectorAll<HTMLElement>(LIST_ROWS)) {
+    const was = before.get(rowKey(li));
+    if (was === undefined) {
+      li.animate({ opacity: [0, 1] }, { duration: 200, easing: "ease-out" });
+      continue;
+    }
+    const dy = was - li.getBoundingClientRect().top;
+    if (Math.abs(dy) >= 1)
+      li.animate(
+        { transform: [`translateY(${dy}px)`, "none"] },
+        { duration: 320, easing: "cubic-bezier(0.25, 0.1, 0.25, 1)" },
+      );
+  }
+}
+
+function drawThreads() {
   syncToolbar();
   $("#list-title").textContent = listTitle();
   const emptyBtn = $("#empty-btn");
@@ -229,7 +335,7 @@ function renderThreads() {
   }
   // Only the rows near the top are drawn, more as the list scrolls: a mailbox of a thousand threads redrawn on every
   // open, archive or sync took a few hundred ms each time.
-  const key = `${mail.mailbox}|${mail.search}|${mail.scope?.join(",") ?? ""}`;
+  const key = listKey();
   if (key !== drawnFor) [drawn, drawnFor] = [PAGE, key];
   const visible = mail.threads.slice(
     0,
@@ -306,7 +412,101 @@ async function openThread(id: string) {
   }
 }
 
-wireReader(reader, mail, reply);
+wireReader(
+  reader,
+  mail,
+  reply,
+  (action, m) => void draftAction(action, m),
+  (raw, m, chip) => personCard(raw, m, chip),
+);
+
+/** A person's card from a message header: write to them, copy their address, find your emails with them, or reply
+ * to them alone. */
+function personCard(raw: string, m: Message, chip: HTMLElement) {
+  const email = bareEmail(raw);
+  const name = displayName(raw) || email;
+  const first = name.includes("@") ? name : name.split(" ")[0];
+  const account = mail.threads.find((t) => t.id === mail.selected)?.account ?? mail.defaultAccount();
+  const me = email === account.toLowerCase();
+  const head = `<div class="person-card">${avatar(raw)}<div><strong>${esc(name)}</strong><span>${esc(email)}</span></div></div>`;
+  const items: MenuItem[] = [
+    { id: "write", label: "New email", icon: "pencil" },
+    { id: "copy", label: "Copy address", icon: "copy" },
+    { id: "search", label: me ? "Search your emails" : `Emails with ${first}`, icon: "search" },
+    ...(me ? [] : [{ id: "reply", label: `Reply to ${first} only`, icon: "arrow-back-up" }]),
+  ];
+  const r = chip.getBoundingClientRect();
+  chip.classList.add("open");
+  showMenu(
+    null,
+    items,
+    { x: r.left, y: r.bottom + 6 },
+    (id) => {
+      if (id === "write") void compose.write({ to: raw });
+      else if (id === "copy")
+        void navigator.clipboard
+          .writeText(email)
+          .then(() => toast(`Copied ${email}`, { kind: "success", icon: "copy" }))
+          .catch((err) => toast(`Couldn't copy: ${err}`, { kind: "error" }));
+      else if (id === "search") {
+        const input = $<HTMLInputElement>(".search-top input");
+        input.value = email;
+        input.closest("form")!.requestSubmit();
+      } else if (id === "reply") void compose.reply("reply", { ...m, reply_to: raw });
+    },
+    head,
+  );
+  menuAnchor = chip;
+}
+
+/** Edit or Delete on a draft shown in its conversation. */
+async function draftAction(action: "edit" | "delete", _m: Message) {
+  const t = mail.threads.find((x) => x.id === mail.selected);
+  if (!t) return;
+  if (action === "edit") {
+    hidePillFor(t.id);
+    return void openDraft(t.id);
+  }
+  await discardDrafts([t], false);
+}
+
+/** Deletes the drafts in these conversations, and only them: a reply draft's conversation keeps the emails it
+ * answers (trashing the conversation, what Delete does elsewhere, would take those too). Drafts have no Undo, so it
+ * asks first. `leave`: the conversations drop out of the list (Drafts). */
+async function discardDrafts(list: Thread[], leave = true) {
+  const n = list.length;
+  const yes = await ask({
+    title: n === 1 ? "Delete this draft?" : `Delete ${n} drafts?`,
+    message: `${n === 1 ? "It" : "They"} will be deleted ${inMail()} too. The rest of the conversation stays.`,
+    confirm: "Delete",
+    danger: true,
+  });
+  if (!yes) return;
+  if (leave) {
+    const gone = new Set(list.map((t) => t.id));
+    mail.threads = mail.threads.filter((t) => !gone.has(t.id));
+    if (mail.selected && gone.has(mail.selected)) clearReader();
+    picked.clear();
+    delete app.dataset.picked;
+    renderThreads();
+  }
+  const failed: string[] = [];
+  await Promise.all(
+    list.map(async (t) => {
+      try {
+        const found = await invoke<[string, string, string] | null>("find_draft", { account: t.account, thread: t.id });
+        hidePillFor(t.id, found?.[0]);
+        if (found) await invoke("delete_draft", { account: t.account, draftId: found[0] });
+      } catch (err) {
+        failed.push(String(err));
+      }
+    }),
+  );
+  if (failed.length)
+    toast(`Couldn't delete ${failed.length === n ? "the draft" : "some drafts"}: ${failed[0]}`, { kind: "error" });
+  else toast(n === 1 ? "Draft deleted" : `${n} drafts deleted`, { icon: "trash" });
+  mail.refresh();
+}
 
 function clearReader() {
   if (compose.state?.inline) void compose.close();
@@ -321,6 +521,51 @@ function undo() {
   if (!undone) return toast("Nothing to undo");
   toast("Undone", { kind: "success" });
   return undone;
+}
+
+/** The open move toast, so quick moves of the same kind in a row merge into one ("Archived 3 emails"). */
+let lastMove: { key: string; emails: number; actions: number; toast: Toast } | null = null;
+
+/** Confirms emails moved to `add` (nothing: archived), with Undo for every move the toast covers. */
+function confirmMove(add: string[], emails: number) {
+  const key = add.join();
+  if (lastMove?.key === key && lastMove.toast.open) {
+    lastMove.emails += emails;
+    lastMove.actions += 1;
+    return lastMove.toast.setMessage(movedMessage(add, lastMove.emails), true);
+  }
+  const icon = add.includes("TRASH")
+    ? "trash"
+    : add.includes("SPAM")
+      ? "alert-octagon"
+      : add.includes("INBOX")
+        ? "inbox"
+        : "archive";
+  const entry = { key, emails, actions: 1, toast: null as unknown as Toast };
+  entry.toast = toast(movedMessage(add, emails), {
+    icon,
+    action: {
+      label: "Undo",
+      key: keyLabel("undo"),
+      run: () => {
+        for (let i = 0; i < entry.actions; i++) mail.undo();
+        toast("Undone", { kind: "success" });
+      },
+    },
+  });
+  lastMove = entry;
+}
+
+/** Confirms pinning or unpinning; there's nothing to undo, so it just says so. */
+const confirmPin = (msg: string) => toast(msg, { icon: "pinned" });
+
+/** What moving emails into `add` says (nothing added: archived). */
+function movedMessage(add: string[], n: number) {
+  const what = n === 1 ? "" : ` ${n} emails`;
+  if (add.includes("TRASH")) return `Moved${what} to Trash`;
+  if (add.includes("SPAM")) return `Marked${what} as spam`;
+  if (add.includes("INBOX")) return `Moved${what} to Inbox`;
+  return `Archived${what}`;
 }
 
 /** Delete inside Trash: gone for good in Gmail too, so it always asks and can't be undone. */
@@ -371,9 +616,11 @@ function act(action: string, id = mail.selected) {
   switch (action) {
     case "archive":
       removeAndAdvance(t.id);
+      confirmMove([], 1);
       return mail.undoable(t, [], ["INBOX"]);
     case "trash":
       if (mail.mailbox === "TRASH") return void deleteForever([t]);
+      if (mail.mailbox === "DRAFT") return void discardDrafts([t]);
       if (settings.general.confirmDelete) {
         ask({
           title: "Delete this email?",
@@ -383,18 +630,23 @@ function act(action: string, id = mail.selected) {
         }).then((yes) => yes && act("trashNow", t.id));
         return;
       }
-      removeAndAdvance(t.id);
-      return mail.undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
+      return act("trashNow", t.id);
     case "trashNow":
       removeAndAdvance(t.id);
+      confirmMove(["TRASH"], 1);
       return mail.undoable(t, ["TRASH"], ["INBOX", "SPAM"], true);
     case "unread":
       return mail.modify(t, t.unread ? [] : ["UNREAD"], t.unread ? ["UNREAD"] : []);
     case "star":
+      confirmPin(t.starred ? "Unpinned" : "Pinned");
       return mail.modify(t, t.starred ? [] : ["STARRED"], t.starred ? ["STARRED"] : []);
     case "spam":
       removeAndAdvance(t.id);
-      if (mail.mailbox === "SPAM") return mail.undoable(t, ["INBOX"], ["SPAM"]);
+      if (mail.mailbox === "SPAM") {
+        confirmMove(["INBOX"], 1);
+        return mail.undoable(t, ["INBOX"], ["SPAM"]);
+      }
+      confirmMove(["SPAM"], 1);
       return mail.undoable(t, ["SPAM"], ["INBOX", "TRASH"]);
     case "reply":
       return reply("reply");
@@ -509,6 +761,7 @@ function actOnPicked(action: string) {
     clearReader();
     setView("list");
     renderThreads();
+    confirmMove(add, list.length);
     void mail.undoableAll(list, add, remove, trash);
   };
   switch (action) {
@@ -518,6 +771,7 @@ function actOnPicked(action: string) {
       return leave(["SPAM"], ["INBOX", "TRASH"]);
     case "trash":
       if (mail.mailbox === "TRASH") return void deleteForever(list);
+      if (mail.mailbox === "DRAFT") return void discardDrafts(list);
       if (settings.general.confirmDelete) {
         void ask({ title: `Delete ${n}?`, message: "They will move to Trash.", confirm: "Delete", danger: true }).then(
           (yes) => yes && actOnPicked("trashNow"),
@@ -535,6 +789,7 @@ function actOnPicked(action: string) {
     }
     case "star": {
       const pin = list.some((t) => !t.starred);
+      confirmPin(`${pin ? "Pinned" : "Unpinned"} ${n}`);
       void mail.applyChanges(list.map((t) => ({ t, add: pin ? ["STARRED"] : [], remove: pin ? [] : ["STARRED"] })));
       return showPicked();
     }
@@ -569,6 +824,7 @@ function closeMenu() {
   if (menu.matches(":popover-open")) menu.hidePopover();
   menuAnchor = null;
   threadList.querySelector(".context")?.classList.remove("context");
+  reader.querySelector("[data-person].open")?.classList.remove("open");
 }
 
 /** Shows `items` at a point, kept inside the window. `pick` returns true to keep the menu open. */
@@ -577,13 +833,15 @@ function showMenu(
   items: MenuItem[],
   pos: { x: number; y: number },
   pick: (id: string) => boolean | void,
+  /** Markup above the items instead of a title (a person's card). */
+  head?: string,
 ) {
   menuPos = pos;
   // Re-rendered in place (the Label menu after a toggle): keep focus on the same item.
   const keep = menu.hidden ? null : (document.activeElement as HTMLElement | null)?.dataset?.target;
   if (menu.hidden) menuReturn = document.activeElement as HTMLElement | null;
   menu.innerHTML =
-    (title ? `<h4>${esc(title)}</h4>` : "") +
+    (head ?? (title ? `<h4>${esc(title)}</h4>` : "")) +
     (items.length
       ? items
           .map((x) =>
@@ -705,6 +963,7 @@ function openMenu(kind: "move" | "label", t: Thread, pos?: { x: number; y: numbe
     }
     if (id === "TRASH") return void act("trash", t.id);
     if (mail.mailbox !== null && mail.mailbox !== id) removeAndAdvance(t.id);
+    confirmMove(id === "ARCHIVE" ? [] : [id], 1);
     mail.undoable(
       t,
       id === "ARCHIVE" ? [] : [id],
@@ -722,14 +981,20 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
   closeMenu();
   const id = a.dataset.mailbox || null;
   const label = mail.userLabels.find((l) => l.id === id);
-  const items: MenuItem[] = [
-    {
-      id: "read",
-      label: "Mark all as read",
-      icon: "envelope-simple-open",
-      disabled: id === "SCHEDULED" || id === "DRAFT",
-    },
-  ];
+  // A label's own options come first; deleting it stays last, apart from the rest.
+  const items: MenuItem[] = label
+    ? [
+        { id: "rename", label: "Rename…", icon: "pencil-simple" },
+        { id: "color", label: "Colour", icon: "palette" },
+        "-",
+      ]
+    : [];
+  items.push({
+    id: "read",
+    label: "Mark all as read",
+    icon: "envelope-simple-open",
+    disabled: id === "SCHEDULED" || id === "DRAFT",
+  });
   if (id === "TRASH" || id === "SPAM")
     items.push("-", { id: "empty", label: id === "TRASH" ? "Empty Trash" : "Empty Spam", icon: "trash", danger: true });
   items.push("-", { id: "hide", label: "Hide from sidebar", icon: "eye-slash" });
@@ -740,19 +1005,11 @@ $("#mailboxes").addEventListener("contextmenu", (e) => {
   const hidden = settings.sidebar.hidden.filter((k) => names.has(k));
   if (hidden.length)
     items.push(...hidden.map((k) => ({ id: `show:${k}`, label: `Show ${names.get(k)}`, icon: "eye" })));
-  if (label) {
-    items.push(
-      "-",
-      { id: "rename", label: "Rename…", icon: "pencil-simple" },
-      { id: "color", label: "Colour", icon: "palette" },
-      "-",
-      { id: "delete", label: "Delete label", icon: "trash", danger: true },
-    );
-  }
+  if (label) items.push("-", { id: "delete", label: "Delete label", icon: "trash", danger: true });
   showMenu(null, items, { x: e.clientX, y: e.clientY }, (pick) => {
     if (pick === "read") {
       // Gmail marks every unread email in the mailbox, older ones not shown here included.
-      const box = a.querySelector("span")?.textContent ?? "this mailbox";
+      const box = a.querySelector("span:not(.mb-toggle):not(.label-dot)")?.textContent || "this mailbox";
       void ask({
         title: `Mark all of ${box} as read?`,
         message: `Every unread email in ${box}${inAccounts()} is marked read ${inMail()}, including older ones not shown here.`,
@@ -838,9 +1095,10 @@ $("#mailboxes").addEventListener("pointerdown", (e) => {
   if (!item || e.button !== 0) return;
   const box = $("#mailboxes");
   const rows = [...box.querySelectorAll<HTMLElement>(`[data-group="${item.dataset.group}"]`)];
-  const tops = rows.map((r) => r.getBoundingClientRect().top);
+  const measure = () => rows.map((r) => r.getBoundingClientRect().top);
+  let tops = measure();
   const from = rows.indexOf(item);
-  const pitch = rows.length > 1 ? tops[1] - tops[0] : 0;
+  let pitch = rows.length > 1 ? tops[1] - tops[0] : 0;
   let to = from;
   let dragging = false;
   const move = (ev: PointerEvent) => {
@@ -849,7 +1107,10 @@ $("#mailboxes").addEventListener("pointerdown", (e) => {
       if (Math.abs(dy) < 4) return;
       dragging = true;
       item.classList.add("lifted");
+      // Account rows hide while sorting (.sorting), so the folders sit evenly spaced; measure them again.
       box.classList.add("sorting");
+      tops = measure();
+      pitch = rows.length > 1 ? tops[1] - tops[0] : 0;
     }
     const y = Math.max(tops[0] - tops[from], Math.min(tops.at(-1)! - tops[from], dy));
     item.style.transform = `translateY(${y}px)`;
@@ -1025,6 +1286,11 @@ threadList.addEventListener("contextmenu", (e) => {
 document.addEventListener("pointerdown", (e) => {
   if (!menu.hidden && !menu.contains(e.target as Node) && !menuAnchor?.contains(e.target as Node)) closeMenu();
 });
+// A click inside an email (its sandboxed frame) never reaches this document, but it takes focus from the window, as
+// does switching to another app: either way an open menu closes, like a Mac menu.
+window.addEventListener("blur", () => {
+  if (!menu.hidden) closeMenu();
+});
 
 // ---- Composer: replies open inline under the thread, new emails in a resizable window. Drafts save to Gmail Drafts as
 // you type, so closing never loses work and drafts reach your other devices. What it does is in core/composer.ts,
@@ -1108,6 +1374,9 @@ function detachComposer() {
 // The last draft closed with "keep": a corner card that reopens it, until dismissed or another email is written.
 const draftPill = $("#draft-pill");
 let pillDraft: { fields: Fields; state: ComposeState } | null = null;
+/** Set when a draft from the open conversation was just saved, so the next refresh redraws it with the draft. */
+let redrawOpenThread = false;
+
 function showDraftPill(fields: Fields, state: ComposeState) {
   pillDraft = { fields, state };
   $("#draft-pill-subject").textContent = fields.subject || "(no subject)";
@@ -1116,6 +1385,13 @@ function showDraftPill(fields: Fields, state: ComposeState) {
 function hideDraftPill() {
   pillDraft = null;
   draftPill.hidden = true;
+}
+/** Closes the pill when it stands for this draft (by Gmail draft id, or by its conversation), which was just deleted
+ * or reopened elsewhere: it would offer a draft that's gone, or one already open. */
+function hidePillFor(thread: string, draftId?: string) {
+  const s = pillDraft?.state;
+  if (!s) return;
+  if ((draftId && s.draftId === draftId) || (s.thread ?? s.context?.thread_id) === thread) hideDraftPill();
 }
 function reopenPillDraft() {
   const d = pillDraft;
@@ -1202,7 +1478,12 @@ const compose = createComposer(mail, {
   error: composeError,
   files: renderComposeFiles,
   busy: (on) => (composeForm.querySelector<HTMLButtonElement>("button[type=submit]")!.disabled = on),
-  kept: showDraftPill,
+  kept: (fields, state) => {
+    // Its conversation is open: show the saved draft there once the sync that follows the save brings it in.
+    const thread = state.thread ?? state.context?.thread_id;
+    if (thread && thread === mail.selected) redrawOpenThread = true;
+    showDraftPill(fields, state);
+  },
   discarded: (thread) => {
     if (mail.mailbox !== "DRAFT") return;
     mail.threads = mail.threads.filter((t) => t.id !== thread);
@@ -1609,8 +1890,17 @@ $("#mailboxes").addEventListener("click", (e) => {
   e.preventDefault();
   if (sortedJustNow) return;
   if ((e.target as Element).closest(".label-add")) return void newLabel();
-  const a = (e.target as Element).closest<HTMLElement>("[data-mailbox]");
-  if (a) openMailbox(a.dataset.mailbox || null);
+  const target = e.target as Element;
+  const acct = target.closest<HTMLElement>("[data-acct]");
+  if (acct) return void showMailbox(acct.dataset.box || null, acct.dataset.acct!);
+  const a = target.closest<HTMLElement>("[data-mailbox]");
+  if (!a) return;
+  const id = a.dataset.mailbox || null;
+  // The arrow, or a second click on the folder already showing every account, opens or closes its account rows.
+  const showing = !mail.search && mail.mailbox === id && !mail.scope;
+  if (target.closest("[data-toggle]") || (showing && multi() && a.dataset.group === "system")) return toggleFolder(id);
+  // A folder row is every account together.
+  showMailbox(id, null);
 });
 
 /** The sidebar's + next to Labels: creates the label in every account on screen. Gmail labels belong to one account;
@@ -1647,8 +1937,13 @@ async function newLabel() {
 /** Shows some accounts (null: all of them); keeps the current mailbox when it exists there. */
 function setScope(list: string[] | null) {
   mail.setScope(list);
-  renderAccountFooter();
   openMailbox(mail.mailbox);
+}
+
+/** Opens a folder for one account, or for all of them (null). */
+function showMailbox(id: string | null, account: string | null) {
+  if ((account ? [account] : null)?.join() !== mail.scope?.join()) mail.setScope(account ? [account] : null);
+  openMailbox(id);
 }
 
 function openMailbox(id: string | null) {
@@ -2341,6 +2636,10 @@ function updateShortcutTips() {
   const palette = keyLabel("palette");
   $("#palette-hint").hidden = !palette;
   $("#palette-hint kbd").textContent = palette ?? "";
+  // On the button, a ⌘ shortcut reads better than a single letter, so prefer one when New Email has both.
+  const composeKeys = keysFor(settings.shortcuts).compose ?? [];
+  const composeKey = composeKeys.find((k) => k.startsWith("cmd+")) ?? composeKeys[0];
+  $("#compose-key").textContent = composeKey ? formatCombo(composeKey) : "";
   document.querySelectorAll<HTMLElement>("[data-tip]").forEach((el) => {
     const action = el.dataset.action ?? TIP_ACTIONS[el.id];
     if (!action) return;
@@ -2350,79 +2649,16 @@ function updateShortcutTips() {
   });
 }
 
-/** Sidebar footer: the accounts being shown, which opens the account picker when there are several. */
-function renderAccountFooter() {
-  const one = mail.scope?.length === 1 ? mail.scope[0] : !multi() ? mail.accounts[0] : null;
-  $("#account-email").textContent = one
-    ? accountName(one)
-    : mail.scope
-      ? `${mail.scope.length} mail.accounts`
-      : `All accounts (${mail.accounts.length})`;
-  $("#account-dot").className = `account-dot ${one ? `acct-${accountSettings(one).color}` : ""}`;
-  $("#account-dot").hidden = !one;
-  $("#account-all").hidden = !!one;
-  $<HTMLButtonElement>("#account-btn").disabled = !multi();
-  // Next to the list title: a dot per account, to show just that one (click it again for all).
-  const only = mail.scope?.length === 1 ? mail.scope[0] : null;
-  const dots = $("#acct-dots");
-  dots.hidden = !multi();
-  dots.classList.toggle("filtered", !!only);
-  dots.innerHTML = mail.accounts
-    .map((a) => {
-      const label = only === a ? "Show all accounts" : `Show only ${accountName(a)}`;
-      return `<button type="button" class="acct-pick${only === a ? " on" : ""}" data-acct="${esc(a)}" data-tip="${esc(label)}" aria-label="${esc(label)}" aria-pressed="${only === a}"><span class="account-dot acct-${accountSettings(a).color}"></span></button>`;
-    })
-    .join("");
-}
-$("#acct-dots").addEventListener("click", (e) => {
-  const a = (e.target as Element).closest<HTMLElement>("[data-acct]")?.dataset.acct;
-  if (a) setScope(mail.scope?.length === 1 && mail.scope[0] === a ? null : [a]);
-});
-
-/** Multi-select account picker above the sidebar footer; stays open while ticking accounts. */
-function openAccountMenu() {
-  const btn = $("#account-btn");
-  const shown = mail.scope ?? mail.accounts.filter((a) => accountSettings(a).unified !== false);
-  const items: MenuItem[] = [
-    { id: "", label: "All accounts", icon: "users", checked: !mail.scope },
-    "-",
-    ...mail.accounts.map((a) => ({
-      id: a,
-      label: accountName(a),
-      icon: "",
-      acct: accountSettings(a).color,
-      checked: shown.includes(a),
-    })),
-  ];
-  const r = btn.getBoundingClientRect();
-  showMenu(null, items, { x: r.left, y: r.top }, (id) => {
-    if (!id) setScope(null);
-    // From "All accounts", or with just two, clicking an account shows only that one.
-    else if (!mail.scope || mail.accounts.length === 2) setScope([id]);
-    else {
-      const next = shown.includes(id) ? shown.filter((a) => a !== id) : [...shown, id];
-      // At least one account stays ticked.
-      if (next.length) setScope(next);
-    }
-    openAccountMenu();
-    return true;
-  });
-  menu.style.top = `${Math.max(8, r.top - menu.offsetHeight - 6)}px`;
-  menuAnchor = btn;
-}
-
-$("#account-btn").addEventListener("click", () =>
-  menuAnchor === $("#account-btn") && !menu.hidden ? closeMenu() : openAccountMenu(),
-);
-
 onSettingsChange((path) => {
   applyVisualSettings();
-  if (mail.accounts.length) renderAccountFooter();
+  // Account names and colours show in the sidebar.
+  if (mail.accounts.length && (path === "*" || path.startsWith("accounts"))) drawMailboxes();
   bindings = bindingsFrom(settings.shortcuts);
   renderViewButton();
   updateShortcutTips();
   if (!app.hidden && (path === "*" || path.startsWith("inbox.") || path === "accounts")) mail.refresh();
-  else if (!app.hidden && path.startsWith("sidebar.")) void mail.loadLabels();
+  // Opening or closing a folder's account rows happens in place (toggleFolder), so it needs no redraw.
+  else if (!app.hidden && path.startsWith("sidebar.") && path !== "sidebar.expanded") void mail.loadLabels();
 });
 
 function start(list: string[]) {
@@ -2433,7 +2669,6 @@ function start(list: string[]) {
     const used = mail.accounts.map((x) => settings.accounts[x]?.color).filter(Boolean);
     setAccountSetting(a, "color", ACCOUNT_COLOR_ORDER.find((c) => !used.includes(c)) ?? ACCOUNT_COLOR_ORDER[0]);
   }
-  renderAccountFooter();
   $("#signin").hidden = true;
   clearReader();
   if (IS_IOS) void showPhone();
@@ -2470,9 +2705,11 @@ mail.subscribe((e) => {
       // A new message in the open conversation (a reply, or one just sent) shows without reopening it. Not while an
       // inline reply is being written, and not in Drafts or Scheduled, where opening a row opens the composer.
       const open = mail.threads.find((t) => t.id === mail.selected);
+      const redraw = redrawOpenThread;
+      redrawOpenThread = false;
       if (
         open &&
-        open.count !== mail.messages.length &&
+        (redraw || open.count !== mail.messages.length) &&
         !compose.state?.inline &&
         mail.mailbox !== "DRAFT" &&
         mail.mailbox !== "SCHEDULED"

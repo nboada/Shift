@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test";
 import type { OutFile } from "../attachments";
 import { settings } from "../settings";
-import { type ComposeState, type ComposeView, createComposer } from "./composer";
+import { type ComposeState, type ComposeView, createComposer, messageText } from "./composer";
 import type { Fields, MailCore, Message, Scheduled } from "./mail";
 
 const ME = "ana@example.com";
@@ -58,6 +58,7 @@ function fakeBackend() {
     attachment_data: ({ idx }) => `data${idx}`,
     thread: ({ id }) => threads.get(id) ?? [],
     find_draft: ({ thread }) => found.get(thread) ?? null,
+    ai_draft_reply: () => "A draft",
     take_scheduled: ({ id }) => {
       scheduled.delete(Number(id));
       return [];
@@ -457,4 +458,24 @@ test("editing a scheduled email puts it back on its schedule when closed", async
   expect(resumed).toMatchObject({ draftId: "d7", sendAt });
   expect(resumed.draft.body).toBe("Hi, edited");
   expect(ui.toasts.at(-1)?.msg).toMatch(/^Still scheduled for/);
+});
+
+test("an AI reply gets each email's own words, not the quoted history under it", async () => {
+  const quote = `On Mon, 23 Nov 2026 at 09:00, Ana <${ME}> wrote:\n> ${"Earlier text. ".repeat(400)}`;
+  const latest = message({ id: "m2", text: `Here is our feedback on the wireframes.\n\n${quote}` });
+  const { backend, compose } = setup(fakeMail({ selected: "t1", messages: [message(), latest] }));
+  await compose.reply("reply", latest);
+  await compose.aiReply("");
+  const { conversation } = backend.of("ai_draft_reply")[0].args;
+  expect(conversation).toContain("Here is our feedback on the wireframes.");
+  expect(conversation).not.toContain("Earlier text.");
+});
+
+test("an email's own text stops where its quoted history starts, and one that's all quote keeps it", () => {
+  expect(messageText({ text: "Sounds good.\n\nOn Tue, 24 Nov 2026, Ben <b@x.net>\nwrote:\n> Lunch?", html: null })).toBe(
+    "Sounds good.",
+  );
+  expect(messageText({ text: "Done.\n\n-----Original Message-----\nFrom: Ben", html: null })).toBe("Done.");
+  expect(messageText({ text: "Thanks!\n\nFrom: Ben Ito\nSent: Monday\nHi", html: null })).toBe("Thanks!");
+  expect(messageText({ text: "> only a quote", html: null })).toBe("> only a quote");
 });

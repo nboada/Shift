@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   sender TEXT NOT NULL, recipients TEXT NOT NULL, cc TEXT NOT NULL, date INTEGER NOT NULL,
   subject TEXT NOT NULL, message_id TEXT NOT NULL, refs TEXT NOT NULL,
-  html TEXT, text TEXT, reply_to TEXT NOT NULL DEFAULT '', ics TEXT);
+  html TEXT, text TEXT, reply_to TEXT NOT NULL DEFAULT '', ics TEXT, draft INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id, date);
 CREATE TABLE IF NOT EXISTS attachments (
   message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, idx INTEGER NOT NULL,
@@ -49,7 +49,7 @@ CREATE INDEX IF NOT EXISTS imap_uids_id ON imap_uids(id);
 ";
 
 /// Schema version, kept in `PRAGMA user_version`. Bump it and add an `if version < N` step to `open` for each change.
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 pub fn open(path: &std::path::Path) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
@@ -83,6 +83,15 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
             "UPDATE threads SET full = 0 WHERE full = 1 AND id IN (SELECT m.thread_id FROM messages m
                JOIN attachments a ON a.message_id = m.id
                WHERE a.mime IN ('text/calendar', 'application/ics') OR lower(a.filename) LIKE '%.ics')",
+            [],
+        )?;
+    }
+    if version < 4 {
+        add_column(&tx, "messages", "draft INTEGER NOT NULL DEFAULT 0")?;
+        // Which message in a conversation is the draft wasn't kept: fetch conversations with one again so the
+        // reader can mark it.
+        tx.execute(
+            "UPDATE threads SET full = 0 WHERE full = 1 AND id IN (SELECT thread_id FROM thread_labels WHERE label_id = 'DRAFT')",
             [],
         )?;
     }
@@ -415,12 +424,12 @@ pub fn upsert_thread(conn: &mut Connection, t: &gmail::Thread, full: bool) -> Re
     }
     for m in &t.messages {
         tx.execute(
-            "INSERT INTO messages (id, thread_id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to, ics)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO messages (id, thread_id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to, ics, draft)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 m.id, t.id, m.header("From"), m.header("To"), m.header("Cc"), m.date_ms(), m.header("Subject"),
                 m.header("Message-ID"), m.header("References"), m.body("text/html"), m.body("text/plain"), m.header("Reply-To"),
-                m.calendar()
+                m.calendar(), m.label_ids.iter().any(|l| l == "DRAFT")
             ],
         )?;
         for (i, a) in m.attachments().into_iter().enumerate() {
@@ -877,6 +886,8 @@ pub struct MessageRow {
     text: Option<String>,
     /// Where replies go, when the sender set it (mailing lists, help desks); empty otherwise.
     reply_to: String,
+    /// An unsent draft of the user's, which the reader marks and offers to edit or delete.
+    draft: bool,
     pub attachments: Vec<AttachmentRow>,
     /// The calendar event, when the email is an invite or an answer to one.
     pub invite: Option<crate::invite::Invite>,
@@ -893,7 +904,7 @@ pub struct AttachmentRow {
 
 pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
     let mut st = conn.prepare_cached(
-        "SELECT id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to, ics
+        "SELECT id, sender, recipients, cc, date, subject, message_id, refs, html, text, reply_to, ics, draft
          FROM messages WHERE thread_id = ?1 ORDER BY date",
     )?;
     let me = get_meta(conn, "email")?.unwrap_or_default();
@@ -911,6 +922,7 @@ pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
             html: r.get(8)?,
             text: r.get(9)?,
             reply_to: r.get(10)?,
+            draft: r.get(12)?,
             attachments: Vec::new(),
             invite: ics.and_then(|ics| crate::invite::parse(&ics, &me)),
         })
@@ -1001,6 +1013,15 @@ mod tests {
             "payload": { "headers": [{ "name": "Subject", "value": "subj" }, { "name": "From", "value": "a@b.c" }, { "name": "To", "value": "to@x.y" }] }
         }]});
         serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn draft_message_is_marked_and_others_are_not() {
+        let mut c = open(std::path::Path::new(":memory:")).unwrap();
+        upsert_thread(&mut c, &thread("t", &["DRAFT"], "1"), true).unwrap();
+        upsert_thread(&mut c, &thread("u", &["INBOX"], "2"), true).unwrap();
+        assert!(messages(&c, "t").unwrap()[0].draft);
+        assert!(!messages(&c, "u").unwrap()[0].draft);
     }
 
     #[test]

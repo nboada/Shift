@@ -36,6 +36,8 @@ export type Message = {
   reply_to: string;
   /** The calendar event when the email is an invite, or an answer to one. */
   invite: Invite | null;
+  /** An unsent draft of the user's in this conversation. */
+  draft?: boolean;
 };
 export type Fields = { to?: string; cc?: string; bcc?: string; subject?: string; body?: string };
 export type Scheduled = {
@@ -135,6 +137,8 @@ export function createMailCore(
     userLabels: [] as Label[],
     /** Each account's own user labels, for the per-thread Label and Move menus (ids differ between accounts). */
     accountLabels: new Map<string, Label[]>(),
+    /** Each account's unread count per label id, for the sidebar's per-account rows. */
+    accountUnread: new Map<string, Map<string, number>>(),
     /** Rows of the Scheduled view by list id; they are emails waiting on this device, not Gmail threads. */
     scheduledRows: new Map<string, Scheduled>(),
     // Threads opened while this mailbox is showing keep their section, so reading one doesn't make the list jump.
@@ -189,14 +193,11 @@ export function createMailCore(
       const labels = await invoke<Label[]>("labels", { accounts: mail.scope });
       mail.labels = labels;
       mail.userLabels = labels.filter((l) => l.kind === "user");
-      mail.accountLabels = new Map(
-        await Promise.all(
-          mail.accounts.map(
-            async (a) =>
-              [a, (await invoke<Label[]>("labels", { accounts: [a] })).filter((l) => l.kind === "user")] as const,
-          ),
-        ),
+      const perAccount = await Promise.all(
+        mail.accounts.map(async (a) => [a, await invoke<Label[]>("labels", { accounts: [a] })] as const),
       );
+      mail.accountLabels = new Map(perAccount.map(([a, list]) => [a, list.filter((l) => l.kind === "user")]));
+      mail.accountUnread = new Map(perAccount.map(([a, list]) => [a, new Map(list.map((l) => [l.id, l.unread]))]));
       emit({ type: "labels" });
     },
 

@@ -54,7 +54,7 @@ type Ctx = {
 let ctx: Ctx;
 let current = "general";
 let accountOpen: string | null = null;
-const root = () => document.getElementById("settings")!;
+const root = () => document.getElementById("settings") as HTMLDialogElement;
 const panel = () => document.getElementById("settings-panel")!;
 
 // ---- control builders: each control carries its settings path; one listener saves them all ----
@@ -843,6 +843,11 @@ export function initSettings(c: Ctx) {
   });
   document.getElementById("settings-close")!.addEventListener("click", closeSettings);
   // Clicking the dimmed app around the window closes it, like a sheet.
+  // Escape goes through closeSettings, for its exit animation.
+  root().addEventListener("cancel", (e) => {
+    e.preventDefault();
+    closeSettings();
+  });
   root().addEventListener("click", (e) => {
     if (e.target === root()) closeSettings();
   });
@@ -1058,8 +1063,10 @@ export function initSettings(c: Ctx) {
 }
 
 export function openSettings(section = current) {
-  root().classList.remove("closing");
-  root().hidden = false;
+  const r = root();
+  r.classList.remove("closing");
+  r.hidden = false;
+  if (!r.open) r.showModal();
   show(section);
 }
 
@@ -1076,6 +1083,7 @@ export function closeSettings() {
     if (!r.classList.contains("closing")) return; // reopened mid-animation
     r.classList.remove("closing");
     r.hidden = true;
+    r.close();
   };
   r.classList.add("closing");
   if (reducedMotion()) return done();
