@@ -950,7 +950,12 @@ async fn move_follow_ups(
     };
     for id in ids {
         let has = db::thread_label_ids(&a.db(), id)?;
-        if !has.iter().any(|l| *l == needs || *l == waiting) || db::has_pending(&a.db(), id) {
+        // A conversation with neither label is only picked up once the user has written in it (a reply to them).
+        if !has
+            .iter()
+            .any(|l| *l == needs || *l == waiting || l == "SENT")
+            || db::has_pending(&a.db(), id)
+        {
             continue;
         }
         // The cache doesn't keep each message's labels, which say whether it's a draft or one the user sent.
@@ -978,11 +983,20 @@ fn follow_up_move<'a>(
             .iter()
             .any(|l| l == "DRAFT" || l == "TRASH" || l == "SPAM")
     })?;
-    let mine = last.label_ids.iter().any(|l| l == "SENT");
+    let sent = |m: &gmail::Message| m.label_ids.iter().any(|l| l == "SENT");
+    let mine = sent(last);
     let has = |l: &str| has.iter().any(|x| x == l);
     match (mine, has(needs), has(waiting)) {
         (true, true, _) => Some((waiting, needs)),
         (false, _, true) => Some((needs, waiting)),
+        // Someone wrote back in a conversation the user had written in: it starts out as theirs to answer.
+        (false, false, false)
+            if t.messages
+                .iter()
+                .any(|m| sent(m) && !m.label_ids.iter().any(|l| l == "DRAFT")) =>
+        {
+            Some((needs, waiting))
+        }
         _ => None,
     }
 }
@@ -3349,6 +3363,16 @@ mod tests {
             follow_up_move(&t(&[&["SENT"]]), &has("W"), "N", "W"),
             None,
             "still waiting"
+        );
+        assert_eq!(
+            follow_up_move(&t(&[&["SENT"], &["INBOX"]]), &[], "N", "W"),
+            Some(("N", "W")),
+            "a reply to my email: my turn"
+        );
+        assert_eq!(
+            follow_up_move(&t(&[&["INBOX"]]), &[], "N", "W"),
+            None,
+            "mail I never wrote in stays untracked"
         );
     }
 

@@ -1,14 +1,14 @@
 ---
 import Base from "../layouts/Base.astro";
 ---
-<Base title="Privacy policy · Shift" description="How Shift, an email app for macOS, accesses, uses, stores and shares your data." path="/privacy">
+<Base title="Privacy policy · Shift" description="How Shift, an email app for Mac and iPhone, accesses, uses, stores and shares your data." path="/privacy">
   <main id="main" class="wrap doc">
     <h1>Privacy policy</h1>
-    <p class="updated">Last updated 25 November 2026</p>
+    <p class="updated">Last updated 26 November 2026</p>
 
-    <p>Shift is an email app for macOS that works with Gmail and with other email accounts over IMAP. It is made by TALKK ("we"), a web and app studio in Byron Bay, Australia. This policy explains what Shift does with your information, including the data it receives from your Google account.</p>
+    <p>Shift is an email app for Mac and iPhone that works with Gmail and with other email accounts over IMAP. It is made by TALKK ("we"), a web and app studio in Byron Bay, Australia. This policy explains what Shift does with your information, including the data it receives from your Google account.</p>
 
-    <p class="note">The short version: Shift runs on your Mac and talks directly to Google, or to your own email provider. We run no servers for it, so your email, contacts and sign-in never reach us. Shift collects no analytics and shows no ads.</p>
+    <p class="note">The short version: Shift runs on your Mac or iPhone and talks directly to Google, or to your own email provider. We run no servers for it, so your email, contacts and sign-in never reach us. Shift collects no analytics and shows no ads.</p>
 
     <h2>The Google data Shift accesses</h2>
     <p>When you add a Google account, Shift asks Google for permission to read, send, change and delete your Gmail mail (the scope <code>https://mail.google.com/</code>). It uses that permission for these features and nothing else:</p>
@@ -25,10 +25,10 @@ import Base from "../layouts/Base.astro";
 
     <h2>Where your data is kept</h2>
     <ul>
-      <li><strong>Your mail</strong> is copied into a database on your Mac (in Shift's folder under Application Support), so the app works quickly and offline. It stays there until you remove the account.</li>
-      <li><strong>Your sign-in</strong> (the token Google issues to Shift, or another account's password) is stored in the macOS Keychain, never in a file and never on a server.</li>
-      <li><strong>Attachments you open</strong> are saved to your Downloads folder.</li>
-      <li><strong>Your settings,</strong> such as signatures and shortcuts, are saved in a file on your Mac.</li>
+      <li><strong>Your mail</strong> is copied into a database on your device (on a Mac, in Shift's folder under Application Support; on iPhone, inside the app), so the app works quickly and offline. It stays there until you remove the account.</li>
+      <li><strong>Your sign-in</strong> (the token Google issues to Shift, or another account's password) is stored in your device's Keychain, never in a file and never on a server.</li>
+      <li><strong>Attachments you open</strong> are saved to your Downloads folder on a Mac. On iPhone they open in the share sheet, and are saved only where you choose.</li>
+      <li><strong>Your settings,</strong> such as signatures and shortcuts, are saved in a file on your device.</li>
     </ul>
 
     <h2>Who your data is shared with</h2>
@@ -43,14 +43,14 @@ import Base from "../layouts/Base.astro";
     </ul>
 
     <h2>AI features</h2>
-    <p>Shift's AI features are off until you add your own account with an AI provider (Anthropic, OpenAI, Google, xAI, Mistral, OpenRouter, a local Ollama server or another compatible service) in Settings → AI. Shift then sends that provider only what the feature you use needs, directly from your Mac, under your account and that provider's terms:</p>
+    <p>Shift's AI features are off until you add your own account with an AI provider (Anthropic, OpenAI, Google, xAI, Mistral, OpenRouter, a local Ollama server or another compatible service) in Settings → AI. Shift then sends that provider only what the feature you use needs, directly from your device, under your account and that provider's terms:</p>
     <ul>
       <li><strong>Write with AI</strong> sends the text you ask it to rewrite.</li>
       <li><strong>Draft a reply</strong> sends the conversation you're replying to and any notes you've typed.</li>
       <li><strong>Auto-label</strong>, if you turn it on, sends the sender, subject and preview of new Inbox mail, with the label descriptions you wrote. Label my Inbox now sends the same for your newest Inbox emails.</li>
       <li><strong>Clean up Inbox</strong> sends the sender, subject and preview of your newest Inbox emails when you open it.</li>
     </ul>
-    <p>We never see any of it. Your API key stays in the macOS Keychain. Check your provider's terms for how it keeps and uses requests: paid API plans generally don't train on them, but some free tiers do.</p>
+    <p>We never see any of it. Your API key stays in your device's Keychain. Check your provider's terms for how it keeps and uses requests: paid API plans generally don't train on them, but some free tiers do.</p>
 
     <h2>Limited Use</h2>
     <p>Shift's use and transfer of information received from Google APIs to any other app will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Specifically, Shift uses Google user data only to provide the email features described above. No person at TALKK reads your data. It is transferred only to the AI provider you choose, only to perform the AI feature you use, and it is never used for advertising or to develop or train AI or machine-learning models.</p>
@@ -59,24 +59,27 @@ import Base from "../layouts/Base.astro";
     <p>Shift contains no analytics, crash reporting, advertising or tracking code. This website sets no cookies.</p>
 
     <h2>Downloads and updates</h2>
-    <p>Shift is downloaded from, and updates itself from, its releases on GitHub. When it checks for an update, GitHub sees your IP address, as any web server would. This website keeps no record of who downloads Shift.</p>
+    <p>On a Mac, Shift is downloaded from, and updates itself from, its releases on GitHub. When it checks for an update, GitHub sees your IP address, as any web server would. This website keeps no record of who downloads Shift. On iPhone, Shift comes from the App Store (or TestFlight while in beta), and Apple handles downloads and updates under its own privacy policy.</p>
+
+    <h2>Notifications</h2>
+    <p>If you allow notifications, Shift shows new mail alerts from your device itself, after it has checked your mail. No server sends them, and nothing about your mail leaves your device to make them.</p>
 
     <h2>Removing your data</h2>
     <ul>
-      <li>Signing out of an account in Shift deletes that account's copy of your mail from your Mac and its sign-in from your Keychain.</li>
+      <li>Signing out of an account in Shift deletes that account's copy of your mail from your device and its sign-in from your Keychain.</li>
       <li>To withdraw Shift's access to your Google account, remove it at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
-      <li>Deleting the Shift app and its folder in Application Support removes everything else it stored.</li>
+      <li>Deleting the Shift app removes everything else it stored (on a Mac, delete its folder in Application Support too).</li>
     </ul>
     <p>Your mail itself stays with your email provider (Gmail, for Google accounts), where its own privacy policy applies.</p>
 
     <h2>Security</h2>
-    <p>Shift signs in with Google's standard OAuth flow for desktop apps, so it never sees your Google password. For other accounts, your password goes only to that provider's servers. Data travels to Google over encrypted connections. Scripts inside emails are blocked, and attachments you open are marked as downloaded from the internet, so macOS checks them as it would a browser download.</p>
+    <p>Shift signs in with Google's standard OAuth sign-in (in your browser on a Mac, in Apple's secure sign-in sheet on iPhone), so it never sees your Google password. For other accounts, your password goes only to that provider's servers. Data travels to Google over encrypted connections. Scripts inside emails are blocked, and attachments you open on a Mac are marked as downloaded from the internet, so macOS checks them as it would a browser download.</p>
 
     <h2>Children</h2>
     <p>Shift is not directed at children under 13, and we don't knowingly collect their information.</p>
 
     <h2>Changes</h2>
-    <p>If this policy changes, we'll update the date at the top. A significant change, such as a new kind of data leaving your Mac, will also be announced in the app before it takes effect.</p>
+    <p>If this policy changes, we'll update the date at the top. A significant change, such as a new kind of data leaving your device, will also be announced in the app before it takes effect.</p>
 
     <h2>Contact</h2>
     <p>Questions or requests about your data: <a href="mailto:hello@getshiftmail.com">hello@getshiftmail.com</a>.</p>

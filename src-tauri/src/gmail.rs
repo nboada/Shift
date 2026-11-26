@@ -144,6 +144,13 @@ impl Message {
                 let enc = charset(p)
                     .and_then(|c| encoding_rs::Encoding::for_label(c.as_bytes()))
                     .unwrap_or(encoding_rs::UTF_8);
+                // Senders (Outlook among them) label UTF-8 bodies as Latin-1, which turns "ú" into "Ãº". Text that
+                // really is in a single-byte charset is almost never valid UTF-8 once it has accents, so trust the bytes.
+                if enc.is_single_byte()
+                    && let Ok(text) = std::str::from_utf8(&bytes)
+                {
+                    return Some(text.to_owned());
+                }
                 return Some(enc.decode(&bytes).0.into_owned());
             }
             p.parts.iter().find_map(|c| walk(c, mime))
@@ -870,6 +877,16 @@ mod tests {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].attachment_id.as_deref(), Some("B1"));
         assert!(m.attachments().is_empty());
+    }
+
+    #[test]
+    fn utf8_body_labelled_latin1_is_read_as_utf8() {
+        let data = B64.encode("única".as_bytes());
+        let raw = format!(
+            r#"{{"id":"m","payload":{{"mimeType":"text/html","headers":[{{"name":"Content-Type","value":"text/html; charset=iso-8859-1"}}],"body":{{"data":"{data}"}}}}}}"#
+        );
+        let m: Message = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m.body("text/html").as_deref(), Some("única"));
     }
 
     #[test]

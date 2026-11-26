@@ -18,6 +18,9 @@ export default defineConfig(() => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+  // The frontend reads no env files (build.rs takes the OAuth client from .env.local). That file is a 1Password-mounted
+  // pipe, which Vite saw as changed on every read and restarted the server for, dropping requests such as the icon font.
+  envDir: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
