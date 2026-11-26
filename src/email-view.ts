@@ -9,7 +9,7 @@ import type { Label, MailCore, Message, Thread } from "./core/mail";
 import { inviteCard, isCalendarFile } from "./invite";
 import { IS_IOS } from "./platform";
 import { FOLD_CSS } from "./quote";
-import { bareEmail, displayName } from "./recipients";
+import { bareEmail, displayName, splitList } from "./recipients";
 import { accountSettings, settings } from "./settings";
 import { toast } from "./toast";
 
@@ -398,6 +398,30 @@ export function showInlineImages(frame: HTMLIFrameElement, m: Message, account: 
 
 export type ReplyKind = "reply" | "all" | "forward";
 
+/** People shown as chips before the rest fold behind "+N more". */
+const PEOPLE_SHOWN = 6;
+
+/** A person in a message header: their name (you are "me") with the address on hover; a click opens their card. */
+function personChip(raw: string, msg: number, account: string, extra = false) {
+  const email = bareEmail(raw);
+  const me = email === account.toLowerCase();
+  return `<button type="button" class="person${me ? " me" : ""}${extra ? " extra" : ""}" data-person="${esc(raw)}" data-msg="${msg}" data-tip="${esc(email)}">${esc(me ? "me" : displayName(raw) || email)}</button>`;
+}
+
+/** The To and Cc lines as chips, folding past the first few into "+N more". */
+function peopleRow(m: Message, msg: number, account: string) {
+  let shown = 0;
+  const group = (label: string, list: string) => {
+    const people = splitList(list);
+    if (!people.length) return "";
+    const chips = people.map((p) => personChip(p, msg, account, shown++ >= PEOPLE_SHOWN));
+    return `<span class="people-label">${label}</span>${chips.join("")}`;
+  };
+  const html = group("To", m.recipients) + group("Cc", m.cc);
+  const hidden = shown - PEOPLE_SHOWN;
+  return `<div class="people to">${html}${hidden > 0 ? `<button type="button" class="person more" data-more>+${hidden} more</button>` : ""}</div>`;
+}
+
 /**
  * Appends a conversation's emails to `container` as message cards: older ones collapsed (their email rendered when
  * first opened), the newest open, each with its invite card, attachments and Reply, Reply all and Forward. `fit`
@@ -406,7 +430,7 @@ export type ReplyKind = "reply" | "all" | "forward";
 export function renderMessages(container: HTMLElement, messages: Message[], account: string, fit = false) {
   for (const m of messages) {
     const el = document.createElement("section");
-    el.className = "message";
+    el.className = m.draft ? "message draft" : "message";
     const name = displayName(m.sender);
     const i = messages.indexOf(m);
     // Accordion: older emails in a conversation start collapsed to one line; the header toggles each one.
@@ -414,7 +438,7 @@ export function renderMessages(container: HTMLElement, messages: Message[], acco
     const toggles = messages.length > 1;
     el.innerHTML = `<header ${toggles ? `role="button" tabindex="0" aria-expanded="${!el.classList.contains("collapsed")}"` : ""}>
         ${avatar(m.sender)}
-        <div class="meta"><strong>${esc(name)}</strong><span class="to">To: ${esc(m.recipients)}${m.cc ? `, Cc: ${esc(m.cc)}` : ""}</span><span class="preview">${esc(preview(m))}</span></div>
+        <div class="meta"><div class="sender"><button type="button" class="person-name" data-person="${esc(m.sender)}" data-msg="${i}">${esc(name)}</button><span class="sender-address">${esc(bareEmail(m.sender))}</span>${m.draft ? '<span class="draft-tag">Draft</span>' : ""}</div>${peopleRow(m, i, account)}<span class="preview">${esc(preview(m))}</span></div>
         <time>${new Date(m.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time>${toggles ? '<i class="ti ti-chevron-down toggle-caret" aria-hidden="true"></i>' : ""}
       </header>${inviteCard(m.invite, i)}`;
     if (m.html) {
@@ -455,17 +479,29 @@ export function renderMessages(container: HTMLElement, messages: Message[], acco
     el.insertAdjacentHTML(
       "beforeend",
       attachmentStrip(m, account) +
-        `<footer class="message-actions">
+        // A draft isn't sent yet: it offers to carry on writing it or throw it away instead of replying.
+        (m.draft
+          ? `<footer class="message-actions draft-actions">
+        <button type="button" class="quiet-danger" data-draft="delete" data-msg="${i}"><i class="ti ti-trash"></i>Delete</button>
+        <button type="button" class="primary small" data-draft="edit" data-msg="${i}"><i class="ti ti-pencil"></i>Edit draft</button>
+      </footer>`
+          : `<footer class="message-actions">
         <button class="icon" data-reply="reply" data-msg="${i}" data-tip="Reply" aria-label="Reply"><i class="ti ti-arrow-back-up"></i></button>
         <button class="icon" data-reply="all" data-msg="${i}" data-tip="Reply all" aria-label="Reply all"><i class="ti ti-arrow-back-up-double"></i></button>
         <button class="icon" data-reply="forward" data-msg="${i}" data-tip="Forward" aria-label="Forward"><i class="ti ti-arrow-forward-up"></i></button>
-      </footer>`,
+      </footer>`),
     );
   }
 }
 
 /** Clicks and keys inside a container of message cards: open and close, reply, answer an invite, open a file. */
-export function wireReader(container: HTMLElement, mail: MailCore, reply: (kind: ReplyKind, m: Message) => void) {
+export function wireReader(
+  container: HTMLElement,
+  mail: MailCore,
+  reply: (kind: ReplyKind, m: Message) => void,
+  draft?: (action: "edit" | "delete", m: Message) => void,
+  person?: (raw: string, m: Message, chip: HTMLElement) => void,
+) {
   container.addEventListener("click", (e) => {
     const header = (e.target as Element).closest<HTMLElement>(".message > header[role=button]");
     if (header && !(e.target as Element).closest("a, button")) toggleMessage(header);
@@ -480,6 +516,15 @@ export function wireReader(container: HTMLElement, mail: MailCore, reply: (kind:
   container.addEventListener("click", (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-reply]");
     if (b) reply(b.dataset.reply as ReplyKind, mail.messages[Number(b.dataset.msg)]);
+    const d = (e.target as Element).closest<HTMLElement>("[data-draft]");
+    if (d && draft) draft(d.dataset.draft as "edit" | "delete", mail.messages[Number(d.dataset.msg)]);
+    const more = (e.target as Element).closest<HTMLElement>("[data-more]");
+    if (more) {
+      more.parentElement!.classList.add("all");
+      more.remove();
+    }
+    const chip = (e.target as Element).closest<HTMLElement>("[data-person]");
+    if (chip && person) person(chip.dataset.person!, mail.messages[Number(chip.dataset.msg)], chip);
   });
 
   // Yes, Maybe or No on an invite: shown as chosen at once, put back if the answer couldn't be sent.

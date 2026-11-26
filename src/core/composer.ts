@@ -128,11 +128,38 @@ export function ownText(editor: Editor): { from: number; to: number; text: strin
   return { from: 0, to, text: doc.textBetween(0, to, "\n\n").trim() };
 }
 
-/** An email's text for the AI: its plain-text part, or its HTML read as text. */
-const messageText = (m: Message) =>
-  (m.text ?? new DOMParser().parseFromString(m.html ?? "", "text/html").body.textContent ?? "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+/** Quoted history in an HTML email: Gmail, Apple Mail, Thunderbird, Yahoo and Outlook (as public/email-frame.js folds it). */
+const QUOTE_HTML = ".gmail_quote, blockquote[type=cite], .moz-cite-prefix, .yahoo_quoted, #divRplyFwdMsg, #appendonsend";
+/** Where quoted history starts in a plain-text email: "On … wrote:" (it can wrap onto a second line), Outlook's
+ * "-----Original Message-----" or "From: … Sent:" header, or the first "> " line. */
+const QUOTE_TEXT = [
+  /^On [^\n]*(\n[^\n]*)?wrote:\s*$/m,
+  /^-{2,}\s*Original Message\s*-{2,}/im,
+  /^From: [^\n]*\n(Sent|Date): /m,
+  /^>/m,
+];
+
+/** An email's own text for the AI, without the quoted history under a reply: the conversation's earlier emails are
+ * sent separately, and the quote could crowd out what this one says. An email that's all quote keeps it. */
+export function messageText(m: Pick<Message, "text" | "html">) {
+  const tidy = (t: string) => t.replace(/\n{3,}/g, "\n\n").trim();
+  let text: string;
+  if (m.text != null) {
+    const cut = Math.min(...QUOTE_TEXT.map((re) => m.text!.search(re)).filter((i) => i >= 0), m.text.length);
+    text = m.text.slice(0, cut);
+    if (!text.trim()) text = m.text;
+  } else {
+    const body = new DOMParser().parseFromString(m.html ?? "", "text/html").body;
+    const full = body.textContent ?? "";
+    for (const q of body.querySelectorAll(QUOTE_HTML)) {
+      // The quote is that element and everything after it in its block (Outlook puts the header first).
+      for (let n = q.nextSibling; n; n = q.nextSibling) n.remove();
+      q.remove();
+    }
+    text = body.textContent?.trim() ? body.textContent : full;
+  }
+  return tidy(text);
+}
 
 export type Composer = ReturnType<typeof createComposer>;
 
@@ -251,6 +278,9 @@ export function createComposer(mail: MailCore, view: ComposeView, invoke: Invoke
       if (s.draftId) invoke("delete_draft", { account: s.account, draftId: s.draftId }).catch(() => {});
     } else if (keep) {
       if (await save(s, draft)) {
+        // Saving only reaches Gmail; a sync brings the draft into its conversation (and Drafts) now rather than on
+        // the next tick, so it shows in the open conversation as soon as the composer closes.
+        void invoke("sync_now").catch(() => {});
         if (!s.resumeAt) return view.kept?.(f, s);
         if (s.resumeAt <= Date.now()) return void view.toast("Its send time passed while you edited, so it's in Drafts");
         return resume(s, draft, f).then(
@@ -609,9 +639,11 @@ export function createComposer(mail: MailCore, view: ComposeView, invoke: Invoke
     const s = state;
     if (!s) return Promise.reject(new Error("No email is open"));
     const name = accountSettings(s.account).name;
+    // A draft already in the conversation isn't part of it yet: only what was sent and received.
     const conversation = mail.messages
+      .filter((m) => !m.draft)
       .slice(-8)
-      .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(-4000)}`)
+      .map((m) => `From: ${m.sender}\nDate: ${new Date(m.date).toLocaleString()}\n\n${messageText(m).slice(0, 4000)}`)
       .join("\n\n---\n\n");
     return invoke<string>("ai_draft_reply", {
       conversation,

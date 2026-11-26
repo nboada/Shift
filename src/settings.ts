@@ -46,8 +46,9 @@ export const DEFAULTS = {
     undoSendSeconds: 5,
   },
   accessibility: { zoom: 100, reduceMotion: false },
-  /** Mailbox keys (label id, or "ALL" for All Mail) in the order and visibility the sidebar uses. */
-  sidebar: { order: [] as string[], hidden: [] as string[] },
+  /** Mailbox keys (label id, or "ALL" for All Mail) in the order and visibility the sidebar uses; `expanded` lists
+   * the folders whose per-account rows are open (with several accounts). */
+  sidebar: { order: [] as string[], hidden: [] as string[], expanded: ["INBOX"] as string[] },
   swipes: { left: "archive" as SwipeAction, right: "unread" as SwipeAction },
   shortcuts: {} as Record<string, string[]>,
   onboarding: { done: false },

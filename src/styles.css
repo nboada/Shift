@@ -24,6 +24,21 @@
   --search: rgb(0 0 0 / 0.055);
   --accent: #1b78fe;
   --selected: #efeff2;
+  /* The open email in the list: lighter than --selected, with the pane outline doing the rest. */
+  --row-selected: #f4f4f6;
+  /* Search in the title bar: a light field over the window background, not a darker well. */
+  --search-field: rgb(255 255 255 / 0.5);
+  --search-edge: rgb(0 0 0 / 0.04);
+  /* Shortcut hints (⌘K): a faint chip, there without pulling focus. */
+  --kbd-fill: rgb(0 0 0 / 0.04);
+  /* Behind the conversation's message cards. */
+  --conversation: #fafafa;
+  /* The toast: inverse of the app, so it stands out on either theme. */
+  --toast-bg: #1d1d20;
+  --toast-text: #ffffff;
+  --toast-muted: rgb(255 255 255 / 0.55);
+  --toast-fill: rgb(255 255 255 / 0.1);
+  --toast-fill-hover: rgb(255 255 255 / 0.17);
   --card: #ffffff;
   --card-line: #e6e6ea;
   --reader: #ffffff;
@@ -62,6 +77,16 @@
     --hover: #26262a;
     --accent: #4c8dff;
     --selected: #2e2e33;
+    --row-selected: #2e2e33;
+    --search-field: rgb(255 255 255 / 0.07);
+    --search-edge: transparent;
+    --kbd-fill: rgb(255 255 255 / 0.06);
+    --conversation: #1a1a1d;
+    --toast-bg: #f2f2f5;
+    --toast-text: #171717;
+    --toast-muted: rgb(0 0 0 / 0.5);
+    --toast-fill: rgb(0 0 0 / 0.07);
+    --toast-fill-hover: rgb(0 0 0 / 0.12);
     --card: #252529;
     --danger: #ff6961;
   --success: #3ccf8e;
@@ -95,6 +120,16 @@
   --hover: #26262a;
   --accent: #4c8dff;
   --selected: #2e2e33;
+  --row-selected: #2e2e33;
+  --search-field: rgb(255 255 255 / 0.07);
+  --search-edge: transparent;
+  --kbd-fill: rgb(255 255 255 / 0.06);
+  --conversation: #1a1a1d;
+  --toast-bg: #f2f2f5;
+  --toast-text: #171717;
+  --toast-muted: rgb(0 0 0 / 0.5);
+  --toast-fill: rgb(0 0 0 / 0.07);
+  --toast-fill-hover: rgb(0 0 0 / 0.12);
   --card: #252529;
   --danger: #ff6961;
   --shadow: 0 10px 40px rgb(0 0 0 / 0.5);
@@ -266,7 +301,9 @@ button.primary:disabled { opacity: 0.6; }
 .reader-pane { grid-area: 2 / 3; }
 
 /* Title bar: search lined up with the message list, clear of the traffic lights. */
-.topbar { grid-column: 1 / -1; display: flex; align-items: center; padding-left: max(84px, var(--sidebar-width)); }
+.topbar { position: relative; grid-column: 1 / -1; display: flex; align-items: center; padding-left: max(84px, var(--sidebar-width)); }
+/* Check for mail sits across from the window buttons, at the sidebar's right edge. */
+.topbar #sync-btn { position: absolute; top: 50%; left: calc(var(--sidebar-width) - 42px); width: 28px; height: 26px; border-radius: 7px; transform: translateY(-50%); }
 .sidebar-top { display: none; }
 
 .sidebar {
@@ -281,11 +318,10 @@ button.primary:disabled { opacity: 0.6; }
 }
 .sidebar-top { height: 44px; flex: none; }
 
-.compose-row { display: flex; gap: 6px; margin: 0 12px 10px; }
+.compose-row { display: flex; gap: 6px; margin: 0 12px 7px; }
 .compose-row .compose { flex: 1; margin: 0; }
-.compose-row .icon { width: 36px; height: auto; border-radius: 9px; background: color-mix(in srgb, var(--sidebar-fill), transparent 55%); }
-/* A faint fill so the button doesn't float, stepping up to the full sidebar fill on hover. */
-.sidebar .compose-row .icon:hover { background: var(--sidebar-fill); }
+.compose kbd { font: inherit; font-size: 12px; font-weight: 500; opacity: 0.7; }
+.compose kbd:empty { display: none; }
 #sync-btn.spinning i { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .compose {
@@ -305,7 +341,8 @@ button.primary:disabled { opacity: 0.6; }
 .compose:hover { background-size: 100% 100%; }
 .compose:active { transform: scale(0.98); }
 
-.mailboxes { flex: 1; overflow-y: auto; padding: 0 8px; }
+/* A little room at the top, so the selected first row's outline isn't clipped by the scroll area. */
+.mailboxes { flex: 1; overflow-y: auto; padding: 3px 8px 0; }
 /* Same look as the message list's section headings ("Today", "Seen"). */
 .mailboxes h3 {
   display: flex;
@@ -344,24 +381,42 @@ button.primary:disabled { opacity: 0.6; }
 .label-dot { flex: none; width: 10px; height: 10px; margin: 0 3px 0 4px; border-radius: 3px; }
 .label-dot.none { box-shadow: inset 0 0 0 1.5px var(--muted); opacity: 0.7; }
 
-.account {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 8px 10px 16px;
-  color: var(--sidebar-muted);
-  font-size: 12px;
-}
-.account-btn { display: flex; flex: 0 1 auto; min-width: 0; align-items: center; gap: 6px; margin-left: -6px; padding: 4px 6px; border-radius: 6px; color: inherit; font: inherit; text-align: left; }
-.account-btn:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--sidebar-strong); }
-.account-btn:disabled { color: inherit; }
-.account-btn:disabled .ti-selector { display: none; }
-.account-all { font-size: 14px; }
-.account #settings-btn { margin-left: auto; }
+/* Several accounts: each folder gets an arrow that opens a row per account, like Spark. The arrow takes a 12px
+ * column, so folder icons, account avatars and label dots share one left edge. */
+.mailboxes.nested a { gap: 6px; padding-left: 4px; }
+.mailboxes.nested a[data-group="label"] { padding-left: 22px; }
+.mailboxes.nested h3 { margin-left: 22px; }
+.mailboxes a span.mb-toggle { display: grid; place-items: center; flex: none; width: 12px; color: var(--sidebar-muted); }
+.mailboxes a span.mb-toggle i { font-size: 12px; transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1); }
+.mailboxes a[aria-expanded="true"] span.mb-toggle i { transform: rotate(90deg); }
+.mailboxes a span.mb-toggle:hover { color: var(--sidebar-strong); }
+.mailboxes a.mb-acct { gap: 8px; padding: 5px 10px 5px 24px; font-size: 13px; }
+/* A folder's account rows, in one box so they slide open and shut together. */
+.mb-accts { display: flex; flex-direction: column; gap: 1px; padding-top: 1px; }
+.mb-accts:empty { display: none; }
+.mb-accts + a { margin-top: 3px; }
+.mb-accts a + a { margin-top: 0; }
+.mailboxes.sorting .mb-accts { display: none; }
+/* An account's avatar: its initial in its colour, so accounts don't read as labels of the same colour. */
+.acct-av { display: grid; place-items: center; flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--acct, var(--accent)); color: #fff; font-size: 8.5px; font-weight: 700; line-height: 1; }
+.mailboxes a span.acct-av, .mailboxes a span.acct-stack { flex: none; overflow: visible; }
+/* An open folder's row is every account together: their avatars overlap. */
+.acct-stack { display: flex; transition: opacity 0.2s ease; }
+/* Shown only while the folder is open: it heads the account rows below it. */
+.mailboxes a[aria-expanded="false"] .acct-stack { opacity: 0; }
+.acct-stack .acct-av { box-shadow: 0 0 0 1.5px var(--sidebar); }
+.mailboxes a.active .acct-stack .acct-av { box-shadow: 0 0 0 1.5px var(--sidebar-selected); }
+.acct-stack .acct-av + .acct-av { margin-left: -4px; }
+
+/* The foot of the sidebar: Settings, as a quiet row lined up with the folders. */
+.sidebar-foot { padding: 6px 8px 10px; }
+.settings-link { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border-radius: 9px; color: var(--sidebar-muted); font: inherit; font-size: 13px; text-align: left; }
+.settings-link i { font-size: 17px; }
+.settings-link:hover { background: var(--sidebar-hover); color: var(--sidebar-strong); }
+.sidebar.nested .settings-link { padding-left: 22px; }
 .sidebar button.icon { color: var(--sidebar-muted); }
 .sidebar button.icon:hover, .topbar button.icon:hover { background: var(--sidebar-hover); color: var(--sidebar-strong); }
 .topbar button.icon { color: var(--sidebar-muted); }
-#account-email { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .toolbar {
   display: flex;
@@ -373,13 +428,6 @@ button.primary:disabled { opacity: 0.6; }
   border-bottom: 1px solid var(--line);
 }
 .toolbar h2 { flex: 1; margin: 0 6px; font-size: 19px; letter-spacing: -0.01em; }
-.toolbar h2:has(+ .acct-dots:not([hidden])) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acct-dots { flex: 1; display: flex; align-items: center; gap: 0; margin-top: 2px; /* optical: centre on the letters, not the line box */ }
-.acct-pick { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; }
-.acct-pick:hover { background: var(--hover); }
-.acct-pick .account-dot { width: 9px; height: 9px; transition: opacity 0.15s, box-shadow 0.15s; }
-.acct-dots.filtered .acct-pick:not(.on) .account-dot { opacity: 0.3; }
-.acct-pick.on .account-dot { box-shadow: 0 0 0 2px var(--pane, var(--card)), 0 0 0 3.5px var(--acct, var(--accent)); }
 .toolbar .back { display: none; }
 .actions { display: flex; gap: 10px; }
 .app:not([data-open]) .actions { display: none; }
@@ -405,6 +453,8 @@ button.primary:disabled { opacity: 0.6; }
   border-radius: 999px;
 }
 .action-group button:hover { background: var(--hover); }
+.action-group .ai-reply { display: flex; gap: 5px; width: auto; padding: 0 10px 0 12px; font-size: 13px; font-weight: 500; }
+.action-group .ai-reply i { font-size: 19px; color: var(--brand); }
 .action-group.divided button + button::before {
   content: "";
   position: absolute;
@@ -416,7 +466,7 @@ button.primary:disabled { opacity: 0.6; }
 }
 
 .search.search-list { display: none; }
-.search.search-top { flex: 1; margin: 0; padding: 8px 12px; background: var(--search); border-radius: 10px; font-size: 13.5px; }
+.search.search-top { flex: 1; margin: 0; padding: 8px 12px; background: var(--search-field); box-shadow: 0 0 0 1px var(--search-edge); border-radius: 10px; font-size: 13.5px; }
 
 .menu {
   position: fixed;
@@ -487,7 +537,7 @@ button.primary:disabled { opacity: 0.6; }
 }
 .search { position: relative; }
 .palette-hint { flex: none; padding: 0; border: 0; background: none; line-height: 0; }
-.palette-hint kbd { display: inline-block; padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--card); color: var(--muted); font: inherit; font-size: 11.5px; font-weight: 500; line-height: 16px; transition: color 0.12s, border-color 0.12s; }
+.palette-hint kbd { display: inline-block; padding: 2px 6px; border: 1px solid transparent; border-radius: 5px; background: var(--kbd-fill); color: color-mix(in srgb, var(--muted) 75%, transparent); font: inherit; font-size: 11.5px; font-weight: 500; line-height: 16px; transition: color 0.12s, border-color 0.12s; }
 .palette-hint:hover kbd { color: var(--text); border-color: color-mix(in srgb, var(--line), var(--text) 20%); }
 /* While typing a search the hint steps aside. */
 .search:focus-within .palette-hint { display: none; }
@@ -551,7 +601,7 @@ button.primary:disabled { opacity: 0.6; }
 .threads .row-actions button.icon:hover { background: var(--hover); }
 .threads li[data-id]:hover { background: var(--hover); }
 .threads li.selected { box-shadow: var(--pane-shadow); }
-.threads li.selected { background: var(--selected); }
+.threads li.selected { background: var(--row-selected); }
 .threads li.context { box-shadow: inset 0 0 0 2px var(--accent); }
 .threads { -webkit-user-select: none; user-select: none; }
 .threads .dot { grid-row: 1 / 4; align-self: center; width: 8px; height: 8px; margin-left: 2px; border-radius: 50%; }
@@ -584,7 +634,7 @@ button.primary:disabled { opacity: 0.6; }
 .row-label.more { padding: 1px 6px; }
 .reader-labels { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 14px; }
 /* The subject stays in view while the conversation scrolls, with its labels beside it. top cancels the reader's padding, which sticky positioning keeps clear of. */
-.reader-head { position: sticky; top: -20px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -20px -28px 14px; padding: 10px 28px; border-bottom: 1px solid var(--line); background: var(--reader); }
+.reader-head { position: sticky; top: -20px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -20px -14px 14px; padding: 10px 28px; border-bottom: 1px solid var(--line); background: var(--reader); }
 .reader .reader-head h1 { margin: 0; font-size: 17px; font-weight: 650; line-height: 1.3; }
 .reader-head .reader-labels { margin: 0; }
 .reader-labels .row-label { max-width: none; padding: 2px 9px; font-size: 12px; }
@@ -638,7 +688,10 @@ body.resizing iframe { pointer-events: none; }
 /* reader */
 .reader-pane { isolation: isolate; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--reader); border-radius: 0 14px 14px 0; box-shadow: var(--pane-shadow); overflow: hidden; }
 .app:not([data-open]) .reader-pane .toolbar { border-bottom-color: transparent; }
-.reader { flex: 1; overflow-y: auto; padding: 20px 28px 40px; user-select: text; }
+/* No email open: the whole column, top bar included, is the conversation grey. */
+.app:not([data-open]) .reader-pane { background: var(--conversation); }
+/* The sides and bottom match the 14px gap under the subject, so the cards sit evenly inside the pane. */
+.reader { flex: 1; overflow-y: auto; padding: 20px 14px 14px; background: var(--conversation); user-select: text; }
 .reader > .message { scroll-margin-top: 12px; }
 .reader .placeholder { height: 100%; display: grid; place-items: center; color: var(--muted); font-size: 15px; }
 .reader .empty-reader { place-content: center; gap: 14px; color: var(--muted); }
@@ -669,7 +722,7 @@ body.resizing iframe { pointer-events: none; }
   border: 1px solid var(--card-line);
   border-radius: 12px;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-  margin-bottom: 12px;
+  margin-bottom: 4px;
   overflow: hidden;
 }
 .message header { display: flex; gap: 10px; padding: 12px 14px; align-items: flex-start; }
@@ -693,6 +746,12 @@ body.resizing iframe { pointer-events: none; }
 .images-bar button { padding: 3px 9px; border-radius: 6px; color: var(--accent); font-weight: 600; }
 .images-bar button:hover { background: color-mix(in srgb, var(--accent), transparent 88%); }
 .message-actions { display: flex; justify-content: flex-end; gap: 2px; padding: 0 10px 8px; }
+/* An unsent draft in its conversation: a dashed brand edge and a tag, so it can't pass for a sent email. */
+.message.draft { border-style: dashed; border-color: color-mix(in srgb, var(--brand) 45%, var(--card-line)); }
+.draft-tag { display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 4px; background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--brand); font-size: 11px; font-weight: 600; line-height: 18px; vertical-align: 1px; }
+.draft-actions { gap: 6px; padding: 4px 14px 12px; }
+.draft-actions button { display: inline-flex; align-items: center; gap: 5px; }
+.draft-actions .primary i { font-size: 14px; }
 .invite { display: flex; align-items: center; gap: 14px; margin: 0 14px 12px; padding: 12px 14px 12px 12px; border: 1px solid color-mix(in srgb, var(--accent), transparent 84%); border-radius: 12px; background: color-mix(in srgb, var(--accent), transparent 95%); }
 .invite-tile { flex: none; display: flex; flex-direction: column; width: 48px; border-radius: 10px; background: var(--card); box-shadow: 0 0 0 1px var(--card-line), 0 1px 2px rgb(0 0 0 / 0.06); text-align: center; overflow: hidden; }
 .invite-tile span { padding-top: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--danger); }
@@ -768,6 +827,26 @@ body.resizing iframe { pointer-events: none; }
 .message .meta { flex: 1; min-width: 0; }
 .message .meta strong { display: block; }
 .message .meta span { color: var(--muted); font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Who it's from and to: the sender's name (a button: it opens their card) and address, then To and Cc as chips. */
+.message .meta .sender { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.person-name { flex: none; padding: 0; color: var(--text); font: inherit; font-weight: 600; }
+.person-name:hover, .person-name.open { text-decoration: underline; text-underline-offset: 2px; }
+.message .meta .sender-address { display: block; flex: 0 1 auto; min-width: 0; font-size: 12.5px; }
+.message .meta .people { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 5px; }
+.message .meta .people-label { display: inline; margin-right: 2px; font-size: 12px; }
+.message .meta .person + .people-label { margin-left: 8px; }
+.person { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--badge); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 500; }
+.person:hover { background: color-mix(in srgb, var(--badge), var(--text) 8%); }
+.person.open { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+.person.extra { display: none; }
+.people.all .person.extra { display: inline-flex; }
+.person.more { background: none; color: var(--muted); }
+.person.more:hover { color: var(--text); }
+/* A person's card, heading the menu their chip opens. */
+.person-card { display: flex; align-items: center; gap: 10px; padding: 8px 8px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.person-card .avatar { width: 36px; height: 36px; font-size: 13px; }
+.person-card strong { display: block; font-size: 14px; }
+.person-card span { display: block; color: var(--muted); font-size: 12.5px; }
 .message time { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .message iframe { display: block; width: 100%; border: 0; background: #fff; }
 /* Until mountEmail has sized it: invisible, with a modest placeholder height instead of the frame's default.
@@ -848,8 +927,10 @@ body.resizing iframe { pointer-events: none; }
 .composer::backdrop { background: rgb(0 0 0 / 0.18); }
 .compose-form { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; }
 .compose-form header, .compose-form footer { display: flex; align-items: center; gap: 4px; padding: 10px 10px 10px 8px; flex: none; }
-.compose-form header strong { margin-right: auto; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
-.draft-status { color: var(--muted); font-size: 12px; margin-right: 6px; }
+/* Named for screen readers only: the From row and the fields say what this is. */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.draft-status { color: var(--muted); font-size: 12px; margin: 0 auto 0 4px; }
+.send-btn kbd { margin-left: 2px; font: inherit; font-size: 12px; opacity: 0.75; }
 .compose-form footer { justify-content: flex-end; border-top: 1px solid var(--line); padding: 10px 14px; }
 .compose-form footer .error { margin-right: auto; }
 /* Send later popover: opens upward from the clock, above the composer footer. */
@@ -1216,6 +1297,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .ask .primary.danger:hover:not(:disabled) { background: color-mix(in srgb, #e5484d, #fff 10%); }
 .ask .primary.danger:active:not(:disabled) { background: color-mix(in srgb, #e5484d, #000 8%); }
 
+/* The toast: a dark pill over the light app (a light one in dark mode), so it reads at a glance. */
 .toast {
   position: fixed;
   inset: auto auto 20px 50%;
@@ -1224,25 +1306,34 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
   transform: translateX(-50%);
   width: max-content;
   max-width: min(560px, calc(100vw - 32px));
-  padding: 6px 6px 6px 12px;
-  border: 1px solid var(--card-line);
-  border-radius: 12px;
-  background: var(--card);
-  color: var(--text);
+  min-height: 38px;
+  padding: 5px 6px 5px 13px;
+  border-radius: 19px;
+  background: var(--toast-bg);
+  color: var(--toast-text);
   font-size: 13px;
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.14), 0 2px 6px rgb(0 0 0 / 0.08);
+  font-weight: 500;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.1);
 }
 .toast:popover-open { display: flex; align-items: center; gap: 8px; animation: toast-in 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 12px) scale(0.97); } }
 @media (prefers-reduced-motion: reduce) { .toast:popover-open { animation-name: fade-in; } }
-.toast-icon { font-size: 17px; color: var(--accent); }
-.toast[data-kind="success"] .toast-icon { color: var(--success); }
-.toast[data-kind="error"] .toast-icon { color: var(--danger); }
-.toast-text { flex: 1; min-width: 0; padding: 4px 0; line-height: 1.35; }
-.toast-action { padding: 4px 10px; border-radius: 7px; color: var(--accent); font-weight: 600; background: color-mix(in srgb, var(--accent), transparent 90%); }
-.toast-action:hover { background: color-mix(in srgb, var(--accent), transparent 82%); }
-.toast-close { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: inherit; font-size: 15px; opacity: 0.6; }
-.toast-close:hover { opacity: 1; background: rgb(127 127 127 / 0.15); }
+.toast-icon { font-size: 16px; color: var(--toast-muted); }
+.toast[data-kind="success"] .toast-icon { color: #3ccf8e; }
+.toast[data-kind="error"] .toast-icon { color: #ff6961; }
+.toast .toast-icon.ti-pinned { color: var(--pin); }
+.toast-text { flex: 1; min-width: 0; padding: 4px 6px 4px 0; line-height: 1.35; }
+.toast-action { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 14px; background: var(--toast-fill); color: var(--toast-text); font-weight: 600; }
+.toast-action:hover { background: var(--toast-fill-hover); }
+.toast-action kbd { font: inherit; font-size: 11.5px; font-weight: 500; color: var(--toast-muted); }
+.toast-close { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 14px; color: var(--toast-muted); font-size: 15px; }
+.toast-close:hover { color: var(--toast-text); background: var(--toast-fill); }
+/* How long Undo is still on offer: drains to nothing, paused while the pointer is on the toast. */
+.toast-timer { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--brand); transform-origin: left; animation: toast-drain var(--toast-ms, 8s) linear forwards; }
+.toast:hover .toast-timer { animation-play-state: paused; }
+@keyframes toast-drain { to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .toast-timer { display: none; } }
 
 /* phones and narrow windows: one pane at a time */
 @media (max-width: 760px) {
@@ -1348,11 +1439,19 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
   position: fixed;
   inset: 0;
   z-index: 40;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  color: inherit;
   display: grid;
   place-items: center;
   padding: 24px;
   background: rgb(0 0 0 / 0.18);
 }
+.settings::backdrop { background: transparent; }
 .settings { animation: settings-backdrop-in 0.22s ease both; }
 .settings.closing { animation: settings-backdrop-out 0.16s ease both; }
 .settings-window { animation: settings-window-in 0.28s cubic-bezier(0.32, 0.72, 0, 1) both; }

@@ -34,6 +34,8 @@
 
     <div id="app" class="app" data-view="list" hidden>
       <header class="topbar" data-tauri-drag-region>
+        <!-- Across from the window buttons, at the sidebar's right edge; spins while a fetch runs. -->
+        <button id="sync-btn" class="icon" data-tip="Check for mail" aria-label="Check for mail"><i class="ti ti-refresh"></i></button>
         <form class="search search-top">
           <i class="ti ti-search"></i>
           <input type="search" placeholder="Search mail" autocomplete="off" spellcheck="false" />
@@ -43,18 +45,11 @@
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-top" data-tauri-drag-region></div>
         <div class="compose-row">
-          <button id="compose-btn" class="compose" data-tip="New email (⌘N)"><i class="ti ti-pencil"></i> New Email</button>
-          <button id="sync-btn" class="icon" data-tip="Check for mail" aria-label="Check for mail"><i class="ti ti-refresh"></i></button>
+          <button id="compose-btn" class="compose" data-tip="New email (⌘N)"><i class="ti ti-pencil"></i> New Email <kbd id="compose-key"></kbd></button>
         </div>
         <nav id="mailboxes" class="mailboxes"></nav>
-        <div class="account">
-          <button id="account-btn" class="account-btn" aria-haspopup="menu">
-            <span id="account-dot" class="account-dot"></span>
-            <i id="account-all" class="ti ti-users account-all" hidden></i>
-            <span id="account-email"></span>
-            <i class="ti ti-selector"></i>
-          </button>
-          <button id="settings-btn" class="icon" data-tip="Settings (⌘,)"><i class="ti ti-settings"></i></button>
+        <div class="sidebar-foot">
+          <button id="settings-btn" class="settings-link" data-tip="Settings (⌘,)"><i class="ti ti-settings"></i><span>Settings</span></button>
         </div>
       </aside>
 
@@ -62,7 +57,6 @@
         <header class="toolbar" data-tauri-drag-region>
           <button class="icon back" data-back="mailboxes" data-tip="Mailboxes"><i class="ti ti-layout-sidebar"></i></button>
           <h2 id="list-title" data-tauri-drag-region></h2>
-          <div id="acct-dots" class="acct-dots" hidden></div>
           <button id="empty-btn" class="empty-btn" hidden><i class="ti ti-trash"></i><span></span></button>
           <button id="cleanup-btn" class="icon" data-tip="Clean up Inbox with AI" aria-label="Clean up Inbox with AI"><i class="ti ti-message-ai"></i></button>
           <button id="view-btn" class="icon"><i class="ti"></i></button>
@@ -93,7 +87,7 @@
               <button data-action="forward" data-tip="Forward (f)" aria-label="Forward"><i class="ti ti-arrow-forward-up"></i></button>
             </div>
             <div class="action-group divided">
-              <button data-action="aiReply" data-tip="Draft a reply with AI" aria-label="Draft a reply with AI"><i class="ti ti-message-ai"></i></button>
+              <button class="ai-reply" data-action="aiReply" data-tip="Draft a reply with AI" aria-label="Draft a reply with AI"><span>Draft with</span><i class="ti ti-message-ai"></i></button>
             </div>
           </div>
         </header>
@@ -129,7 +123,7 @@
       <form id="compose-form" class="compose-form">
         <header>
           <button type="button" class="icon" id="compose-close" data-tip="Close and keep draft (Esc)"><i class="ti ti-x"></i></button>
-          <strong id="compose-title">New Email</strong>
+          <strong id="compose-title" class="sr-only">New Email</strong>
           <span id="draft-status" class="draft-status" aria-live="polite"></span>
           <button type="button" class="icon" id="compose-dock" data-tip="Move to corner"><i class="ti ti-picture-in-picture"></i></button>
           <button type="button" class="icon" id="compose-attach" data-tip="Attach files"><i class="ti ti-paperclip"></i></button>
@@ -192,13 +186,14 @@
             </div>
           </div>
           <button type="button" class="icon" id="send-later" data-tip="Send later"><i class="ti ti-clock"></i></button>
-          <button type="submit" class="primary"><i class="ti ti-send"></i> Send</button>
+          <button type="submit" class="primary send-btn"><i class="ti ti-send"></i> Send <kbd>⌘↩</kbd></button>
         </footer>
       </form>
     </dialog>
 
-    <div id="settings" class="settings" hidden>
-      <div class="settings-window" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <!-- A modal dialog, so it opens in the top layer above an open composer. -->
+    <dialog id="settings" class="settings" aria-labelledby="settings-title" hidden>
+      <div class="settings-window">
         <nav class="settings-nav"></nav>
         <section class="settings-body">
           <header class="settings-head">
@@ -207,7 +202,7 @@
           <div id="settings-panel" class="settings-panel"></div>
         </section>
       </div>
-    </div>
+    </dialog>
     <div id="menu" class="menu" role="menu" popover="manual" hidden></div>
     <div id="tooltip" class="tooltip" role="tooltip" popover="manual"></div>
     <dialog id="palette" class="palette" aria-label="Command palette">
