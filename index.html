@@ -114,14 +114,24 @@
     <div id="draft-pill" class="cu-status draft-pill" role="button" tabindex="0" aria-label="Reopen draft" hidden>
       <i class="ti ti-file"></i>
       <span><strong>Draft saved</strong><small id="draft-pill-subject"></small></span>
+      <button type="button" class="icon" id="draft-pill-delete" data-tip="Discard draft" aria-label="Discard draft"><i class="ti ti-trash"></i></button>
       <button type="button" class="icon" id="draft-pill-close" data-tip="Dismiss" aria-label="Dismiss"><i class="ti ti-x"></i></button>
     </div>
     <dialog id="composer" class="composer" aria-labelledby="compose-title">
+      <div class="resize-edge" data-edge="n" aria-hidden="true"></div>
+      <div class="resize-edge" data-edge="s" aria-hidden="true"></div>
+      <div class="resize-edge" data-edge="e" aria-hidden="true"></div>
+      <div class="resize-edge" data-edge="w" aria-hidden="true"></div>
+      <div class="resize-edge" data-edge="ne" aria-hidden="true"></div>
+      <div class="resize-edge" data-edge="nw" aria-hidden="true"></div>
+      <div class="resize-edge" data-edge="se" aria-hidden="true"></div>
+      <div class="resize-edge" data-edge="sw" aria-hidden="true"></div>
       <form id="compose-form" class="compose-form">
         <header>
           <button type="button" class="icon" id="compose-close" data-tip="Close and keep draft (Esc)"><i class="ti ti-x"></i></button>
           <strong id="compose-title">New Email</strong>
           <span id="draft-status" class="draft-status" aria-live="polite"></span>
+          <button type="button" class="icon" id="compose-dock" data-tip="Move to corner"><i class="ti ti-picture-in-picture"></i></button>
           <button type="button" class="icon" id="compose-attach" data-tip="Attach files"><i class="ti ti-paperclip"></i></button>
           <input type="file" id="compose-file" multiple hidden />
           <button type="button" class="icon" id="compose-discard" data-tip="Discard draft"><i class="ti ti-trash"></i></button>
@@ -146,6 +156,9 @@
         <label class="field-row subject-row"><span class="field-label">Subject</span><input name="subject" autocomplete="off" /></label>
         <div id="compose-body" class="compose-body">
           <button type="button" id="ai-write"><i class="ti ti-message-ai"></i> Write with AI</button>
+          <div id="ai-skeleton" class="ai-skeleton" role="status" aria-label="Writing with AI" hidden>
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
         </div>
         <div id="compose-files" class="attachments compose-files" hidden></div>
         <div id="format-bar" class="format-bar" role="toolbar" aria-label="Formatting" hidden>

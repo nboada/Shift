@@ -8,8 +8,9 @@
 # Needs `gh` signed in with access to the repository.
 #
 # One-time setup on the release Mac:
-#   security add-generic-password -s shift-notary -a apple-id -w '<Apple ID email>'
-#   security add-generic-password -s shift-notary -a app-password -w '<app-specific password>'
+#   The App Store Connect API key (team key "Shift releases", App Manager), base64 so it fits on one line. Keep the
+#   .p8 offline (or in ~/.appstoreconnect/private_keys, mode 600); notarization reads only the Keychain copy:
+#   printf 'add-generic-password -U -s shift-asc-api -a <key id> -w %s\n' "$(base64 -i AuthKey_<key id>.p8)" | security -i
 #   security add-generic-password -s shift-updater -a key -w "$(cat ~/.tauri/shift-updater.key)"
 #   The update signing key (made with bunx tauri signer generate) lives in the Keychain, not a plain file: anyone who
 #   reads it can sign updates that installed copies install. Once it's in the Keychain, move ~/.tauri/shift-updater.key
@@ -37,14 +38,19 @@ NOTES=${1:-"Shift $VERSION"}
 TEAM=65AK786Q34
 IDENTITY="Developer ID Application: Nicolas Boada Morales ($TEAM)"
 
-# Tauri notarizes and staples the .app itself when these are set.
-APPLE_ID=$(security find-generic-password -s shift-notary -a apple-id -w)
-APPLE_PASSWORD=$(security find-generic-password -s shift-notary -a app-password -w)
+# Tauri notarizes and staples the .app itself when these are set. Notarization uses the API key, so no password is
+# ever on a command line; the key is written to a private temp file for the build and removed after.
+APPLE_API_KEY=48ZXPM47P5
+APPLE_API_ISSUER=e93b6d82-6953-48c7-b0e0-e62e78812854
+KEY_DIR=$(mktemp -d)
+trap 'rm -rf "$KEY_DIR"' EXIT
+APPLE_API_KEY_PATH=$KEY_DIR/AuthKey_$APPLE_API_KEY.p8
+(umask 077 && security find-generic-password -s shift-asc-api -a "$APPLE_API_KEY" -w | base64 -d >"$APPLE_API_KEY_PATH")
 if ! TAURI_SIGNING_PRIVATE_KEY=$(security find-generic-password -s shift-updater -a key -w 2>/dev/null); then
   echo "warning: the update signing key isn't in the Keychain yet; reading ~/.tauri/shift-updater.key (see the header)" >&2
   TAURI_SIGNING_PRIVATE_KEY=$(cat ~/.tauri/shift-updater.key)
 fi
-export APPLE_ID APPLE_PASSWORD TAURI_SIGNING_PRIVATE_KEY
+export APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH TAURI_SIGNING_PRIVATE_KEY
 export APPLE_TEAM_ID=$TEAM TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 
 bun run tauri build --target universal-apple-darwin
@@ -61,7 +67,7 @@ fi
 
 # The .app inside is already notarized; the disk image gets its own ticket so it opens cleanly offline too.
 codesign --force --sign "$IDENTITY" "$DMG"
-xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM" --wait
+xcrun notarytool submit "$DMG" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
 xcrun stapler staple "$DMG"
 
 REPO=nboada/Shift
