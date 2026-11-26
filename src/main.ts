@@ -2860,11 +2860,28 @@ function dock(on: boolean) {
 $("#compose-dock").addEventListener("click", () => {
   const focused = document.activeElement as HTMLElement | null;
   const on = !composer.classList.contains("docked");
+  const from = composer.getBoundingClientRect();
+  composer.classList.add("moving");
   composer.close();
   dock(on);
   if (on) composer.show();
   else composer.showModal();
   focused?.focus();
+  const to = composer.getBoundingClientRect();
+  const still = settings.accessibility.reduceMotion || matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (still) return composer.classList.remove("moving");
+  // FLIP: start where it was and glide to its new place and size.
+  const move = composer.animate(
+    [
+      {
+        transform: `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})`,
+      },
+      { transform: "none" },
+    ],
+    { duration: 360, easing: ACCORDION.easing },
+  );
+  if (!on) composer.animate({ opacity: [0, 1] }, { duration: 360, easing: "ease-out", pseudoElement: "::backdrop" });
+  void move.finished.finally(() => composer.classList.remove("moving"));
 });
 // Resizing from any edge or corner. The dialog is centred, so a size change grows both sides; shifting the offset by
 // half of it keeps the opposite edge still.
