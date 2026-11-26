@@ -301,7 +301,7 @@ function preview(m: Message) {
   return text.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
-const ACCORDION = { duration: 320, easing: "cubic-bezier(0.32, 0.72, 0, 1)" };
+export const ACCORDION = { duration: 320, easing: "cubic-bezier(0.32, 0.72, 0, 1)" };
 
 /** Opens or closes one email, animating its height. Closing keeps the content visible (and clipped) until the
  *  animation ends, so it slides shut instead of vanishing; a click mid-animation reverses from where it is. */
