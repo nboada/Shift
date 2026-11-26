@@ -24,7 +24,8 @@ const tool = (act: string, glyph: string, label: string) =>
   `<button type="button" class="m-icon" data-act="${act}" aria-label="${label}">${icon(glyph)}</button>`;
 const reduced = () => settings.accessibility.reduceMotion || matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function createComposeSheet(mail: MailCore) {
+/** `discarded`: a draft opened from the Drafts list was deleted, so its row can go at once. */
+export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: string) => void } = {}) {
   const d = document.createElement("dialog");
   d.className = "m-compose";
   d.setAttribute("aria-labelledby", "mc-title");
@@ -158,6 +159,7 @@ export function createComposeSheet(mail: MailCore) {
         icon: "file",
         action: { label: "Open", run: () => void compose.open(f, { ...state, touched: false }) },
       }),
+    discarded: (thread) => on.discarded?.(thread),
     quote: quoted,
     toast,
     where: () => (mail.imapAccounts.has(compose.state?.account ?? "") ? "on your mail server" : "in Gmail"),
@@ -169,7 +171,9 @@ export function createComposeSheet(mail: MailCore) {
 
   /** Cancel: an empty email just closes; otherwise, like Mail, delete or keep it as a draft. */
   function cancel() {
-    if (!compose.hasContent()) return void compose.close();
+    // A draft already saved (reopened from Drafts) can be deleted even if nothing was changed.
+    const saved = !!(compose.state?.draftId || compose.state?.thread);
+    if (!compose.hasContent() && !saved) return void compose.close();
     actionSheet("", [
       { label: "Delete Draft", icon: "trash", danger: true, run: () => void compose.close(true) },
       { label: "Save Draft", icon: "file", run: () => void compose.close() },

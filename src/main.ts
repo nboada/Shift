@@ -2445,7 +2445,7 @@ function start(list: string[]) {
 }
 
 /** The iPhone gets its own screens on the same core (src/mobile), loaded only there. */
-let phone: Promise<{ reset: () => void }> | null = null;
+let phone: Promise<ReturnType<typeof import("./mobile/phone").mountPhone>> | null = null;
 async function showPhone() {
   phone ??= import("./mobile/phone").then((m) => m.mountPhone(mail));
   (await phone).reset();
@@ -2504,6 +2504,7 @@ listen("scheduled-sent", () => toast("Email sent", { kind: "success" }));
 // A clicked new-mail notification: its email (or, for several, the Inbox), in a view that includes its account.
 listen<{ account?: string; thread?: string }>("open-from-notification", async ({ payload }) => {
   if (settingsOpen()) closeSettings();
+  if (IS_IOS) return void (await phone)?.openFromNotification(payload);
   if (payload.account && mail.scope && !mail.scope.includes(payload.account)) setScope(null);
   if (mail.mailbox !== "INBOX" || mail.search) openMailbox("INBOX");
   await mail.loadThreads();
