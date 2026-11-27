@@ -22,6 +22,8 @@ export const DEFAULTS = {
     snippetLines: 2,
     layout: "split" as "split" | "wide",
     uniformEmailFont: true,
+    /** Body text size in emails (px), when uniformEmailFont is on. */
+    emailTextSize: 14,
     loadRemoteImages: false,
   },
   notifications: { enabled: true, sound: true, onlyPeople: false },
@@ -45,7 +47,12 @@ export const DEFAULTS = {
     quoteOriginal: true,
     undoSendSeconds: 5,
   },
-  accessibility: { zoom: 100, reduceMotion: false },
+  accessibility: {
+    zoom: 100,
+    reduceMotion: false,
+    /** Text size of the sidebar and the message list, in % of the default. */
+    textSize: { sidebar: 100, list: 100 },
+  },
   /** Mailbox keys (label id, or "ALL" for All Mail) in the order and visibility the sidebar uses; `expanded` lists
    * the folders whose per-account rows are open (with several accounts). */
   sidebar: { order: [] as string[], hidden: [] as string[], expanded: ["INBOX"] as string[] },
@@ -180,6 +187,8 @@ export function applyVisualSettings() {
   root.dataset.snippet = String(appearance.snippetLines);
   root.dataset.reduceMotion = String(accessibility.reduceMotion);
   root.style.setProperty("zoom", `${accessibility.zoom}%`);
+  root.style.setProperty("--sidebar-text-zoom", String(accessibility.textSize.sidebar / 100));
+  root.style.setProperty("--list-text-zoom", String(accessibility.textSize.list / 100));
 }
 
 export const ZOOM_STEPS = [75, 85, 90, 100, 110, 125, 150];

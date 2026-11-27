@@ -14,7 +14,16 @@ import {
 const ANA = "ana@example.com";
 const WORK = "ops@example.org";
 
-type Stored = { id: string; account: string; subject: string; from: string; date: number; labels: Set<string> };
+type Stored = {
+  id: string;
+  account: string;
+  subject: string;
+  from: string;
+  date: number;
+  labels: Set<string>;
+  /** Its newest email is an unsent draft. */
+  draft?: boolean;
+};
 
 /** Gmail-like mailboxes in memory, answering the Tauri commands the core uses, with events like the real backend's. */
 function fakeBackend(mail: Stored[], { listed = Infinity, page = 2 } = {}) {
@@ -93,7 +102,9 @@ function fakeBackend(mail: Stored[], { listed = Infinity, page = 2 } = {}) {
       const s = find(account, id);
       return [
         {
-          id: `${id}-0`,
+          // A draft and the email it's sent as are different messages, as in Gmail.
+          id: s.draft ? `${id}-draft` : `${id}-0`,
+          draft: s.draft,
           sender: s.from,
           recipients: account,
           cc: "",
@@ -411,4 +422,19 @@ test("a label on several threads: off for all when all have it, otherwise on for
   expect(some.map((x) => x.labels)).toEqual(["INBOX", "INBOX"]);
   expect(labelToggle(some, id).state).toBe("none");
   expect(labelToggle(some, () => undefined)).toEqual({ state: "none", changes: [] });
+});
+
+test("a draft that's been sent counts as a change to the open conversation", async () => {
+  const { core, backend, next } = setup();
+  backend.mail.find((s) => s.id === "t2")!.draft = true;
+  await core.loadThreads();
+  await core.openThread("t2");
+  expect(await core.openChanged()).toBe(false);
+
+  // Sent elsewhere (the send timer): same number of emails, but the draft is now the sent email.
+  backend.mail.find((s) => s.id === "t2")!.draft = false;
+  const refreshed = next("refreshed");
+  backend.emit("mail-changed");
+  await refreshed;
+  expect(await core.openChanged()).toBe(true);
 });

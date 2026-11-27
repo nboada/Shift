@@ -63,6 +63,14 @@ const panel = () => document.getElementById("settings-panel")!;
 const dropdownOptions = new Map<string, [string | number, string][]>();
 
 /** Shift-styled dropdown: a button showing the current choice that opens a menu (see openDropdown). */
+/** Text size steps for the sidebar and the message list, in % of the default. */
+const TEXT_SIZES: [number, string][] = [
+  [90, "Small"],
+  [100, "Default"],
+  [110, "Large"],
+  [120, "Larger"],
+];
+
 function select(path: string, options: [string | number, string][], disabled = false) {
   dropdownOptions.set(path, options);
   const value = String(getSetting(path));
@@ -74,6 +82,8 @@ function select(path: string, options: [string | number, string][], disabled = f
 const popup = document.createElement("div");
 popup.className = "menu dropdown-menu";
 popup.setAttribute("role", "listbox");
+// A popover in the Settings dialog: Settings is modal (top layer), so a list anywhere else would open behind it.
+popup.setAttribute("popover", "manual");
 popup.hidden = true;
 document.body.append(popup);
 let popupFor: HTMLButtonElement | null = null;
@@ -81,6 +91,7 @@ let popupFor: HTMLButtonElement | null = null;
 function closeDropdown(refocus = false) {
   if (popup.hidden) return;
   popup.hidden = true;
+  if (popup.matches(":popover-open")) popup.hidePopover();
   popupFor?.setAttribute("aria-expanded", "false");
   if (refocus) popupFor?.focus();
   popupFor = null;
@@ -106,7 +117,10 @@ function openDropdown(button: HTMLButtonElement, pick: (value: string | number) 
     pick(v);
   };
   const r = button.getBoundingClientRect();
+  const host = button.closest("dialog") ?? document.body;
+  if (popup.parentElement !== host) host.append(popup);
   popup.hidden = false;
+  popup.showPopover();
   popup.style.minWidth = `${r.width}px`;
   popup.style.left = `${Math.max(8, Math.min(r.right - popup.offsetWidth, window.innerWidth - popup.offsetWidth - 8))}px`;
   const below = r.bottom + 6 + popup.offsetHeight < window.innerHeight;
@@ -428,6 +442,20 @@ const render: Record<string, () => string> = {
         "Replaces the sender's fonts and body text size. Headings, layout, colours and images stay as sent.",
       ) +
         row(
+          "Email text size",
+          segmented(
+            "appearance.emailTextSize",
+            [
+              [13, "Small"],
+              [14, "Default"],
+              [15, "Large"],
+              [16, "Larger"],
+            ],
+            !settings.appearance.uniformEmailFont,
+          ),
+          "The main text of each email; smaller print in it stays in proportion.",
+        ) +
+        row(
           "Load remote images",
           toggle("appearance.loadRemoteImages"),
           "Off: images from the web stay hidden until you load them, so senders can't see when you open an email.",
@@ -592,6 +620,15 @@ const render: Record<string, () => string> = {
         ),
         "Also ⌘+ ⌘− and ⌘0.",
       ),
+    ) +
+    group(
+      "Text size",
+      row("Sidebar", segmented("accessibility.textSize.sidebar", TEXT_SIZES)) +
+        row(
+          "Message list",
+          segmented("accessibility.textSize.list", TEXT_SIZES),
+          "Email text size is in Appearance → Emails.",
+        ),
     ) +
     group(
       "Motion",
@@ -897,6 +934,7 @@ export function initSettings(c: Ctx) {
       path === "ai.model" ||
       path === "ai.autoLabel" ||
       path === "composer.signatureMode" ||
+      path === "appearance.uniformEmailFont" ||
       task
     )
       show(current);

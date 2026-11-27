@@ -735,7 +735,10 @@ body.resizing iframe { pointer-events: none; }
 .message > header:hover .toggle-caret, .message > header:focus-visible .toggle-caret { opacity: 1; }
 .message:not(.collapsed):not(.closing) .toggle-caret { transform: rotate(180deg); }
 .message .meta .preview { display: none; }
-.message.collapsed > :not(header) { display: none; }
+/* Collapsed emails stay laid out, hidden under the header, so an email prepared in the background already has its
+   height and opens straight to it (toggleMessage). */
+.message { position: relative; }
+.message.collapsed > :not(header) { position: absolute; left: 0; right: 0; top: 100%; visibility: hidden; pointer-events: none; }
 .message.collapsed .meta .to { display: none; }
 .message.collapsed .meta .preview { display: block; }
 /* The card already clips its content (overflow: hidden), so the height animation needs nothing else. */
@@ -1709,3 +1712,9 @@ button.secondary:disabled { opacity: 0.5; }
   .setting-row { flex-wrap: wrap; }
   .settings input[type="text"], .settings input[type="url"], .key-control input { width: 100%; }
 }
+
+/* Text size (Settings → Accessibility): the sidebar's folders and labels, and the message list, scale on their own. */
+.mailboxes { zoom: var(--sidebar-text-zoom, 1); }
+.threads { zoom: var(--list-text-zoom, 1); }
+/* Rows fading out of the list (renderThreads), over it and scaled like it. */
+.threads.list-ghosts { position: absolute; inset: 0; z-index: 2; padding: 0; overflow: hidden; pointer-events: none; }

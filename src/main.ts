@@ -302,32 +302,72 @@ const listKey = () => `${mail.mailbox}|${mail.search}|${mail.scope?.join(",") ??
 const rowKey = (li: HTMLElement) => li.dataset.id ?? `section:${li.textContent}`;
 const LIST_ROWS = "li[data-id], li.section";
 
-/** Redraws the list; when it's the same list, rows glide from their old places to their new ones (FLIP), so pinning,
- * archiving or new mail moves them instead of making them jump. */
+/** Rows leaving the list fade out on this layer above it, so a redraw that follows straight away (archiving opens
+ * the next email, which redraws again) can't cut them short. */
+const ghostLayer = Object.assign(document.createElement("ul"), { className: "threads list-ghosts" });
+ghostLayer.setAttribute("aria-hidden", "true");
+threadList.after(ghostLayer);
+
+/** Redraws the list; when it's the same list, rows glide from where they are on screen to their new places (FLIP),
+ * so pinning, archiving or new mail moves them instead of making them jump, and a second redraw mid-glide carries
+ * on from there. A row that's gone fades and slides out where it was while the rows below close the gap. */
 function renderThreads() {
-  const before =
-    !reduceMotion() && listKey() === drawnFor
-      ? new Map(
-          [...threadList.querySelectorAll<HTMLElement>(LIST_ROWS)].map((li) => [
-            rowKey(li),
-            li.getBoundingClientRect().top,
-          ]),
-        )
-      : null;
+  const same = !reduceMotion() && listKey() === drawnFor;
+  const listTop = threadList.getBoundingClientRect().top;
+  const before = same
+    ? new Map(
+        [...threadList.querySelectorAll<HTMLElement>(LIST_ROWS)].map((li) => [
+          rowKey(li),
+          { li, rect: li.getBoundingClientRect(), top: li.getBoundingClientRect().top - listTop },
+        ]),
+      )
+    : null;
   drawThreads();
   if (!before?.size) return;
+  // Screen px per layout px: the list can have its own text size (CSS zoom), and transforms are in layout px.
+  const first = threadList.querySelector<HTMLElement>("li[data-id]");
+  const scale = first && first.offsetHeight ? first.getBoundingClientRect().height / first.offsetHeight : 1;
+  const now = new Set<string>();
   for (const li of threadList.querySelectorAll<HTMLElement>(LIST_ROWS)) {
-    const was = before.get(rowKey(li));
-    if (was === undefined) {
-      li.animate({ opacity: [0, 1] }, { duration: 200, easing: "ease-out" });
+    const key = rowKey(li);
+    now.add(key);
+    const was = before.get(key);
+    if (!was) {
+      li.animate(
+        { opacity: [0, 1], transform: ["translateY(-6px)", "none"] },
+        { duration: 260, easing: "cubic-bezier(0.25, 0.1, 0.25, 1)" },
+      );
       continue;
     }
-    const dy = was - li.getBoundingClientRect().top;
+    const dy = (was.top - (li.getBoundingClientRect().top - listTop)) / scale;
     if (Math.abs(dy) >= 1)
       li.animate(
         { transform: [`translateY(${dy}px)`, "none"] },
         { duration: 320, easing: "cubic-bezier(0.25, 0.1, 0.25, 1)" },
       );
+  }
+  // Gone rows: the old element on the ghost layer, where it was on screen, fading and sliding away. A few at most; a
+  // bigger change (a whole selection archived) just closes up.
+  const gone = [...before].filter(([key, r]) => !now.has(key) && r.li.dataset.id);
+  if (!gone.length || gone.length > 8) return;
+  const pane = threadList.parentElement!.getBoundingClientRect();
+  for (const [, r] of gone) {
+    const ghost = r.li;
+    ghost.classList.remove("selected", "context");
+    Object.assign(ghost.style, {
+      position: "absolute",
+      top: `${(r.rect.top - pane.top) / scale}px`,
+      left: `${(r.rect.left - pane.left) / scale}px`,
+      width: `${r.rect.width / scale}px`,
+      margin: "0",
+    });
+    ghostLayer.append(ghost);
+    ghost
+      .animate(
+        { opacity: [1, 0], transform: ["none", "translateX(-28px)"] },
+        { duration: 240, easing: "cubic-bezier(0.4, 0, 1, 1)", fill: "forwards" },
+      )
+      .finished.finally(() => ghost.remove());
   }
 }
 
@@ -2666,6 +2706,14 @@ function updateShortcutTips() {
 
 onSettingsChange((path) => {
   applyVisualSettings();
+  // The open email is drawn again in its new text size or font.
+  if (
+    (path === "appearance.emailTextSize" || path === "appearance.uniformEmailFont") &&
+    mail.selected &&
+    !app.hidden &&
+    !compose.state?.inline
+  )
+    void openThread(mail.selected);
   // Account names and colours show in the sidebar.
   if (mail.accounts.length && (path === "*" || path.startsWith("accounts"))) drawMailboxes();
   bindings = bindingsFrom(settings.shortcuts);
@@ -2722,14 +2770,10 @@ mail.subscribe((e) => {
       const open = mail.threads.find((t) => t.id === mail.selected);
       const redraw = redrawOpenThread;
       redrawOpenThread = false;
-      if (
-        open &&
-        (redraw || open.count !== mail.messages.length) &&
-        !compose.state?.inline &&
-        mail.mailbox !== "DRAFT" &&
-        mail.mailbox !== "SCHEDULED"
-      )
-        void openThread(open.id);
+      if (!open || compose.state?.inline || mail.mailbox === "DRAFT" || mail.mailbox === "SCHEDULED") return;
+      // Redrawn when its emails changed, not only their count: a sent draft becomes the sent email in its place.
+      if (redraw || open.count !== mail.messages.length) void openThread(open.id);
+      else void mail.openChanged().then((changed) => changed && !compose.state?.inline && openThread(open.id));
       return;
     }
     case "error":
