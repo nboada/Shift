@@ -81,6 +81,7 @@ fn resolve(provider: &str, model: &str, base_url: &str) -> Result<Config> {
     if base_url.is_empty() {
         bail!("Set the server URL in Settings → AI first");
     }
+    check_transport(&base_url)?;
     let key = crate::settings::get_ai_key(provider);
     if key.is_none() && provider != "ollama" {
         bail!("Add your {provider} API key in Settings → AI first");
@@ -91,6 +92,30 @@ fn resolve(provider: &str, model: &str, base_url: &str) -> Result<Config> {
         base_url,
         key,
     })
+}
+
+/// Mail text and the API key go to this server, so it must be HTTPS unless it's on this Mac or the local network.
+fn check_transport(base_url: &str) -> Result<()> {
+    let url = reqwest::Url::parse(base_url)
+        .context("The AI server URL in Settings → AI isn't a valid address")?;
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if url.host_str().is_some_and(is_local_host) => Ok(()),
+        "http" => bail!(
+            "The AI server in Settings → AI needs an https:// address (plain http only works on this Mac or your local network)"
+        ),
+        other => bail!("The AI server URL in Settings → AI can't use {other}://"),
+    }
+}
+
+fn is_local_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        // Loopback, or a unique local address (fc00::/7).
+        Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback() || (ip.segments()[0] & 0xfe00) == 0xfc00,
+        Err(_) => host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local"),
+    }
 }
 
 /// One request, one answer. `schema` asks for JSON matching it; `effort` (Anthropic only) trades depth for speed.
@@ -302,6 +327,28 @@ mod tests {
         assert_eq!(with_rules(REWRITE, "  "), REWRITE);
         let p = with_rules(REWRITE, "- No exclamation marks");
         assert!(p.starts_with(REWRITE) && p.ends_with("- No exclamation marks"));
+    }
+
+    #[test]
+    fn remote_ai_servers_must_use_https() {
+        for ok in [
+            "https://api.example.com/v1",
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://192.168.1.20:11434/v1",
+            "http://[::1]:11434/v1",
+            "http://studio.local:1234/v1",
+        ] {
+            assert!(check_transport(ok).is_ok(), "{ok} should be allowed");
+        }
+        for bad in [
+            "http://api.example.com/v1",
+            "http://8.8.8.8/v1",
+            "ftp://example.com",
+            "not a url",
+        ] {
+            assert!(check_transport(bad).is_err(), "{bad} should be refused");
+        }
     }
 
     #[test]

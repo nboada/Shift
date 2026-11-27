@@ -3074,6 +3074,14 @@ pub fn run() {
                 std::fs::rename(&old, &dir)?;
             }
             std::fs::create_dir_all(&dir)?;
+            // The account databases (cached mail) live under here, so only this user may open it.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
+                    eprintln!("Couldn't restrict the app data folder: {e}");
+                }
+            }
             #[cfg(target_os = "macos")]
             allow_test_banner();
             // Rewrites a login item saved by 0.2.0 and earlier, which had no bundle id and showed as the developer's name.
