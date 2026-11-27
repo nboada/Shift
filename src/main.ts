@@ -261,7 +261,7 @@ function threadRow(t: Thread) {
         <span class="avatar-ring${multi() ? ` acct-${accountSettings(t.account).color}` : ""}" ${multi() ? `data-tip="${esc(accountName(t.account))}"` : ""}>${avatar(t.sender)}</span>
         <span class="from">${esc(displayName(t.sender) || "(no sender)")}${t.count > 1 ? `<em>${t.count}</em>` : ""}${t.starred ? '<i class="ti ti-pinned pin"></i>' : ""}</span>
         <span class="date">${shortDate(t.date)}</span>
-        <span class="subject"><span class="subject-text">${esc(t.subject || "(no subject)")}</span></span>
+        <span class="subject">${t.count > 1 ? `<em class="subject-count">${t.count}</em>` : ""}<span class="subject-text">${esc(t.subject || "(no subject)")}</span></span>
         <span class="snippet">${esc(decodeEntities(t.snippet))}</span>${rowLabels(t)}
         ${mail.mailbox === "SCHEDULED" ? "" : rowActions(t)}
       </li>`;

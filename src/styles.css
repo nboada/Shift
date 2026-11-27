@@ -619,7 +619,7 @@ button.primary:disabled { opacity: 0.6; }
 .threads .avatar { width: 27px; height: 27px; font-size: 10px; }
 .threads .avatar-ring[class*="acct-"] .avatar { width: 24px; height: 24px; font-size: 9px; }
 .threads .from { grid-column: 3; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.threads .from em {
+.threads .from em, .threads .subject-count {
   display: inline-block;
   margin-left: 6px;
   padding: 0 6px;
@@ -1423,9 +1423,24 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
  * and the action buttons (12px either side of the 30px button, the toolbar's gap). */
 .reader-pane .toolbar .back { margin-left: -16px; }
 /* Spark proportions: ~40px rows, wide sender column, 14px subject and snippet, small light date. */
-:root[data-layout="wide"] .threads li[data-id] { display: flex; align-items: center; gap: 12px; padding: 5px 14px 5px 6px; margin-top: 1px; border-radius: 10px; }
+/* Room to breathe, like Spark: the list sits well in from both edges of its pane, the title lines up with the section
+ * labels, and sections get space above them. Row height stays the same. */
+:root[data-layout="wide"] .list-pane .toolbar { height: 64px; padding: 0 30px; border-bottom: 0; }
+:root[data-layout="wide"] .threads { padding: 0 30px 16px; }
+:root[data-layout="wide"] .threads .section { margin-top: 18px; padding: 8px 6px 6px; }
+:root[data-layout="wide"] .threads .section:first-child { margin-top: 0; }
+/* An open email keeps the list's width: its cards span the same 30px insets as the rows, and its subject lines up
+ * with the list's title. */
+:root[data-layout="wide"] .reader { padding: 20px 30px 16px; }
+:root[data-layout="wide"] .reader-head { margin: -20px -30px 14px; padding: 10px 36px; }
+:root[data-layout="wide"] .threads li[data-id] { display: flex; align-items: center; gap: 12px; padding: 5px 18px 5px 6px; margin-top: 1px; border-radius: 10px; }
 :root[data-layout="wide"] .threads .avatar-ring { flex: none; width: 30px; height: 30px; }
 :root[data-layout="wide"] .threads .from { flex: 0 0 240px; }
+/* The wide list shows the message count at the start of the subject, so the counts line up in a column; the split
+ * layout keeps it after the sender's name. */
+.threads .subject-count { display: none; flex: none; margin-left: 0; }
+:root[data-layout="wide"] .threads .subject-count { display: inline-block; }
+:root[data-layout="wide"] .threads .from em { display: none; }
 /* Weight steps down along the row: sender, then subject a step lighter, then the snippet. Unread lifts the first two. */
 :root[data-layout="wide"] .threads .subject { order: 1; flex: 0 1 auto; max-width: 50%; font-size: 14px; font-weight: 450; }
 :root[data-layout="wide"] .threads li.unread .from { font-weight: 650; }

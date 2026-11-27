@@ -6,22 +6,43 @@
   const post = (msg) => parent.postMessage({ shift: true, ...msg }, "*");
   const doc = document;
 
-  // Body text arrives at 11–16px depending on the sender's client. The size most of the text is in becomes the
-  // reader's size (14px, or what Settings → Appearance says), and every other size moves by the same factor, so fine
-  // print (a signature, a footer) stays smaller than the body instead of being raised to it. Headings over 20px stay
-  // as sent. Measured before changing anything, so em/% sizes are judged against the sender's original sizes.
+  // Body text arrives at 11–16px depending on the sender's client. The size the message itself is written in becomes
+  // the reader's size (14px, or what Settings → Appearance says), and every other size moves by the same factor, so
+  // fine print (a signature, a footer) stays smaller than the body instead of being raised to it. Headings over 20px
+  // stay as sent. Measured before changing anything, so em/% sizes are judged against the sender's original sizes.
+  //
+  // The body's size is read from the first visible text above any quoted history (BODY_SAMPLE characters), not from
+  // the whole email: a long quoted thread in another size, or a long disclaimer in 7.5pt, would otherwise outvote a
+  // short new message and leave it larger or smaller than every other email.
+  const BODY_SAMPLE = 400;
   function evenTextSize(target) {
     const els = [doc.body, ...doc.body.querySelectorAll("*")];
     const sizes = els.map((el) => parseFloat(getComputedStyle(el).fontSize));
-    const weight = new Map();
-    els.forEach((el, i) => {
-      let n = 0;
-      for (const c of el.childNodes) if (c.nodeType === 3) n += c.textContent.trim().length;
-      if (n) weight.set(sizes[i], (weight.get(sizes[i]) ?? 0) + n);
-    });
-    let base = 0;
-    let most = 0;
-    for (const [size, n] of weight) if (n > most) [base, most] = [size, n];
+    const sizeOf = new Map(els.map((el, i) => [el, sizes[i]]));
+    const quote = doc.body.querySelector(QUOTE);
+    const quoted = (node) =>
+      !!quote && (quote.contains(node) || !!(quote.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const weigh = (sample, skipQuote) => {
+      const weight = new Map();
+      let total = 0;
+      const walk = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+      for (let t = walk.nextNode(); t && total < sample; t = walk.nextNode()) {
+        const n = t.textContent.trim().length;
+        const el = t.parentElement;
+        const size = sizeOf.get(el);
+        if (!n || !el || size < 9 || size > 20 || (skipQuote && quoted(t))) continue;
+        // Preheaders and other hidden text never show.
+        if (!el.getClientRects().length || getComputedStyle(el).visibility === "hidden") continue;
+        weight.set(size, (weight.get(size) ?? 0) + n);
+        total += n;
+      }
+      let base = 0;
+      let most = 0;
+      for (const [size, n] of weight) if (n > most) [base, most] = [size, n];
+      return base;
+    };
+    // An email that is all quote (a bare forward) has no new text above it: sample the quote then.
+    const base = weigh(BODY_SAMPLE, true) || weigh(BODY_SAMPLE, false);
     if (!base) return;
     const factor = Math.min(1.5, Math.max(0.75, target / base));
     els.forEach((el, i) => {
