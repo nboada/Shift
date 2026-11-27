@@ -295,6 +295,23 @@ export function createMailCore(
       return p;
     },
 
+    /**
+     * Whether the open conversation's emails differ from what's on screen: one added or removed, or a draft that has
+     * been sent (same count, different email). Checked after each refresh, so the reader catches up without a reload.
+     */
+    async openChanged() {
+      const id = mail.selected;
+      const t = mail.threads.find((x) => x.id === id);
+      if (!id || !t) return false;
+      const key = (list: Message[]) => list.map((m) => `${m.id}${m.draft ? "*" : ""}`).join(" ");
+      try {
+        const fresh = await mail.loadMessages(t.account, id);
+        return mail.selected === id && key(fresh) !== key(mail.messages);
+      } catch {
+        return false;
+      }
+    },
+
     prefetchAround(id: string) {
       const i = mail.threads.findIndex((t) => t.id === id);
       if (i < 0 || mail.mailbox === "SCHEDULED") return;

@@ -2411,8 +2411,29 @@ async fn send(
     }
     let a = s.account(&account)?;
     deliver(&s, &a, &draft, draft_id.as_deref()).await?;
+    refresh_after_send(&app, &a, &draft).await;
     spawn_sync(&app);
     Ok(())
+}
+
+/// Fetches a reply's conversation again once it's sent, so the open view swaps the draft for the sent email at once
+/// rather than at the next sync. New conversations and IMAP accounts come in with the sync that follows a send.
+async fn refresh_after_send(app: &AppHandle, a: &Account, draft: &Draft) {
+    let s = app.state::<State>();
+    if s.demo || a.imap.is_some() {
+        return;
+    }
+    let Some(id) = draft.thread_id.as_deref().filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let Ok(token) = a.access_token(&s.http).await else {
+        return;
+    };
+    let g = Gmail {
+        http: &s.http,
+        token: &token,
+    };
+    refetch(app, a, &g, id).await;
 }
 
 /// Sends through Gmail; a saved draft goes out with `drafts.send`, which also removes it from Drafts.
@@ -2607,6 +2628,8 @@ fn send_when_due(app: &AppHandle, account: String, at: i64) {
         if let Err(e) = send_due(&app, &a).await {
             let _ = app.emit("sync-error", format!("{}: {e:#}", a.email));
         }
+        // The sent email (a new conversation, or one in an IMAP account) shows without waiting for the next tick.
+        sync(&app).await;
     });
 }
 
@@ -2674,13 +2697,17 @@ async fn send_due(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
             continue;
         }
         let _ = app.emit(CHANGED, ());
-        let result = match serde_json::from_value::<Draft>(r.draft) {
-            Ok(d) => deliver(&s, a, &d, r.draft_id.as_deref()).await,
-            Err(e) => Err(e.into()),
+        let draft = serde_json::from_value::<Draft>(r.draft);
+        let result = match &draft {
+            Ok(d) => deliver(&s, a, d, r.draft_id.as_deref()).await,
+            Err(e) => Err(anyhow::anyhow!("{e}")),
         };
         match result {
             Ok(()) => {
                 db::finish_scheduled(&a.db(), r.id)?;
+                if let Ok(d) = &draft {
+                    refresh_after_send(app, a, d).await;
+                }
                 let _ = app.emit("scheduled-sent", ());
             }
             // The draft was sent or deleted elsewhere, or by an earlier attempt whose answer was lost.

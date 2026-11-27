@@ -6,12 +6,29 @@
   const post = (msg) => parent.postMessage({ shift: true, ...msg }, "*");
   const doc = document;
 
-  // Body text arrives at 11–16px depending on the sender's client; bring that band to 14px, leave headings and fine
-  // print. Measured before changing anything, so em/% sizes are judged against the sender's original sizes.
-  function evenTextSize() {
-    const els = [...doc.body.querySelectorAll("*")];
+  // Body text arrives at 11–16px depending on the sender's client. The size most of the text is in becomes the
+  // reader's size (14px, or what Settings → Appearance says), and every other size moves by the same factor, so fine
+  // print (a signature, a footer) stays smaller than the body instead of being raised to it. Headings over 20px stay
+  // as sent. Measured before changing anything, so em/% sizes are judged against the sender's original sizes.
+  function evenTextSize(target) {
+    const els = [doc.body, ...doc.body.querySelectorAll("*")];
     const sizes = els.map((el) => parseFloat(getComputedStyle(el).fontSize));
-    els.forEach((el, i) => sizes[i] >= 12 && sizes[i] <= 17 && el.style.setProperty("font-size", "14px", "important"));
+    const weight = new Map();
+    els.forEach((el, i) => {
+      let n = 0;
+      for (const c of el.childNodes) if (c.nodeType === 3) n += c.textContent.trim().length;
+      if (n) weight.set(sizes[i], (weight.get(sizes[i]) ?? 0) + n);
+    });
+    let base = 0;
+    let most = 0;
+    for (const [size, n] of weight) if (n > most) [base, most] = [size, n];
+    if (!base) return;
+    const factor = Math.min(1.5, Math.max(0.75, target / base));
+    els.forEach((el, i) => {
+      const size = sizes[i];
+      if (size >= 9 && size <= 20)
+        el.style.setProperty("font-size", `${Math.round(size * factor * 2) / 2}px`, "important");
+    });
   }
 
   // Quoted history in a reply is folded behind a "•••" button, as Gmail and Spark do. Gmail, Apple Mail, Thunderbird,
@@ -64,7 +81,9 @@
   };
 
   try {
-    if (doc.currentScript?.dataset.even) evenTextSize();
+    // data-even is the size in px; "1" (any older value) means the default 14px.
+    const even = Number(doc.currentScript?.dataset.even);
+    if (even) evenTextSize(even > 1 ? even : 14);
     foldQuote();
   } catch {
     // Odd markup: show the email as it is.
