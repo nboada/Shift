@@ -1,4 +1,4 @@
 # App Store Connect issuer ID: an account identifier, not a credential (API calls also need the private key, which
 # stays in the Keychain).
-2cd8ecde6f1f8acf6c4cfac9d76f386e50db405d:scripts/release-ios.sh:generic-api-key:18
-fdc01c3efd1b1d9d0f11d3b89d11aee4ce03e6fd:scripts/release.sh:generic-api-key:44
+74b0d047ce1d106f251df2a1466ec633218b7f1f:scripts/release-ios.sh:generic-api-key:18
+25fdb0947fa9945eadc182e14ba56beeee7260ee:scripts/release.sh:generic-api-key:44
