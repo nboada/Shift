@@ -4,7 +4,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { type Editor, generateHTML, generateJSON } from "@tiptap/core";
 import { type OutFile, checkSize, readFile } from "../attachments";
-import { docToText, emailHtml, textToHtml } from "../compose";
+import { docToText, emailHtml, messageEnd, textToHtml } from "../compose";
 import { bareEmail, displayName, isValidAddress, splitAddresses, splitList } from "../recipients";
 import { formatWhen } from "../schedule";
 import { accountSettings, settings, signatureFor } from "../settings";
@@ -30,8 +30,13 @@ export type ComposeOptions = {
 };
 export type ComposeState = Required<ComposeOptions>;
 
-/** What the open composer holds: the fields as typed (`body` is the editor's HTML) and the email as sent. */
-export type Content = { fields: Fields; text: string; html: string; typed: boolean };
+/** What the open composer holds: the fields as typed (`body` is the editor's HTML), the email as sent, and how many
+ * characters the user wrote above the signature and the quote. */
+export type Content = { fields: Fields; text: string; html: string; written: number };
+
+/** A new email becomes a draft once this much is written (body plus a subject of its own), so a stray keystroke or a
+ * From switch doesn't leave a draft holding only the signature. Recipients or files make one at once. */
+export const MIN_DRAFT_CHARS = 10;
 
 /** The screen a composer core draws on: the Mac's dialog or the phone's sheet. */
 export type ComposeView = {
@@ -69,7 +74,7 @@ export function signatureBlock(account: string) {
 /** An empty line to write on, then the account's signature. */
 export const signature = (account: string) => "<p></p>" + signatureBlock(account);
 
-/** The editor's email as sent, HTML plus a plain-text version, and whether anything is written in it. */
+/** The editor's email as sent, HTML plus a plain-text version, and how much the user wrote in it. */
 export function editorContent(editor: Editor, account: string | undefined) {
   const sigHtml = signatureFor(account).html;
   const sigText =
@@ -77,7 +82,7 @@ export function editorContent(editor: Editor, account: string | undefined) {
   return {
     text: docToText(editor.state.doc, sigText),
     html: emailHtml(editor.getHTML(), sigHtml),
-    typed: !!editor.getText().trim(),
+    written: editor.state.doc.textBetween(0, messageEnd(editor.state.doc), " ").replace(/\s+/g, " ").trim().length,
   };
 }
 
@@ -113,18 +118,7 @@ export function ownText(editor: Editor): { from: number; to: number; text: strin
   const { doc, selection } = editor.state;
   if (!selection.empty)
     return { from: selection.from, to: selection.to, text: doc.textBetween(selection.from, selection.to, "\n\n") };
-  let to = 0;
-  let stop = false;
-  doc.forEach((node, offset) => {
-    if (stop) return;
-    const text = node.textContent.trim();
-    stop =
-      ["signature", "blockquote", "quote"].includes(node.type.name) ||
-      text.startsWith("-- ") ||
-      /^On .+ wrote:$/s.test(text) ||
-      /^-{5,} Forwarded message/.test(text);
-    if (!stop) to = offset + node.nodeSize;
-  });
+  const to = messageEnd(doc);
   return { from: 0, to, text: doc.textBetween(0, to, "\n\n").trim() };
 }
 
@@ -172,6 +166,9 @@ export function createComposer(mail: MailCore, view: ComposeView, invoke: Invoke
   /** A forward's files still downloading; Send and Send later wait for them so the email doesn't go out without them. */
   const pendingFiles = new WeakMap<ComposeState, Promise<void>>();
 
+  /** Recipients and subject as each composer opened, so a reply's own don't count as written. */
+  const openedWith = new WeakMap<ComposeState, Fields>();
+
   const fields = () => view.read().fields;
 
   /** The message as the backend expects it: HTML from the editor plus a plain-text version. */
@@ -190,11 +187,18 @@ export function createComposer(mail: MailCore, view: ComposeView, invoke: Invoke
     };
   }
 
+  /** Whether the open email is worth a draft: an existing draft keeps anything left in it, a new one needs files,
+   *  recipients added, or `MIN_DRAFT_CHARS` written. */
   function hasContent() {
     if (!state?.touched) return false;
     const c = view.read();
     const f = c.fields;
-    return !!(state.attachments.length || c.typed || f.subject?.trim() || f.to || f.cc || f.bcc);
+    if (state.attachments.length) return true;
+    if (state.draftId || state.thread) return !!(c.written || f.subject?.trim() || f.to || f.cc || f.bcc);
+    const was = openedWith.get(state) ?? {};
+    if ((["to", "cc", "bcc"] as const).some((k) => f[k] && f[k] !== was[k])) return true;
+    const subject = f.subject?.trim() ?? "";
+    return c.written + (subject === (was.subject?.trim() ?? "") ? 0 : subject.length) >= MIN_DRAFT_CHARS;
   }
 
   function touch() {
@@ -203,7 +207,7 @@ export function createComposer(mail: MailCore, view: ComposeView, invoke: Invoke
     clearTimeout(timer);
     // drafts.update replaces the whole message, so every save re-uploads the files; with big ones, save less often.
     const bytes = state.attachments.reduce((n, f) => n + f.size, 0);
-    timer = setTimeout(() => save(), bytes > 1_000_000 ? 15_000 : 1500);
+    timer = setTimeout(() => void (hasContent() && save()), bytes > 1_000_000 ? 15_000 : 1500);
   }
 
   /**
@@ -257,7 +261,10 @@ export function createComposer(mail: MailCore, view: ComposeView, invoke: Invoke
       resumeAt: opts.resumeAt ?? null,
       thread: opts.thread ?? null,
     };
-    await view.show(f, state);
+    const s = state;
+    await view.show(f, s);
+    // One reopened after a failed save was already written in: nothing in it was there to begin with.
+    if (state === s && !opts.touched) openedWith.set(s, fields());
     view.error("");
     view.status(state.draftId ? "Saved" : "");
   }

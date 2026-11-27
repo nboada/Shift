@@ -89,7 +89,7 @@ function fakeView() {
       open = true;
     },
     hide: () => void (open = false),
-    read: () => ({ fields: { ...typed }, text: typed.body ?? "", html: typed.body ?? "", typed: !!typed.body?.trim() }),
+    read: () => ({ fields: { ...typed }, text: typed.body ?? "", html: typed.body ?? "", written: (typed.body ?? "").replace(/<[^>]*>/g, "").trim().length }),
     status: () => {},
     error: (text) => void (text && errors.push(text)),
     files: () => {},
@@ -395,6 +395,59 @@ test("an untouched or empty composer closes without saving", async () => {
   await compose.write();
   await compose.close();
   expect(backend.of("save_draft")).toHaveLength(0);
+});
+
+test("a new email becomes a draft only once enough is written", async () => {
+  jest.useFakeTimers();
+  const { backend, ui, compose } = setup();
+  await compose.write();
+  ui.type({ body: "Hi" });
+  compose.touch();
+  jest.advanceTimersByTime(2000);
+  expect(backend.of("save_draft")).toHaveLength(0);
+  ui.type({ body: "Hi Ben, quick one" });
+  compose.touch();
+  jest.advanceTimersByTime(2000);
+  await flush();
+  expect(backend.of("save_draft")).toHaveLength(1);
+});
+
+test("a short new email closes without a draft, unless it has recipients", async () => {
+  const { backend, ui, compose } = setup();
+  await compose.write();
+  ui.type({ subject: "Hey", body: "ok" });
+  compose.touch();
+  await compose.close();
+  expect(backend.of("save_draft")).toHaveLength(0);
+  await compose.write();
+  ui.type({ to: "ben@example.net" });
+  compose.touch();
+  await compose.close();
+  expect(backend.of("save_draft")).toHaveLength(1);
+});
+
+test("a reply's own recipients and subject don't make it a draft; what's written does", async () => {
+  const { backend, ui, compose } = setup(fakeMail({ selected: "t1", messages: [message()] }));
+  await compose.reply("reply");
+  expect(ui.shown[0].fields.to).toBeTruthy();
+  ui.type({ body: "ok" });
+  compose.touch();
+  await compose.close();
+  expect(backend.of("save_draft")).toHaveLength(0);
+  await compose.reply("reply");
+  ui.type({ body: "Sounds good, see you then" });
+  compose.touch();
+  await compose.close();
+  expect(backend.of("save_draft")).toHaveLength(1);
+});
+
+test("an existing draft saves even a short edit", async () => {
+  const { backend, ui, compose } = setup();
+  await compose.open({ body: "Hello there" }, { draftId: "d7" });
+  ui.type({ body: "Hi" });
+  compose.touch();
+  await compose.close();
+  expect(backend.of("save_draft")[0].args.draftId).toBe("d7");
 });
 
 test("discarding deletes the saved draft after any save under way", async () => {

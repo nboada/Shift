@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { getSchema } from "@tiptap/core";
 import { Node } from "@tiptap/pm/model";
-import { docToText, emailHtml, extensions, hasMessage, textToHtml } from "./compose";
+import { docToText, emailHtml, extensions, hasMessage, messageEnd, textToHtml } from "./compose";
 
 const schema = getSchema(extensions);
 const t = (text: string, marks?: unknown[]) => ({ type: "text", text, marks });
@@ -59,6 +59,17 @@ test("the placeholder goes once anything is written above the signature", () => 
   expect(hasMessage(doc(p(), p(t("On Monday, Sam wrote:")), { type: "blockquote", content: [p(t("old"))] }))).toBe(
     false,
   );
+});
+
+test('the message ends at the signature, a text signature\'s "-- " line, or the quote', () => {
+  const above = (d: Node) => d.textBetween(0, messageEnd(d), "\n").trim();
+  expect(above(doc(p(), p(), { type: "signature" }))).toBe("");
+  expect(above(doc(p(), p(t("--")), p(t("Nic Boada"))))).toBe("");
+  expect(above(doc(p(t("Hi Sam")), p(), p(t("-- ")), p(t("Nic"))))).toBe("Hi Sam");
+  expect(above(doc(p(t("Thanks")), p(t("On Monday, Sam wrote:")), { type: "quote", attrs: { text: "x" } }))).toBe(
+    "Thanks",
+  );
+  expect(above(doc(p(t("FYI")), p(t("---------- Forwarded message ---------")), p(t("From: Sam"))))).toBe("FYI");
 });
 
 test("a quoted email keeps its own HTML when sent, and quotes its text", () => {

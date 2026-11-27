@@ -509,6 +509,7 @@
 .m-compose .rcpt-suggest { position: absolute; top: calc(100% + 1px); left: 8px; right: 8px; width: auto; min-width: 0; max-height: 40vh; overflow-y: auto; z-index: 5; }
 .m-compose .rcpt-suggest button { min-height: 44px; width: 100%; font-size: 1rem; }
 .mc-cc-toggle { flex: none; min-height: 44px; padding: 0 4px; color: var(--muted); font-size: 0.9375rem; }
+.mc-cc-toggle[aria-expanded="true"] { color: var(--text); }
 .mc-from button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--text); font-size: 1rem; }
 .mc-from button i { color: var(--muted); }
 .mc-files { padding: 10px 16px; border-top: 0; border-bottom: 0.5px solid var(--line); }

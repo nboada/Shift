@@ -87,6 +87,25 @@ export function hasMessage(doc: PMNode) {
   return false;
 }
 
+/** Where the message ends: the signature (an HTML one, or a text one's "-- " line), a reply's "On … wrote:" line, a
+ *  forward's header or the quoted original. */
+export function messageEnd(doc: PMNode) {
+  let to = 0;
+  let stop = false;
+  doc.forEach((node, offset) => {
+    if (stop) return;
+    const text = node.textContent.trim();
+    stop =
+      ["signature", "blockquote", "quote"].includes(node.type.name) ||
+      text === "--" ||
+      text.startsWith("-- ") ||
+      /^On .+ wrote:$/s.test(text) ||
+      /^-{5,} Forwarded message/.test(text);
+    if (!stop) to = offset + node.nodeSize;
+  });
+  return to;
+}
+
 const QUOTE_STYLE = "margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex";
 
 /** An attribute value as the editor's HTML serialises it, back to the HTML it holds. */

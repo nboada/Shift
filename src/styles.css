@@ -1199,7 +1199,7 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .rchip button { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font-size: 10px; color: var(--muted); }
 .rchip button:hover { background: rgb(0 0 0 / 0.08); color: var(--text); }
 .cc-toggle { flex: none; padding: 3px 6px; color: var(--muted); font-size: 12px; font-weight: 500; }
-.cc-toggle:hover { color: var(--text); background: var(--hover); }
+.cc-toggle:hover, .cc-toggle[aria-expanded="true"] { color: var(--text); background: var(--hover); }
 .rcpt-suggest { right: auto; width: 360px; }
 .rcpt-suggest .rcpt-name { font-weight: 500; }
 

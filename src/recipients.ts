@@ -132,10 +132,11 @@ export class Recipients {
         e.key === "ArrowDown" ? Math.min(this.index + 1, this.suggestions.length - 1) : Math.max(this.index - 1, 0);
       this.renderList();
     } else if ((e.key === "Enter" || e.key === "Tab") && open && this.index >= 0) {
-      e.preventDefault();
+      // Tab takes the address and moves on to the next field; Enter stays to add another.
+      if (e.key === "Enter") e.preventDefault();
       this.add([this.suggestions[this.index]]);
     } else if ((e.key === "Enter" || e.key === "Tab") && this.input.value.trim()) {
-      e.preventDefault();
+      if (e.key === "Enter") e.preventDefault();
       this.commit();
     } else if (e.key === "Backspace" && !this.input.value && this.chips.length) {
       this.chips.pop();

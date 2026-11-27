@@ -1370,7 +1370,7 @@ const composeError = (text: string) => ($("#compose-error").textContent = text);
 function showCcRows(cc: boolean, bcc: boolean) {
   composeForm.querySelector<HTMLElement>('[data-row="cc"]')!.hidden = !cc;
   composeForm.querySelector<HTMLElement>('[data-row="bcc"]')!.hidden = !bcc;
-  $("#cc-toggle").hidden = cc && bcc;
+  $("#cc-toggle").setAttribute("aria-expanded", String(cc && bcc));
 }
 
 /** "From" chips, shown only with several accounts and not on replies (they belong to their thread's account). */
@@ -1804,7 +1804,12 @@ $("#compose-discard").addEventListener("click", async () => {
     return;
   void compose.close(true);
 });
-$("#cc-toggle").addEventListener("click", () => {
+// Opens both rows; when they're open, closes the ones without recipients.
+$("#cc-toggle").addEventListener("click", (e) => {
+  if ((e.currentTarget as HTMLElement).getAttribute("aria-expanded") === "true") {
+    showCcRows(!!rcpt.cc.value, !!rcpt.bcc.value);
+    return rcpt.to.focus();
+  }
   showCcRows(true, true);
   rcpt.cc.focus();
 });

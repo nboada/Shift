@@ -76,7 +76,7 @@ export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: st
   function showCc(cc: boolean, bcc: boolean) {
     $("[data-row=cc]").hidden = !cc;
     $("[data-row=bcc]").hidden = !bcc;
-    $(".mc-cc-toggle").hidden = cc && bcc;
+    $(".mc-cc-toggle").setAttribute("aria-expanded", String(cc && bcc));
   }
 
   function renderFrom() {
@@ -198,6 +198,10 @@ export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: st
       case "send":
         return compose.send();
       case "cc":
+        if ($(".mc-cc-toggle").getAttribute("aria-expanded") === "true") {
+          showCc(!!rcpt.cc.value, !!rcpt.bcc.value);
+          return rcpt.to.focus();
+        }
         showCc(true, true);
         return rcpt.cc.focus();
       case "from":
