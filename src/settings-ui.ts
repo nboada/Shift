@@ -1,6 +1,8 @@
 import { iconClass } from "./icons";
 import { DEVICE, IS_IOS } from "./platform";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
+import { checkForUpdate } from "./updates";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ask } from "./dialog";
 import { ACTIONS, comboOf, formatCombo, keysFor } from "./keys";
@@ -201,6 +203,61 @@ const group = (title: string, rows: string) =>
   `<section class="setting-group">${title ? `<h3>${title}</h3>` : ""}${rows}</section>`;
 // ---- sections ----
 
+let sortedJustNow = false;
+/** Drag an account row to reorder the accounts, like the sidebar's mailboxes: the row lifts and follows the pointer,
+ * the others slide out of its way, and the order saves to `accountOrder` on release. A mouse drags the whole row;
+ * on a touch screen only the grip does, so the list still scrolls. */
+function sortAccounts(e: PointerEvent) {
+  const item = (e.target as Element).closest<HTMLElement>(".account-row");
+  if (!item || e.button !== 0) return;
+  if (e.pointerType !== "mouse" && !(e.target as Element).closest(".account-grip")) return;
+  const rows = [...item.parentElement!.querySelectorAll<HTMLElement>(".account-row")];
+  if (rows.length < 2) return;
+  const tops = rows.map((r) => r.getBoundingClientRect().top);
+  const pitch = tops[1] - tops[0];
+  const from = rows.indexOf(item);
+  let to = from;
+  let dragging = false;
+  const move = (ev: PointerEvent) => {
+    const dy = ev.clientY - e.clientY;
+    if (!dragging) {
+      if (Math.abs(dy) < 4) return;
+      dragging = true;
+      item.classList.add("lifted");
+      item.parentElement!.classList.add("sorting");
+    }
+    const y = Math.max(tops[0] - tops[from], Math.min(tops.at(-1)! - tops[from], dy));
+    item.style.transform = `translateY(${y}px)`;
+    to = Math.max(0, Math.min(rows.length - 1, from + Math.round(y / pitch)));
+    rows.forEach((r, i) => {
+      if (r === item) return;
+      const shift = i > from && i <= to ? -pitch : i < from && i >= to ? pitch : 0;
+      r.style.transform = shift ? `translateY(${shift}px)` : "";
+    });
+  };
+  const up = () => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    removeEventListener("pointercancel", up);
+    if (!dragging) return;
+    // The release would otherwise click the row and open that account.
+    sortedJustNow = true;
+    setTimeout(() => (sortedJustNow = false));
+    rows.forEach((r) => (r.style.transform = ""));
+    item.classList.remove("lifted");
+    item.parentElement!.classList.remove("sorting");
+    if (to === from) return;
+    if (to > from) rows[to].after(item);
+    else rows[to].before(item);
+    const order = [...item.parentElement!.querySelectorAll<HTMLElement>(".account-row")].map((r) => r.dataset.email!);
+    // Accounts signed out since keep their place, in case they come back.
+    setSetting("accountOrder", [...order, ...settings.accountOrder.filter((a) => !order.includes(a))]);
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+  addEventListener("pointercancel", up);
+}
+
 /** The signature editor shared by Composer (the default) and each account; `bind` names the setting a field writes to. */
 const signatureFields = (
   sig: { mode: string; text: string; html: string },
@@ -282,16 +339,18 @@ function accountDetail(email: string) {
 const render: Record<string, () => string> = {
   accounts: () => {
     if (accountOpen) return accountDetail(accountOpen);
+    const sortable = ctx.accounts().length > 1;
     const rows = ctx.accounts().map((email) => {
       const a = accountSettings(email);
       return `<button class="account-row" data-cmd="open-account" data-email="${esc(email)}">
-        <span class="account-avatar acct-${a.color}">${esc((a.title || email).charAt(0).toUpperCase())}</span>
+        ${sortable ? `<i class="ti ti-grip-vertical account-grip" data-tip="Drag to reorder" aria-hidden="true"></i>` : ""}<span class="account-avatar acct-${a.color}">${esc((a.title || email).charAt(0).toUpperCase())}</span>
         <span class="setting-text"><strong>${esc(a.title || email)}</strong><span>${a.title ? `${esc(email)} · ` : ""}${ctx.isImap(email) ? "IMAP" : "Gmail"}</span></span>
         <i class="ti ti-chevron-right"></i>
       </button>`;
     });
     return (
-      group("", rows.join("")) +
+      `<section class="setting-group account-list">${rows.join("")}</section>` +
+      (sortable ? `<p class="hint">Drag accounts to change their order here and in the sidebar.</p>` : "") +
       group(
         "",
         row(
@@ -393,7 +452,23 @@ const render: Record<string, () => string> = {
       "Reading",
       row("Mark as read when opened", toggle("general.markReadOnOpen")) +
         row("Ask before deleting", toggle("general.confirmDelete")),
-    ),
+    ) +
+    // iOS updates come from the App Store.
+    (IS_IOS
+      ? ""
+      : group(
+          "Updates",
+          row(
+            `<span id="app-version">Shift</span>`,
+            `<button class="secondary" data-cmd="check-update">Check now</button>`,
+            `<span id="update-state">New versions are offered at launch and by the icon next to Settings.</span>`,
+          ) +
+            row(
+              "Install updates automatically",
+              toggle("general.autoUpdate"),
+              "Download new versions in the background and offer a restart.",
+            ),
+        )),
 
   appearance: () =>
     group(
@@ -549,21 +624,6 @@ const render: Record<string, () => string> = {
 
   composer: () =>
     group(
-      "Signature",
-      row(
-        "Format",
-        segmented("composer.signatureMode", [
-          ["text", "Plain text"],
-          ["html", "HTML"],
-        ]),
-        "Added to new emails, replies and forwards.",
-      ) +
-        signatureFields(
-          signatureFor(undefined),
-          (f) => `data-path="composer.${f === "html" ? "signatureHtml" : "signature"}"`,
-        ),
-    ) +
-    group(
       "Replying",
       row(
         "Write replies",
@@ -601,11 +661,27 @@ const render: Record<string, () => string> = {
           "Undo send",
           segmented("composer.undoSendSeconds", [
             [0, "Off"],
+            [3, "3s"],
             [5, "5s"],
             [10, "10s"],
             [20, "20s"],
           ]),
           "Wait before sending so you can take it back.",
+        ),
+    ) +
+    group(
+      "Signature",
+      row(
+        "Format",
+        segmented("composer.signatureMode", [
+          ["text", "Plain text"],
+          ["html", "HTML"],
+        ]),
+        "Added to new emails, replies and forwards.",
+      ) +
+        signatureFields(
+          signatureFor(undefined),
+          (f) => `data-path="composer.${f === "html" ? "signatureHtml" : "signature"}"`,
         ),
     ),
 
@@ -673,7 +749,10 @@ const render: Record<string, () => string> = {
 };
 
 function show(section: string) {
-  const switching = section !== current;
+  const switching = section !== current || searching;
+  searching = false;
+  const search = searchInput();
+  if (search) search.value = "";
   if (section !== current) accountOpen = null;
   current = section;
   // Fade content in only when the section changes; edits that re-render it (e.g. recording a key) stay still.
@@ -689,8 +768,93 @@ function show(section: string) {
     void renderLabelRules();
   }
   if (section === "inbox") void renderFollowUps();
-  if (section === "general") void refreshOpenAtLogin();
+  if (section === "general") {
+    void refreshOpenAtLogin();
+    void getVersion().then((v) => {
+      const el = document.getElementById("app-version");
+      if (el) el.textContent = `Shift ${v}`;
+    });
+  }
   previewSignature();
+}
+
+const searchInput = () => document.getElementById("settings-search") as HTMLInputElement;
+/** True while the panel shows search results instead of a section. */
+let searching = false;
+
+type Hit = { section: string; title: string; desc: string };
+/** Every setting's title and description, read from each section as it would render now (so names, accounts and
+ * shortcuts are current). */
+function searchIndex(): Hit[] {
+  const open = accountOpen;
+  accountOpen = null;
+  const hits: Hit[] = [];
+  const scratch = document.createElement("div");
+  for (const [section] of SECTIONS) {
+    if (IS_IOS && section === "shortcuts") continue;
+    scratch.innerHTML = render[section]();
+    scratch.querySelectorAll(".setting-row .setting-text, .account-row .setting-text").forEach((t) => {
+      const title = t.querySelector("strong")?.textContent?.trim() ?? "";
+      if (title) hits.push({ section, title, desc: t.querySelector("span")?.textContent?.trim() ?? "" });
+    });
+  }
+  accountOpen = open;
+  return hits;
+}
+
+/** Matches every word of the query, in the setting's title, description or section name. */
+function showResults(query: string) {
+  searching = true;
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const label = (id: string) => SECTIONS.find(([s]) => s === id)![1];
+  const found = searchIndex().filter((h) => {
+    const text = `${label(h.section)} ${h.title} ${h.desc}`.toLowerCase();
+    return words.every((w) => text.includes(w));
+  });
+  // Marks the matched words, escaping the text around them.
+  const pattern = new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+  const mark = (text: string) =>
+    text
+      .split(pattern)
+      .map((part, i) => (i % 2 ? `<mark>${esc(part)}</mark>` : esc(part)))
+      .join("");
+  root()
+    .querySelectorAll<HTMLElement>("[data-section]")
+    .forEach((b) => b.classList.remove("active"));
+  document.getElementById("settings-title")!.textContent = "Search";
+  panel().classList.remove("switching");
+  const sections = [...new Set(found.map((h) => h.section))];
+  panel().innerHTML = found.length
+    ? sections
+        .map((s) =>
+          group(
+            esc(label(s)),
+            found
+              .filter((h) => h.section === s)
+              .map(
+                (h) =>
+                  `<button class="search-hit" data-goto="${s}" data-title="${esc(h.title)}"><span class="setting-text"><strong>${mark(h.title)}</strong>${h.desc ? `<span>${mark(h.desc)}</span>` : ""}</span><i class="ti ti-chevron-right"></i></button>`,
+              )
+              .join(""),
+          ),
+        )
+        .join("")
+    : `<p class="search-empty">No settings match “${esc(query.trim())}”.</p>`;
+}
+
+/** Opens a search result's section and points out the setting: scrolled into view, briefly highlighted. */
+function goToSetting(section: string, title: string) {
+  show(section);
+  const row = [...panel().querySelectorAll<HTMLElement>(".setting-row, .account-row")].find(
+    (r) => r.querySelector(".setting-text strong")?.textContent?.trim() === title,
+  );
+  if (!row) return;
+  row.closest("details")?.setAttribute("open", "");
+  row.scrollIntoView({ block: "center" });
+  row.classList.remove("found");
+  void row.offsetWidth; // so the highlight plays again
+  row.classList.add("found");
+  row.querySelector<HTMLElement>("input, select, textarea, button:not([data-tip])")?.focus({ preventScroll: true });
 }
 
 /** One description per label: the AI only uses labels that have one, and the description is what it goes by. */
@@ -868,6 +1032,7 @@ export function initSettings(c: Ctx) {
   const nav = root().querySelector(".settings-nav")!;
   nav.innerHTML =
     `<button id="settings-close" class="icon settings-close" data-tip="Close (Esc)"><i class="ti ti-x"></i></button>` +
+    `<label class="settings-search"><i class="${iconClass("magnifying-glass")}" aria-hidden="true"></i><input id="settings-search" type="search" placeholder="Search" aria-label="Search settings" spellcheck="false" autocomplete="off" /></label>` +
     SECTIONS.filter(([id]) => !(IS_IOS && id === "shortcuts"))
       .map(
         ([id, label, icon]) =>
@@ -877,6 +1042,29 @@ export function initSettings(c: Ctx) {
   nav.addEventListener("click", (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-section]");
     if (b) show(b.dataset.section!);
+  });
+  const search = searchInput();
+  search.addEventListener("input", () => (search.value.trim() ? showResults(search.value) : show(current)));
+  search.addEventListener("keydown", (e) => {
+    // Escape empties the field first; a second one closes Settings (main.ts).
+    if (e.key === "Escape" && search.value) {
+      e.preventDefault();
+      e.stopPropagation();
+      search.value = "";
+      show(current);
+    } else if (e.key === "Enter") panel().querySelector<HTMLElement>(".search-hit")?.click();
+    else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      panel().querySelector<HTMLElement>(".search-hit")?.focus();
+    }
+  });
+  // ⌘F finds a setting while Settings is open.
+  window.addEventListener("keydown", (e) => {
+    if (settingsOpen() && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      search.focus();
+      search.select();
+    }
   });
   document.getElementById("settings-close")!.addEventListener("click", closeSettings);
   // Clicking the dimmed app around the window closes it, like a sheet.
@@ -962,6 +1150,19 @@ export function initSettings(c: Ctx) {
     });
   });
   panel().addEventListener("scroll", () => closeDropdown());
+  panel().addEventListener("pointerdown", sortAccounts);
+  panel().addEventListener("click", (e) => {
+    const hit = (e.target as Element).closest<HTMLElement>(".search-hit");
+    if (hit) goToSetting(hit.dataset.goto!, hit.dataset.title!);
+  });
+  panel().addEventListener("keydown", (e) => {
+    const hit = (e.target as Element).closest<HTMLElement>(".search-hit");
+    if (!hit || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
+    e.preventDefault();
+    const hits = [...panel().querySelectorAll<HTMLElement>(".search-hit")];
+    const i = hits.indexOf(hit) + (e.key === "ArrowDown" ? 1 : -1);
+    (i < 0 ? searchInput() : hits[i])?.focus();
+  });
 
   // Segmented controls and colour swatches are buttons (see segmented()).
   panel().addEventListener("click", (e) => {
@@ -996,6 +1197,20 @@ export function initSettings(c: Ctx) {
     switch (b.dataset.cmd) {
       case "signout":
         return accountOpen && ctx.onSignOut(accountOpen);
+      case "check-update": {
+        const state = document.getElementById("update-state");
+        b.setAttribute("disabled", "");
+        if (state) state.textContent = "Checking…";
+        try {
+          const found = await checkForUpdate();
+          if (state) state.textContent = found ? `Shift ${found.version} is available` : "You're up to date";
+        } catch (err) {
+          if (state) state.textContent = `Couldn't check: ${err}`;
+        } finally {
+          b.removeAttribute("disabled");
+        }
+        return;
+      }
       case "test-notification":
         return invoke("test_notification").catch((e) =>
           ask({ title: "Couldn't show a notification", message: String(e), confirm: "OK" }),
@@ -1014,6 +1229,7 @@ export function initSettings(c: Ctx) {
         await ctx.onAddImap();
         return show("accounts");
       case "open-account":
+        if (sortedJustNow) return;
         accountOpen = b.dataset.email!;
         return show("accounts");
       case "close-account":

@@ -409,7 +409,13 @@ button.primary:disabled { opacity: 0.6; }
 .acct-stack .acct-av + .acct-av { margin-left: -4px; }
 
 /* The foot of the sidebar: Settings, as a quiet row lined up with the folders. */
-.sidebar-foot { padding: 6px 8px 10px; }
+.sidebar-foot { display: flex; align-items: center; gap: 4px; padding: 6px 8px 10px; }
+/* A newer Shift is waiting (updates.ts): a small orange button at the end of the Settings row. */
+.update-btn { position: relative; display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border-radius: 9px; color: var(--brand); background: color-mix(in srgb, var(--brand) 12%, transparent); animation: fade-in 0.3s ease; }
+.update-btn[hidden] { display: none; }
+.update-btn i { font-size: 18px; }
+.update-btn:hover { background: color-mix(in srgb, var(--brand) 20%, transparent); }
+.update-btn::after { content: ""; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 2px var(--sidebar); }
 .settings-link { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border-radius: 9px; color: var(--sidebar-muted); font: inherit; font-size: 13px; text-align: left; }
 .settings-link i { font-size: 17px; }
 .settings-link:hover { background: var(--sidebar-hover); color: var(--sidebar-strong); }
@@ -1286,6 +1292,21 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .ask footer { display: flex; justify-content: flex-end; gap: 8px; }
 .ask .ask-alt { margin-right: auto; height: auto; font-size: inherit; }
 .ask .primary.danger { background: #e5484d; }
+.update-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.update-icon { width: 44px; height: 44px; flex: none; }
+.update h3 { margin: 0 0 1px; }
+.update-sub { color: var(--muted); font-size: 12.5px; }
+.update-notes { max-height: 220px; overflow-y: auto; margin: 0 0 16px; padding: 10px 12px; border-radius: 9px; background: var(--bg); color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.update-notes[hidden] { display: none; }
+.update-notes ul { margin: 0; padding-left: 16px; }
+.update-notes li + li { margin-top: 4px; }
+.update-notes p { margin: 0; }
+.update-bar { height: 6px; margin: 2px 0 8px; border-radius: 3px; background: var(--bg); overflow: hidden; }
+.update-bar i { display: block; width: 0; height: 100%; border-radius: 3px; background: var(--brand); transition: width 0.2s ease; }
+.update-progress.unknown .update-bar i { width: 30%; animation: update-unknown 1.2s ease-in-out infinite alternate; }
+@keyframes update-unknown { to { transform: translateX(233%); } }
+.update-meta { display: flex; justify-content: space-between; margin-bottom: 16px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.update-error { margin: 0 0 14px; font-size: 12.5px; }
 .imap-signin { width: min(420px, calc(100vw - 32px)); }
 .imap-signin label { display: grid; gap: 4px; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
 .imap-signin input { width: 100%; margin: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text); font: inherit; font-size: 13.5px; }
@@ -1321,7 +1342,14 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 }
 .toast:popover-open { display: flex; align-items: center; gap: 8px; animation: toast-in 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 12px) scale(0.97); } }
-@media (prefers-reduced-motion: reduce) { .toast:popover-open { animation-name: fade-in; } }
+/* Leaving: back down the way it came, a little quicker. A toast replaced by a new one leaves the same way. */
+.toast.leaving { pointer-events: none; animation: toast-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards; }
+@keyframes toast-out { to { opacity: 0; transform: translate(-50%, 12px) scale(0.97); } }
+@media (prefers-reduced-motion: reduce) {
+  .toast:popover-open { animation-name: fade-in; }
+  .toast.leaving { animation-name: fade-out; }
+}
+@keyframes fade-out { to { opacity: 0; } }
 .toast-icon { font-size: 16px; color: var(--toast-muted); }
 .toast[data-kind="success"] .toast-icon { color: #3ccf8e; }
 .toast[data-kind="error"] .toast-icon { color: #ff6961; }
@@ -1499,6 +1527,21 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
   text-align: left;
 }
 .settings-nav button i { font-size: 16px; }
+.settings-search { display: flex; align-items: center; gap: 7px; margin: 0 2px 8px; padding: 0 9px; height: 30px; border-radius: 8px; background: var(--search); color: var(--sidebar-muted); }
+.settings-search:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.settings-search i { font-size: 15px; }
+.settings-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--sidebar-strong); font: inherit; font-size: 13px; }
+.settings-search input::-webkit-search-cancel-button { cursor: pointer; }
+.search-hit { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 0; text-align: left; }
+.search-hit + .search-hit { border-top: 1px solid var(--line); }
+.search-hit .setting-text { flex: 1; }
+.search-hit > i { color: var(--muted); }
+.search-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.search-hit mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: inherit; border-radius: 3px; }
+.search-empty { margin: 24px 0; color: var(--muted); }
+/* The setting a search result led to, highlighted for a moment. */
+.setting-row.found, .account-row.found { animation: setting-found 1.6s ease-out; border-radius: 8px; }
+@keyframes setting-found { 0%, 35% { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 16%, transparent); } }
 .settings-nav .settings-close { display: inline-grid; padding: 0; margin: -6px 0 8px 2px; color: var(--sidebar-muted); }
 .settings-nav button:hover { background: var(--sidebar-hover); }
 .settings-nav button.active { background: var(--sidebar-selected); color: var(--sidebar-strong); box-shadow: var(--pane-shadow); }
@@ -1674,6 +1717,13 @@ button.secondary:disabled { opacity: 0.5; }
 .account-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 0; text-align: left; }
 .account-row .setting-text { flex: 1; }
 .account-row > i { color: var(--muted); }
+.account-list { user-select: none; }
+.account-list .account-row { position: relative; }
+.account-list.sorting .account-row { transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1); }
+.account-list .account-row.lifted { z-index: 1; transition: none; background: var(--card); box-shadow: 0 6px 18px rgb(0 0 0 / 0.14); border-radius: 10px; cursor: grabbing; }
+.account-row > .account-grip { margin: 0 -6px 0 -4px; opacity: 0; touch-action: none; cursor: grab; transition: opacity 0.15s; }
+.account-row:hover > .account-grip, .account-list.sorting .account-grip { opacity: 1; }
+@media (hover: none) { .account-row > .account-grip { opacity: 1; } }
 .account-avatar { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 50%; background: var(--acct, var(--brand)); color: #fff; font-weight: 600; font-size: 17px; }
 .back-link { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px; padding: 4px 6px 4px 2px; color: var(--muted); }
 .back-link:hover { color: var(--text); }

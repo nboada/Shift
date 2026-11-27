@@ -16,7 +16,7 @@
   <img src="docs/screenshots/reader.png" alt="Shift showing the inbox and an open conversation">
 </p>
 
-Shift keeps a copy of your mail in a local database, so opening, searching and switching accounts never waits on the network. Changes sync with Gmail in the background. The app is a Rust core (Tauri 2) with a vanilla TypeScript UI, signed and notarized, and it updates itself.
+Shift keeps a copy of your mail in a local database, so opening, searching and switching accounts never waits on the network. Changes sync with Gmail in the background. The app is a Rust core (Tauri 2) with a vanilla TypeScript UI, signed and notarized, and it offers new versions when they're out.
 
 ## Features
 

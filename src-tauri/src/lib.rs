@@ -8,6 +8,7 @@ mod gmail;
 mod imap;
 mod invite;
 mod settings;
+mod updates;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures::StreamExt;
@@ -717,68 +718,6 @@ async fn sync_all(app: &AppHandle) {
     .await;
 }
 
-/// Release builds check getshiftmail.com for a newer version at launch and every six hours, install it in the
-/// background, then tell the UI so it can offer a restart. Dev and demo builds never update themselves.
-/// Release builds only: dev and demo builds have no signed update feed to install from.
-fn updates_enabled(app: &AppHandle) -> bool {
-    // iOS updates come through the App Store / TestFlight; the updater plugin is desktop-only.
-    cfg!(desktop) && !cfg!(debug_assertions) && !app.state::<State>().demo
-}
-
-/// Checks the update feed and installs a newer version if there is one. Returns its version; the restart is the user's.
-async fn install_update(app: &AppHandle) -> anyhow::Result<Option<String>> {
-    use tauri_plugin_updater::UpdaterExt;
-    let Some(update) = app.updater()?.check().await? else {
-        return Ok(None);
-    };
-    update.download_and_install(|_, _| {}, || {}).await?;
-    Ok(Some(update.version))
-}
-
-fn spawn_update_checks(app: &AppHandle) {
-    if !updates_enabled(app) {
-        return;
-    }
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        loop {
-            match install_update(&app).await {
-                Ok(Some(version)) => {
-                    let _ = app.emit("update-ready", version);
-                    return;
-                }
-                Ok(None) => {}
-                Err(e) => eprintln!("update check failed: {e:#}"),
-            }
-            tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
-        }
-    });
-}
-
-/// Shift → Check for Updates…: the same check, now, with the outcome shown as a toast either way.
-#[cfg(desktop)]
-fn check_for_updates_now(app: &AppHandle) {
-    if !updates_enabled(app) {
-        let _ = app.emit("app-toast", "Updates only work in release builds");
-        return;
-    }
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        match install_update(&app).await {
-            Ok(Some(version)) => {
-                let _ = app.emit("update-ready", version);
-            }
-            Ok(None) => {
-                let msg = format!("You're up to date (Shift {})", app.package_info().version);
-                let _ = app.emit("app-toast", msg);
-            }
-            Err(e) => {
-                let _ = app.emit("app-toast", format!("Couldn't check for updates: {e:#}"));
-            }
-        }
-    });
-}
-
 /// macOS's default menu (About, Edit, Window…) with Check for Updates… under About Shift.
 #[cfg(desktop)]
 fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
@@ -1281,7 +1220,7 @@ fn set_open_at_login(app: AppHandle, enabled: bool) -> R<()> {
     }
 }
 
-/// Restarts into the update `spawn_update_checks` installed.
+/// Restarts into the update `updates::install_update` (or the background install) put in place.
 #[tauri::command]
 fn restart_app(app: AppHandle) {
     // macOS: relaunch through LaunchServices (`open`) once this process has exited. Tauri's restart starts the new
@@ -3112,7 +3051,7 @@ pub fn run() {
         )
         .on_menu_event(|app, event| {
             if event.id() == CHECK_UPDATES {
-                check_for_updates_now(app);
+                updates::check_now(app);
             } else if event.id() == OPEN_SETTINGS {
                 let _ = app.emit(OPEN_SETTINGS, ());
             }
@@ -3211,7 +3150,8 @@ pub fn run() {
                     tokio::time::sleep(Duration::from_secs(wait)).await;
                 }
             });
-            spawn_update_checks(app.handle());
+            app.manage(updates::Updates::default());
+            updates::spawn_checks(app.handle());
             // A click on a new-mail notification brings Shift forward and opens what it announced. Set up before
             // the first notification: ones shown earlier report no clicks.
             {
@@ -3249,6 +3189,10 @@ pub fn run() {
             threads,
             mark_all_read,
             restart_app,
+            updates::pending_update,
+            updates::check_update,
+            updates::install_update,
+            updates::cancel_update,
             ai_rewrite,
             ai_draft_reply,
             ai_labels,

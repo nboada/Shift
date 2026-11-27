@@ -50,6 +50,7 @@
         <nav id="mailboxes" class="mailboxes"></nav>
         <div class="sidebar-foot">
           <button id="settings-btn" class="settings-link" data-tip="Settings (⌘,)"><i class="ti ti-settings"></i><span>Settings</span></button>
+          <button id="update-btn" class="update-btn" hidden><i class="ti ti-circle-arrow-up"></i></button>
         </div>
       </aside>
 
@@ -212,6 +213,23 @@
         <kbd>esc</kbd>
       </div>
       <ul id="palette-list" class="palette-list" role="listbox"></ul>
+    </dialog>
+    <dialog id="update" class="ask update" aria-labelledby="update-title">
+      <div class="update-head">
+        <img src="/shift-icon.png" alt="" class="update-icon" />
+        <div><h3 id="update-title"></h3><div class="update-sub"></div></div>
+      </div>
+      <div class="update-notes"></div>
+      <div class="update-progress" hidden>
+        <div class="update-bar"><i></i></div>
+        <div class="update-meta"><span class="update-status"></span><span class="update-size"></span></div>
+      </div>
+      <p class="error update-error" hidden></p>
+      <footer>
+        <button type="button" class="secondary" data-later>Later</button>
+        <button type="button" class="primary" data-update>Update and restart</button>
+        <button type="button" class="secondary" data-cancel hidden>Cancel</button>
+      </footer>
     </dialog>
     <dialog id="ask" class="ask" aria-labelledby="ask-title">
       <h3 id="ask-title"></h3>

@@ -14,7 +14,8 @@ export const DEFAULT_WRITING_RULES = `- Write in a natural, direct and specific 
 - Never invent facts, opinions, dates, prices or commitments I haven't mentioned.`;
 
 export const DEFAULTS = {
-  general: { syncSeconds: 30, markReadOnOpen: true, confirmDelete: false },
+  /** `autoUpdate`: install new versions in the background (updates.rs) instead of offering them. */
+  general: { syncSeconds: 30, markReadOnOpen: true, confirmDelete: false, autoUpdate: false },
   appearance: {
     theme: "system" as "system" | "light" | "dark",
     density: "comfortable" as "comfortable" | "compact",
@@ -45,7 +46,7 @@ export const DEFAULTS = {
     /** Account new emails are sent from; empty means the first account. Replies always use the thread's account. */
     defaultFrom: "",
     quoteOriginal: true,
-    undoSendSeconds: 5,
+    undoSendSeconds: 3,
   },
   accessibility: {
     zoom: 100,
@@ -61,6 +62,8 @@ export const DEFAULTS = {
   onboarding: { done: false },
   /** Keyed by email address, so each account keeps its own options. */
   accounts: {} as Record<string, Partial<AccountSettings>>,
+  /** Email addresses in the order the user put them (Settings → Accounts); accounts not listed follow, oldest first. */
+  accountOrder: [] as string[],
   ai: {
     provider: "anthropic",
     model: "claude-sonnet-5-5",
@@ -99,6 +102,12 @@ export const ACCOUNT_COLOR_ORDER = ["blue", "red", "orange", "purple", "green"];
 
 export function accountSettings(email: string): AccountSettings {
   return { name: "", title: "", color: "blue", unified: true, ...settings.accounts[email] };
+}
+
+/** `list` in the user's order (`accountOrder`); accounts it doesn't mention keep their place after the rest. */
+export function orderAccounts(list: string[], order: string[] = settings.accountOrder): string[] {
+  const rank = (a: string) => (order.includes(a) ? order.indexOf(a) : order.length);
+  return [...list].sort((a, b) => rank(a) - rank(b));
 }
 
 /** Account options live under the email address, which contains dots, so they can't use dotted paths. */

@@ -3,7 +3,7 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 import type { Attachment } from "../attachments";
 import type { Invite } from "../invite";
 import { formatWhen } from "../schedule";
-import { accountSettings, settings } from "../settings";
+import { accountSettings, orderAccounts, settings } from "../settings";
 
 export type Label = { id: string; name: string; kind: string; unread: number; color: string | null };
 export type Thread = {
@@ -121,7 +121,7 @@ export function createMailCore(
   const undoStack: Change[][] = [];
 
   const mail = {
-    /** Signed-in accounts, oldest first. */
+    /** Signed-in accounts, in the user's order (`accountOrder`), then oldest first. */
     accounts: [] as string[],
     /** Accounts signed in with a password over IMAP rather than with Google. */
     imapAccounts: new Set<string>(),
@@ -155,8 +155,9 @@ export function createMailCore(
       return s;
     },
 
+    /** Takes the accounts in any order and keeps them in the user's (Settings → Accounts). */
     setAccounts(list: string[]) {
-      mail.accounts = list;
+      mail.accounts = orderAccounts(list);
       mail.scope = mail.scope?.filter((a) => list.includes(a)) ?? null;
       if (!mail.scope?.length) mail.scope = null;
     },

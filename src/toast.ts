@@ -20,15 +20,24 @@ export type Toast = {
   readonly open: boolean;
 };
 
-let current: { el: HTMLElement; timer: number } | null = null;
+let current: { el: HTMLElement; timer: number; close: () => void } | null = null;
+
+/** Slides the toast down and out, then takes it away; at once when motion is off (no animation runs then). */
+function leave(el: HTMLElement) {
+  el.classList.add("leaving");
+  el.inert = true;
+  void Promise.all(el.getAnimations().map((a) => a.finished)).then(
+    () => el.remove(),
+    () => el.remove(),
+  );
+}
 
 /** The single toast at the bottom of the window. A new one replaces whatever is showing. */
 export function toast(
   msg: string,
   { action, ms = action ? 8000 : 4000, kind = "info", icon = KIND_ICONS[kind] }: ToastOptions = {},
 ): Toast {
-  current?.el.remove();
-  clearTimeout(current?.timer);
+  current?.close();
 
   // A popover, so it opens in the top layer above any open modal (composer, sheets).
   const el = document.createElement("div");
@@ -64,7 +73,8 @@ export function toast(
   const timer = action ? Object.assign(document.createElement("span"), { className: "toast-timer" }) : null;
   if (timer) el.append(timer);
 
-  const state = { el, timer: 0 };
+  let closed = false;
+  const state = { el, timer: 0, close };
   let deadline = 0;
   let left = ms;
   const arm = (wait: number) => {
@@ -81,7 +91,9 @@ export function toast(
   };
   function close() {
     clearTimeout(state.timer);
-    el.remove();
+    if (closed) return;
+    closed = true;
+    leave(el);
     if (current === state) current = null;
   }
   el.onpointerenter = () => {
@@ -105,7 +117,7 @@ export function toast(
     },
     close,
     get open() {
-      return el.isConnected;
+      return !closed;
     },
   };
 }

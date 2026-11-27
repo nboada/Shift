@@ -82,9 +82,15 @@ import json, os, datetime
 v = os.environ["VERSION"]
 url = f"https://github.com/{os.environ['REPO']}/releases/download/v{v}/Shift-{v}.app.tar.gz"
 entry = {"signature": os.environ["SIG"], "url": url}
+# The update dialog lists what's new: the site's changelog entry for this version when there is one.
+notes = os.environ["NOTES"]
+changelog = f"site/src/content/changelog/{v}.md"
+if os.path.exists(changelog):
+    body = open(changelog).read().split("---", 2)[-1].strip()
+    notes = body or notes
 feed = {
     "version": v,
-    "notes": os.environ["NOTES"],
+    "notes": notes,
     "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     # One universal build serves both architectures.
     "platforms": {"darwin-aarch64": entry, "darwin-x86_64": entry},

@@ -25,6 +25,7 @@ import { arrange } from "./sidebar";
 import { textToHtml } from "./compose";
 import { createEditor, foldReplyQuote } from "./editor";
 import { ask, askChoice, askOpen, askText, askTextAndColor } from "./dialog";
+import { initUpdates, updateOpen } from "./updates";
 import { addImapAccount } from "./imap-signin";
 import { Recipients } from "./recipients";
 import { rank } from "./palette-match";
@@ -1208,7 +1209,7 @@ function inMail() {
 
 function inAccounts() {
   const n = (mail.scope ?? mail.accounts.filter((x) => accountSettings(x).unified !== false)).length;
-  return n < 2 ? "" : n === 2 ? " in both accounts" : ` in all ${n} mail.accounts`;
+  return n < 2 ? "" : n === 2 ? " in both accounts" : ` in all ${n} accounts`;
 }
 
 async function emptyMailbox(id: string) {
@@ -1960,7 +1961,7 @@ $("#mailboxes").addEventListener("click", (e) => {
 async function newLabel() {
   const list = mail.scope ?? mail.accounts.filter((a) => accountSettings(a).unified !== false);
   const where =
-    list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} mail.accounts`;
+    list.length === 1 ? accountName(list[0]) : list.length === 2 ? "both accounts" : `all ${list.length} accounts`;
   const picked = await askTextAndColor({
     title: "New label",
     message: mail.accounts.length > 1 ? `Created ${inMail()} for ${where}.` : `Created ${inMail()}.`,
@@ -2514,7 +2515,7 @@ paletteEl.addEventListener("click", (e) => e.target === paletteEl && paletteEl.c
 let bindings = bindingsFrom({});
 
 document.addEventListener("keydown", (e) => {
-  if (app.hidden || askOpen() || paletteEl.open || ($("#cleanup") as HTMLDialogElement).open) return;
+  if (app.hidden || askOpen() || updateOpen() || paletteEl.open || ($("#cleanup") as HTMLDialogElement).open) return;
   const combo = comboOf(e);
   if (settingsOpen()) {
     const a = bindings[combo];
@@ -2714,8 +2715,10 @@ onSettingsChange((path) => {
     !compose.state?.inline
   )
     void openThread(mail.selected);
-  // Account names and colours show in the sidebar.
-  if (mail.accounts.length && (path === "*" || path.startsWith("accounts"))) drawMailboxes();
+  // The sidebar, the From menu and the phone's account list follow the user's account order.
+  if (mail.accounts.length && (path === "*" || path === "accountOrder")) mail.setAccounts(mail.accounts);
+  // Account names, colours and order show in the sidebar.
+  if (mail.accounts.length && (path === "*" || path.startsWith("account"))) drawMailboxes();
   bindings = bindingsFrom(settings.shortcuts);
   renderViewButton();
   updateShortcutTips();
@@ -2818,6 +2821,8 @@ const saveBeforeQuit = async () => {
 onSaveError((err) => toast(`Couldn't save your settings: ${err}`, { kind: "error" }));
 // ⌘Q: the backend waits (up to 5 s) for this before quitting.
 listen("before-quit", () => void saveBeforeQuit().finally(() => invoke("quit_now")));
+initUpdates(saveBeforeQuit);
+// With Settings → General → "Install updates automatically", the release is already in place: only restart.
 listen<string>("update-ready", (e) =>
   toast(`Shift ${e.payload} is ready`, {
     ms: 10 * 60_000,

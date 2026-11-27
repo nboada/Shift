@@ -183,6 +183,17 @@ const ids = (list: Thread[]) => list.map((t) => t.id).sort();
 
 afterEach(() => {
   settings.general.markReadOnOpen = true;
+  settings.accountOrder = [];
+});
+
+test("accounts follow the user's order, then the order they came in", () => {
+  const { core } = setup();
+  expect(core.accounts).toEqual([ANA, WORK]);
+  settings.accountOrder = [WORK, "gone@example.com"];
+  core.setAccounts([ANA, WORK]);
+  expect(core.accounts).toEqual([WORK, ANA]);
+  // With one account in view, a new email still goes from it; with all of them, from the first.
+  expect(core.defaultAccount()).toBe(WORK);
 });
 
 test("archiving removes the thread from the Inbox, and undo puts it back", async () => {
