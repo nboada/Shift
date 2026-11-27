@@ -900,7 +900,7 @@ function showMenu(
           .map((x) =>
             x === "-"
               ? "<hr>"
-              : `<button role="${x.checked === undefined ? "menuitem" : `menuitemcheckbox" aria-checked="${x.checked}`}" data-target="${x.id}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
+              : `<button role="${x.checked === undefined ? "menuitem" : `menuitemcheckbox" aria-checked="${x.checked}`}" data-target="${esc(x.id)}" class="${x.danger ? "danger" : ""}" ${x.disabled ? "disabled" : ""}>
         ${x.dot ? labelDot(x.label, x.dot) : x.icon ? iconHtml(x.icon) : ""}${x.acct ? `<span class="account-dot acct-${x.acct}"></span>` : ""}<span>${esc(x.label)}</span>${x.key ? `<kbd>${esc(x.key)}</kbd>` : ""}${
           x.checked === undefined ? "" : `<i class="ti ti-check menu-check" aria-hidden="true"></i>`
         }</button>`,
