@@ -260,7 +260,7 @@ export function mountEmail(
   frame.classList.add("loading");
   frame.srcdoc =
     `<meta http-equiv="Content-Security-Policy" content="${csp}"><script defer src="${script}"${
-      settings.appearance.uniformEmailFont ? ' data-even="1"' : ""
+      settings.appearance.uniformEmailFont ? ` data-even="${settings.appearance.emailTextSize}"` : ""
     }${fit ? ' data-fit="1"' : ""}></script>` +
     EMAIL_CSS +
     clean.html +
@@ -307,6 +307,35 @@ export const ACCORDION = { duration: 320, easing: "cubic-bezier(0.32, 0.72, 0, 1
  *  animation ends, so it slides shut instead of vanishing; a click mid-animation reverses from where it is. */
 /** Collapsed messages whose email hasn't been rendered yet; opening one renders it first (`toggleMessage`). */
 const lazyMounts = new WeakMap<HTMLElement, () => Promise<void>>();
+
+/** Resolves once a frame has reported its height (it drops "loading"), or after 400 ms if it never does. */
+function sized(frame: HTMLIFrameElement) {
+  return new Promise<void>((done) => {
+    const until = performance.now() + 400;
+    const check = () =>
+      !frame.classList.contains("loading") || performance.now() > until ? done() : requestAnimationFrame(check);
+    check();
+  });
+}
+
+/** Prepares a conversation's collapsed emails in the background, newest first, a few at a time, so opening one
+ * doesn't wait for its frame to be built and sized. Older ones past `limit` are still built on first open. */
+function prepareCollapsed(container: HTMLElement, limit = 12) {
+  const queue = [...container.querySelectorAll<HTMLElement>(":scope > .message.collapsed")]
+    .filter((el) => lazyMounts.has(el))
+    .reverse()
+    .slice(0, limit);
+  const step = () => {
+    const el = queue.shift();
+    if (!el?.isConnected) return;
+    const mount = lazyMounts.get(el);
+    lazyMounts.delete(el);
+    void mount?.().then(() => setTimeout(step, 30));
+    if (!mount) step();
+  };
+  // After the newest email has had its turn.
+  setTimeout(step, 300);
+}
 
 export function toggleMessage(header: HTMLElement) {
   const el = header.parentElement!;
@@ -460,11 +489,7 @@ export function renderMessages(container: HTMLElement, messages: Message[], acco
           });
         }
         showInlineImages(frame, m, account);
-        // Resolves once the frame has loaded (and sized itself), or after a moment if it never says so.
-        return new Promise<void>((done) => {
-          frame.addEventListener("load", () => done(), { once: true });
-          setTimeout(done, 600);
-        });
+        return sized(frame);
       };
       // A long conversation used to build a document for every message up front; collapsed ones wait until opened.
       if (el.classList.contains("collapsed")) lazyMounts.set(el, mount);
@@ -492,6 +517,7 @@ export function renderMessages(container: HTMLElement, messages: Message[], acco
       </footer>`),
     );
   }
+  prepareCollapsed(container);
 }
 
 /** Clicks and keys inside a container of message cards: open and close, reply, answer an invite, open a file. */
