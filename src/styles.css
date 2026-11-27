@@ -1419,12 +1419,17 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 :root[data-layout="wide"] .app:not([data-view="reader"]) .reader-pane { display: none; }
 :root[data-layout="wide"] .resizer { display: none; }
 :root[data-layout="wide"] .reader-pane .back { display: inline-grid; }
+/* Back to the list: pulled left out of the toolbar's 28px padding so the chevron sits midway between the pane's edge
+ * and the action buttons (12px either side of the 30px button, the toolbar's gap). */
+.reader-pane .toolbar .back { margin-left: -16px; }
 /* Spark proportions: ~40px rows, wide sender column, 14px subject and snippet, small light date. */
 :root[data-layout="wide"] .threads li[data-id] { display: flex; align-items: center; gap: 12px; padding: 5px 14px 5px 6px; margin-top: 1px; border-radius: 10px; }
 :root[data-layout="wide"] .threads .avatar-ring { flex: none; width: 30px; height: 30px; }
-:root[data-layout="wide"] .threads .from { flex: 0 0 300px; }
-:root[data-layout="wide"] .threads .subject { order: 1; flex: 0 1 auto; max-width: 50%; font-size: 14px; font-weight: 500; }
-:root[data-layout="wide"] .threads li.unread .subject { font-weight: 650; }
+:root[data-layout="wide"] .threads .from { flex: 0 0 240px; }
+/* Weight steps down along the row: sender, then subject a step lighter, then the snippet. Unread lifts the first two. */
+:root[data-layout="wide"] .threads .subject { order: 1; flex: 0 1 auto; max-width: 50%; font-size: 14px; font-weight: 450; }
+:root[data-layout="wide"] .threads li.unread .from { font-weight: 650; }
+:root[data-layout="wide"] .threads li.unread .subject { font-weight: 550; }
 :root[data-layout="wide"] .threads .snippet { order: 2; flex: 1; min-width: 0; display: block; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
 :root[data-layout="wide"] .threads li > .row-labels { order: 2; align-self: center; }
 :root[data-layout="wide"] .threads .date { order: 3; flex: none; margin-left: 12px; font-size: 11.5px; font-weight: 500; }
@@ -1537,8 +1542,11 @@ button.primary.small { padding: 5px 12px; font-size: 12.5px; }
 .search-hit .setting-text { flex: 1; }
 .search-hit > i { color: var(--muted); }
 .search-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
-.search-hit mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: inherit; border-radius: 3px; }
-.search-empty { margin: 24px 0; color: var(--muted); }
+.settings-panel h3 mark, .search-hit mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: inherit; border-radius: 3px; }
+.search-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 80px auto 0; text-align: center; color: var(--muted); }
+.search-empty i { margin-bottom: 8px; font-size: 32px; opacity: 0.6; }
+.search-empty strong { color: var(--text); font-size: 14px; font-weight: 600; }
+.search-empty span { font-size: 12.5px; }
 /* The setting a search result led to, highlighted for a moment. */
 .setting-row.found, .account-row.found { animation: setting-found 1.6s ease-out; border-radius: 8px; }
 @keyframes setting-found { 0%, 35% { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 16%, transparent); } }

@@ -782,33 +782,49 @@ const searchInput = () => document.getElementById("settings-search") as HTMLInpu
 /** True while the panel shows search results instead of a section. */
 let searching = false;
 
-type Hit = { section: string; title: string; desc: string };
-/** Every setting's title and description, read from each section as it would render now (so names, accounts and
- * shortcuts are current). */
+/** `group` is the heading the setting sits under (Signature, Sending…); `account` is set for an account's own page. */
+type Hit = { section: string; group: string; title: string; desc: string; account?: string };
+/** Every setting's heading, title and description, read from each section as it would render now (so names,
+ * accounts and shortcuts are current), plus each account's own page. */
 function searchIndex(): Hit[] {
   const open = accountOpen;
-  accountOpen = null;
   const hits: Hit[] = [];
   const scratch = document.createElement("div");
-  for (const [section] of SECTIONS) {
-    if (IS_IOS && section === "shortcuts") continue;
-    scratch.innerHTML = render[section]();
+  const read = (section: string, html: string, account?: string) => {
+    scratch.innerHTML = html;
     scratch.querySelectorAll(".setting-row .setting-text, .account-row .setting-text").forEach((t) => {
       const title = t.querySelector("strong")?.textContent?.trim() ?? "";
-      if (title) hits.push({ section, title, desc: t.querySelector("span")?.textContent?.trim() ?? "" });
+      if (!title) return;
+      const group = t.closest(".setting-group")?.querySelector(":scope > h3")?.textContent?.trim() ?? "";
+      hits.push({ section, group, title, desc: t.querySelector("span")?.textContent?.trim() ?? "", account });
     });
+  };
+  accountOpen = null;
+  for (const [section] of SECTIONS) {
+    if (IS_IOS && section === "shortcuts") continue;
+    read(section, render[section]());
+  }
+  for (const email of ctx.accounts()) {
+    accountOpen = email;
+    read("accounts", render.accounts(), email);
   }
   accountOpen = open;
   return hits;
 }
 
-/** Matches every word of the query, in the setting's title, description or section name. */
+/** Where a result sits: "Composer · Signature", "Accounts · Personal · Signature". */
+function hitPlace(h: Hit) {
+  const section = SECTIONS.find(([s]) => s === h.section)![1];
+  const account = h.account ? accountSettings(h.account).title || h.account : "";
+  return [section, account, h.group].filter(Boolean).join(" · ");
+}
+
+/** Matches every word of the query, in the setting's title, description, heading, account or section name. */
 function showResults(query: string) {
   searching = true;
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const label = (id: string) => SECTIONS.find(([s]) => s === id)![1];
   const found = searchIndex().filter((h) => {
-    const text = `${label(h.section)} ${h.title} ${h.desc}`.toLowerCase();
+    const text = `${hitPlace(h)} ${h.account ?? ""} ${h.title} ${h.desc}`.toLowerCase();
     return words.every((w) => text.includes(w));
   });
   // Marks the matched words, escaping the text around them.
@@ -823,31 +839,41 @@ function showResults(query: string) {
     .forEach((b) => b.classList.remove("active"));
   document.getElementById("settings-title")!.textContent = "Search";
   panel().classList.remove("switching");
-  const sections = [...new Set(found.map((h) => h.section))];
+  const places = [...new Set(found.map(hitPlace))];
   panel().innerHTML = found.length
-    ? sections
-        .map((s) =>
+    ? places
+        .map((place) =>
           group(
-            esc(label(s)),
+            // One span: the heading lays out its children apart (title left, button right).
+            `<span>${mark(place)}</span>`,
             found
-              .filter((h) => h.section === s)
+              .filter((h) => hitPlace(h) === place)
               .map(
                 (h) =>
-                  `<button class="search-hit" data-goto="${s}" data-title="${esc(h.title)}"><span class="setting-text"><strong>${mark(h.title)}</strong>${h.desc ? `<span>${mark(h.desc)}</span>` : ""}</span><i class="ti ti-chevron-right"></i></button>`,
+                  `<button class="search-hit" data-goto="${h.section}" data-group="${esc(h.group)}" data-title="${esc(h.title)}"${h.account ? ` data-account="${esc(h.account)}"` : ""}><span class="setting-text"><strong>${mark(h.title)}</strong>${h.desc ? `<span>${mark(h.desc)}</span>` : ""}</span><i class="ti ti-chevron-right"></i></button>`,
               )
               .join(""),
           ),
         )
         .join("")
-    : `<p class="search-empty">No settings match “${esc(query.trim())}”.</p>`;
+    : `<div class="search-empty"><i class="${iconClass("magnifying-glass")}" aria-hidden="true"></i><strong>No results for “${esc(query.trim())}”</strong><span>Try another word, or pick a section on the left.</span></div>`;
 }
 
 /** Opens a search result's section and points out the setting: scrolled into view, briefly highlighted. */
-function goToSetting(section: string, title: string) {
+function goToSetting(section: string, group: string, title: string, account?: string) {
   show(section);
-  const row = [...panel().querySelectorAll<HTMLElement>(".setting-row, .account-row")].find(
+  if (account) {
+    accountOpen = account;
+    show("accounts");
+  }
+  const rows = [...panel().querySelectorAll<HTMLElement>(".setting-row, .account-row")].filter(
     (r) => r.querySelector(".setting-text strong")?.textContent?.trim() === title,
   );
+  // The same title can sit under two headings (Text size → Sidebar); prefer the one under the result's.
+  const row =
+    rows.find(
+      (r) => (r.closest(".setting-group")?.querySelector(":scope > h3")?.textContent?.trim() ?? "") === group,
+    ) ?? rows[0];
   if (!row) return;
   row.closest("details")?.setAttribute("open", "");
   row.scrollIntoView({ block: "center" });
@@ -1153,7 +1179,7 @@ export function initSettings(c: Ctx) {
   panel().addEventListener("pointerdown", sortAccounts);
   panel().addEventListener("click", (e) => {
     const hit = (e.target as Element).closest<HTMLElement>(".search-hit");
-    if (hit) goToSetting(hit.dataset.goto!, hit.dataset.title!);
+    if (hit) goToSetting(hit.dataset.goto!, hit.dataset.group ?? "", hit.dataset.title!, hit.dataset.account);
   });
   panel().addEventListener("keydown", (e) => {
     const hit = (e.target as Element).closest<HTMLElement>(".search-hit");
