@@ -34,6 +34,8 @@ A real bug gets a GitHub issue first (what happens, how to reproduce it, what fi
 
 ## Public repository
 
+Use the GitHub noreply identity (`nboada <10217132+nboada@users.noreply.github.com>`) for commits and tags. Never use a personal email address or a machine hostname in author, committer or tagger metadata.
+
 The repository is public (MIT), and so is anything ever pushed, pull-request branches included. Never commit secrets (keys, tokens, `.env` files, certificates, the update signing key), real email content or addresses from anyone's mailbox, screenshots of a real inbox, app databases, `.wrangler` state or client data; demo fixtures stay invented. Check the staged diff before every commit and stage named paths rather than everything. GitHub secret scanning and push protection are on, and `.github/workflows/secrets.yml` runs gitleaks on every push and pull request. Secrets live in the Keychain or `.env.local` (git-ignored), never in the tree.
 
 ## Architecture
