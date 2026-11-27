@@ -1,0 +1,14 @@
+---
+import type { ImageMetadata } from "astro";
+
+// A screenshot of the app from its demo mailbox, in both themes; the header's light/dark switch picks one.
+interface Props {
+  light: ImageMetadata;
+  dark: ImageMetadata;
+  alt: string;
+  eager?: boolean;
+}
+const { light, dark, alt, eager = false } = Astro.props;
+---
+<img class="shot is-light" src={light.src} width={light.width / 2} height={light.height / 2} alt={alt} loading={eager ? "eager" : "lazy"} decoding="async" />
+<img class="shot is-dark" src={dark.src} width={dark.width / 2} height={dark.height / 2} alt="" aria-hidden="true" loading="lazy" decoding="async" />

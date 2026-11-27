@@ -26,94 +26,14 @@ if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
   new Lenis({ autoRaf: true, anchors: { offset: -72 } });
 }
 
-// Plays the ⌘K palette: types a few searches and shows the matching commands, like the app does.
+// The hero's Split / Wide switch: shows the app in the layout picked.
 (() => {
-  const palette = document.querySelector(".palette");
-  if (!palette || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const query = palette.querySelector(".query");
-  const list = palette.querySelector(".cmds");
-
-  // Labels and default keys from src/keys.ts.
-  const COMMANDS = [
-    ["New email", "pencil-simple", "C"],
-    ["Search", "magnifying-glass", "/"],
-    ["Check for mail", "arrows-clockwise", "⌘R"],
-    ["Archive", "archive", "E"],
-    ["Delete", "trash", "⌫"],
-    ["Mark read / unread", "envelope-simple-open", "U"],
-    ["Pin", "push-pin", "D"],
-    ["Reply", "arrow-u-up-left", "R"],
-    ["Reply all", "arrow-bend-double-up-left", "⇧R"],
-    ["Forward", "arrow-u-up-right", "F"],
-    ["Label", "tag", "L"],
-    ["Move to", "folder-simple", "V"],
-    ["Spam", "warning-octagon", "!"],
-    ["Settings", "gear-six", "⌘,"],
-    ["Undo", "arrow-counter-clockwise", "⌘Z"],
-  ];
-  const SEARCHES = ["arc", "rep", "lab", "mov", "und"];
-  const ROWS = 4;
-
-  // Word starts rank above matches inside a word, as in the app's palette.
-  const matches = (q) =>
-    COMMANDS.map((c) => {
-      const label = c[0].toLowerCase();
-      const at = label.indexOf(q);
-      const wordStart = at === 0 || label[at - 1] === " ";
-      return { c, score: at < 0 ? -1 : wordStart ? 2 : 1 };
-    })
-      .filter((m) => m.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map((m) => m.c);
-
-  // Every command stays in the list; a search only moves rows and fades them in or out, so changes glide.
-  list.innerHTML =
-    '<div class="cmd-hl"></div>' +
-    COMMANDS.map(
-      ([label, icon, key]) =>
-        `<div class="cmd"><i class="ph ph-${icon}" aria-hidden="true"></i>${label}<kbd>${key}</kbd></div>`,
-    ).join("");
-  list.classList.add("live");
-  const rows = new Map(COMMANDS.map((c, i) => [c, list.children[i + 1]]));
-  const highlight = list.firstElementChild;
-
-  const render = (q, pressed = false) => {
-    query.textContent = q || "Type a command";
-    query.classList.toggle("empty", !q);
-    const shown = matches(q.toLowerCase()).slice(0, ROWS);
-    for (const [c, row] of rows) {
-      const i = shown.indexOf(c);
-      row.classList.toggle("out", i < 0);
-      row.classList.toggle("on", i === 0);
-      if (i >= 0) row.dataset.slot = i;
-    }
-    highlight.classList.toggle("pressed", pressed);
-  };
-
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  let running = false;
-
-  async function play() {
-    running = true;
-    for (let n = 0; ; n++) {
-      const word = SEARCHES[n % SEARCHES.length];
-      for (let i = 1; i <= word.length; i++) {
-        render(word.slice(0, i));
-        await wait(140 + Math.random() * 80);
-      }
-      await wait(900);
-      render(word, true);
-      await wait(500);
-      render("");
-      await wait(900);
-    }
-  }
-
-  new IntersectionObserver((entries, obs) => {
-    if (entries[0].isIntersecting && !running) {
-      obs.disconnect();
-      render("");
-      play();
-    }
-  }).observe(palette);
+  const stage = document.querySelector(".hero-stage");
+  const buttons = document.querySelectorAll("[data-layout]:is(button)");
+  buttons.forEach((b) =>
+    b.addEventListener("click", () => {
+      stage.dataset.layout = b.dataset.layout;
+      buttons.forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+    }),
+  );
 })();

@@ -1,5 +1,18 @@
 ---
 import Base from "../layouts/Base.astro";
+import Shot from "../components/Shot.astro";
+import splitLight from "../assets/app/split-light.webp";
+import splitDark from "../assets/app/split-dark.webp";
+import wideLight from "../assets/app/wide-light.webp";
+import wideDark from "../assets/app/wide-dark.webp";
+import accountsLight from "../assets/app/accounts-light.webp";
+import accountsDark from "../assets/app/accounts-dark.webp";
+import paletteLight from "../assets/app/palette-light.webp";
+import paletteDark from "../assets/app/palette-dark.webp";
+import composerLight from "../assets/app/composer-light.webp";
+import composerDark from "../assets/app/composer-dark.webp";
+// The AI icon the app uses (Tabler message-ai).
+import aiIcon from "@tabler/icons/outline/message-ai.svg?raw";
 ---
 <Base title="Shift: a fast email app for Mac" description="Shift is a fast, keyboard-friendly email app for macOS. Gmail, iCloud, Fastmail or your own domain in one inbox, and your mail stays on your Mac." path="/" appToggle>
   <main id="main">
@@ -19,51 +32,22 @@ import Base from "../layouts/Base.astro";
     </section>
 
     <div class="wrap">
-      <!-- The app drawn in HTML with invented mail, so no real inbox is shown. -->
-      <div class="stage hero-stage">
-        <div class="app" role="img" aria-label="The Shift window: mailboxes, a message list and an open email">
-          <div class="app-bar"><span></span><span></span><span></span></div>
-          <div class="app-body">
-            <div class="app-side">
-              <span class="compose"><i class="ph ph-pencil-simple" aria-hidden="true"></i>New Email</span>
-              <ul>
-                <li class="on"><i class="ph ph-tray" aria-hidden="true"></i>Inbox<em>4</em></li>
-                <li><i class="ph ph-push-pin" aria-hidden="true"></i>Pinned</li>
-                <li><i class="ph ph-paper-plane-tilt" aria-hidden="true"></i>Sent</li>
-                <li><i class="ph ph-file" aria-hidden="true"></i>Drafts</li>
-                <li><i class="ph ph-clock" aria-hidden="true"></i>Scheduled</li>
-                <li><i class="ph ph-archive" aria-hidden="true"></i>Archive</li>
-              </ul>
-            </div>
-            <div class="app-list">
-              <div class="search"><i class="ph ph-magnifying-glass" aria-hidden="true"></i>Search</div>
-              <ol>
-                <li class="on"><i class="av a">MR</i><b>Maya Reyes</b><time>9:41</time><span>Launch checklist for Thursday</span></li>
-                <li><i class="av b">OS</i><b>Oak &amp; Stone Studio</b><time>9:12</time><span>Revised floor plans attached</span></li>
-                <li><i class="av c">JL</i><b>Jonah Lee</b><time>Mon</time><span>Lunch next week?</span></li>
-                <li><i class="av d">TP</i><b>Team Planning</b><time>Mon</time><span>Q1 roadmap draft</span></li>
-                <li><i class="av e">NB</i><b>Northbank Bikes</b><time>Sun</time><span>Your service is booked</span></li>
-              </ol>
-            </div>
-            <div class="app-reader">
-              <h2>Launch checklist for Thursday</h2>
-              <div class="from"><i class="av a">MR</i><span><b>Maya Reyes</b> to you, Sam</span></div>
-              <p>Hi both,</p>
-              <p>Here's where we are: copy is final, the store listing is approved, and the press note goes out at 9am.</p>
-              <p>Could you check the screenshots one last time before noon?</p>
-            </div>
+      <!-- Screenshots from the demo mailbox (SHIFT_DEMO=1), so no real inbox is shown. -->
+      <div class="stage hero-stage" data-layout="split">
+        <div class="segmented labelled layout-switch" role="group" aria-label="Layout">
+          <button type="button" data-layout="split" aria-pressed="true"><i class="ph ph-columns" aria-hidden="true"></i>Split view</button>
+          <button type="button" data-layout="wide" aria-pressed="false"><i class="ph ph-rows" aria-hidden="true"></i>Wide view</button>
+        </div>
+        <div class="hero-shots">
+          <div class="layout-shot" data-shot="split">
+            <Shot light={splitLight} dark={splitDark} alt="Shift in split view: mailboxes, the Smart Inbox and an open email side by side" eager />
+          </div>
+          <div class="layout-shot" data-shot="wide">
+            <Shot light={wideLight} dark={wideDark} alt="Shift in wide view: the Smart Inbox across the whole window, one email per line" />
           </div>
         </div>
-
-        <div class="float float-left" aria-hidden="true">
-          <div class="float-title">Send later</div>
-          <div class="opt on">Tomorrow morning<small>8:00 am</small></div>
-          <div class="opt">This weekend<small>Sat 9:00 am</small></div>
-          <div class="opt">Next week<small>Mon 8:00 am</small></div>
-        </div>
-        <div class="float float-right" aria-hidden="true">
-          <i class="ph ph-check-circle" aria-hidden="true"></i>Archived<kbd>⌘Z</kbd>
-        </div>
+        <p class="layout-note" data-note="split">Split view keeps the list beside the email you're reading.</p>
+        <p class="layout-note" data-note="wide">Wide view gives the list the whole window, one email per line. Opening one fills the same space.</p>
       </div>
 
       <ul class="keys" aria-label="Some default shortcuts">
@@ -75,77 +59,9 @@ import Base from "../layouts/Base.astro";
       </ul>
     </div>
 
-    <section id="features" class="row wrap">
+    <section id="features" class="row center wrap">
       <div class="row-text">
-        <h2>Every account.<br />One inbox.</h2>
-        <p>Work and personal side by side, each with its own colour. Or look at one account at a time.</p>
-        <ul class="points">
-          <li><i class="ph ph-tray" aria-hidden="true"></i><b>Unified inbox</b>Leave any account out of it in Settings.</li>
-          <li><i class="ph ph-stack" aria-hidden="true"></i><b>Smart Inbox</b>Pinned mail first, then new mail from people, then notifications, then what you've already read.</li>
-          <li><i class="ph ph-magnifying-glass" aria-hidden="true"></i><b>Instant search</b>Results appear as you type, from the copy on your Mac.</li>
-          <li><i class="ph ph-bell" aria-hidden="true"></i><b>Notifications that matter</b>Optionally only from people, not newsletters.</li>
-        </ul>
-      </div>
-      <div class="stage">
-        <div class="panel accounts" aria-hidden="true">
-          <div class="acct"><i class="dot blue"></i>sam@northbank.studio<em>12</em></div>
-          <div class="acct"><i class="dot green"></i>sam.lee@gmail.com<em>3</em></div>
-          <div class="acct"><i class="dot pink"></i>hello@samlee.design<em>1</em></div>
-          <hr />
-          <div class="mini"><i class="dot blue"></i><b>Maya Reyes</b><span>Launch checklist</span><time>9:41</time></div>
-          <div class="mini"><i class="dot green"></i><b>Mum</b><span>Photos from Sunday</span><time>9:30</time></div>
-          <div class="mini"><i class="dot pink"></i><b>Ari Novak</b><span>Logo feedback, round 2</span><time>8:55</time></div>
-          <div class="mini"><i class="dot blue"></i><b>Jonah Lee</b><span>Lunch next week?</span><time>Mon</time></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="row center wrap">
-      <div class="row-text">
-        <h2>Hands stay on the keys.</h2>
-        <p>Archive, reply, label and move without the mouse. Every shortcut can be remapped, and the defaults match Spark and Apple Mail.</p>
-        <ul class="points">
-          <li><i class="ph ph-command" aria-hidden="true"></i><b>Command palette</b>Press ⌘K and type what you want to do.</li>
-          <li><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><b>Undo</b>Archived the wrong thread? ⌘Z brings it back.</li>
-        </ul>
-      </div>
-      <div class="stage">
-        <div class="panel palette" aria-hidden="true">
-          <div class="palette-input"><i class="ph ph-magnifying-glass" aria-hidden="true"></i><span class="query">ar</span><span class="caret"></span></div>
-          <div class="cmds">
-          <div class="cmd on"><i class="ph ph-archive" aria-hidden="true"></i>Archive<kbd>E</kbd></div>
-          <div class="cmd"><i class="ph ph-envelope-simple-open" aria-hidden="true"></i>Mark read / unread<kbd>U</kbd></div>
-          <div class="cmd"><i class="ph ph-magnifying-glass" aria-hidden="true"></i>Search<kbd>/</kbd></div>
-          <div class="cmd"><i class="ph ph-arrows-clockwise" aria-hidden="true"></i>Check for mail<kbd>⌘R</kbd></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="row flip wrap">
-      <div class="row-text">
-        <h2>Send it later.<br />Or take it back.</h2>
-        <p>Write tonight and have it arrive in the morning. Shift sends it at the time you picked, even with the window closed.</p>
-        <ul class="points">
-          <li><i class="ph ph-paper-plane-tilt" aria-hidden="true"></i><b>Undo send</b>The email waits on your Mac for a few seconds before it goes.</li>
-          <li><i class="ph ph-shield-check" aria-hidden="true"></i><b>Trackers blocked</b>Remote images stay hidden until you load them.</li>
-        </ul>
-      </div>
-      <div class="stage">
-        <div class="panel composer" aria-hidden="true">
-          <div class="field"><span>To</span><i class="chip">maya@northbank.studio</i></div>
-          <div class="field"><span>Subject</span>Screenshots checked</div>
-          <p>All good on my end. Two small fixes in the second one, notes attached.</p>
-          <div class="send-row">
-            <span class="send">Send</span><span class="send-more"><i class="ph ph-clock" aria-hidden="true"></i>Tomorrow, 8:00 am</span>
-          </div>
-        </div>
-        <div class="toast" aria-hidden="true">Sending in 5s<b>Undo</b></div>
-      </div>
-    </section>
-
-    <section id="ai" class="row center wrap">
-      <div class="row-text">
+        <span class="ai-mark" aria-hidden="true"><Fragment set:html={aiIcon} /></span>
         <h2>AI when you want it.</h2>
         <p>Bring your own AI account, from Anthropic, OpenAI, Google, a local model or another provider. It's off until you add one, and requests go straight from your Mac to that provider.</p>
       </div>
@@ -161,11 +77,11 @@ import Base from "../layouts/Base.astro";
         </div>
         <div class="stage bento-card">
           <h3><i class="ph ph-tag" aria-hidden="true"></i>Labels that sort themselves</h3>
-          <p>Describe your labels once. New mail is labelled as it arrives, and one click undoes it.</p>
+          <p>Describe your labels once in plain words. New mail is labelled as it arrives.</p>
           <div class="panel ai-labels" aria-hidden="true">
-            <div class="mini"><i class="dot blue"></i><b>Northbank</b><span>Invoice #2048</span><i class="chip">Invoice</i></div>
+            <div class="mini"><i class="dot blue"></i><b>Northbank</b><span>Invoice #2048</span><i class="chip green">Invoice</i></div>
             <div class="mini"><i class="dot green"></i><b>Ari Novak</b><span>Logo feedback</span><i class="chip">Clients</i></div>
-            <div class="mini"><i class="dot pink"></i><b>Jonah Lee</b><span>Lunch next week?</span><i class="chip">Personal</i></div>
+            <div class="mini"><i class="dot pink"></i><b>Jonah Lee</b><span>Lunch next week?</span><i class="chip violet">Personal</i></div>
           </div>
         </div>
         <div class="stage bento-card">
@@ -177,6 +93,61 @@ import Base from "../layouts/Base.astro";
             <div class="mini"><i class="dot pink"></i><b>Old threads</b><span>8 emails</span><time>Archive</time></div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section class="row wrap">
+      <div class="row-text">
+        <h2>Every account.<br />One inbox.</h2>
+        <p>Gmail, iCloud, Fastmail or your own domain side by side, each with its own colour. Or open one account at a time.</p>
+        <ul class="points">
+          <li><i class="ph ph-tray" aria-hidden="true"></i><b>Unified inbox</b>Leave any account out of it in Settings.</li>
+          <li><i class="ph ph-stack" aria-hidden="true"></i><b>Smart Inbox</b>Pinned mail first, then new mail from people, then notifications, then what you've already seen.</li>
+          <li><i class="ph ph-magnifying-glass" aria-hidden="true"></i><b>Instant search</b>Results appear as you type, from the copy on your Mac.</li>
+          <li><i class="ph ph-bell" aria-hidden="true"></i><b>Notifications that matter</b>Optionally only from people, not newsletters.</li>
+        </ul>
+      </div>
+      <div class="stage bleed">
+        <Shot light={accountsLight} dark={accountsDark} alt="The sidebar with two accounts in one Inbox, and the Smart Inbox's Pinned and People sections" />
+      </div>
+    </section>
+
+    <section class="row center wrap">
+      <div class="row-text">
+        <h2>Hands stay on the keys.</h2>
+        <p>Archive, reply, label and move without the mouse. Every shortcut can be remapped, and the defaults match Spark and Apple Mail.</p>
+        <ul class="points">
+          <li><i class="ph ph-command" aria-hidden="true"></i><b>Command palette</b>Press ⌘K and type what you want to do.</li>
+          <li><i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><b>Undo</b>Archived the wrong thread? ⌘Z brings it back.</li>
+        </ul>
+      </div>
+      <div class="stage">
+        <div class="framed palette-shot">
+          <Shot light={paletteLight} dark={paletteDark} alt="The command palette listing actions for the open email with their shortcuts" />
+        </div>
+      </div>
+    </section>
+
+    <section class="row flip wrap">
+      <div class="row-text">
+        <h2>Send it later.<br />Or take it back.</h2>
+        <p>Write tonight and have it arrive in the morning. Shift sends it at the time you picked, even with the window closed.</p>
+        <ul class="points">
+          <li><i class="ph ph-paper-plane-tilt" aria-hidden="true"></i><b>Undo send</b>The email waits on your Mac for a few seconds before it goes.</li>
+          <li><i class="ph ph-shield-check" aria-hidden="true"></i><b>Trackers blocked</b>Remote images stay hidden until you load them.</li>
+        </ul>
+      </div>
+      <div class="stage">
+        <div class="framed composer-shot">
+          <Shot light={composerLight} dark={composerDark} alt="The composer with a draft, sending from one of two accounts" />
+        </div>
+        <div class="float later" aria-hidden="true">
+          <div class="float-title">Send later</div>
+          <div class="opt">Later today<small>6:00 pm</small></div>
+          <div class="opt on">Tomorrow morning<small>8:00 am</small></div>
+          <div class="opt">Next week<small>Mon 8:00 am</small></div>
+        </div>
+        <div class="toast" aria-hidden="true">Sending in 5s<b>Undo</b></div>
       </div>
     </section>
 
