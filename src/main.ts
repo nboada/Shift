@@ -2746,8 +2746,12 @@ function start(list: string[]) {
   else app.hidden = false;
   mail.refresh();
   // Adding an account from inside the walkthrough calls start() again; the open walkthrough carries on.
-  if (onboardingDue() && $("#onboarding").hidden)
-    startOnboarding({ accounts: () => mail.accounts, addAccount, keyLabel });
+  if (onboardingDue() && $("#onboarding").hidden) {
+    const begin = () => startOnboarding({ accounts: () => mail.accounts, addAccount, keyLabel });
+    // On the phone, once its screens (and their stylesheet) are in, so the walkthrough doesn't flash unstyled.
+    if (phone) void phone.then(begin);
+    else begin();
+  }
 }
 
 /** The iPhone gets its own screens on the same core (src/mobile), loaded only there. */

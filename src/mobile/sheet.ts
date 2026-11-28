@@ -6,6 +6,8 @@ import { settings } from "../settings";
 
 export type Item = {
   label: string;
+  /** A second line under the label, such as the time a Send later choice sends at. */
+  detail?: string;
   icon: string;
   run: () => void;
   danger?: boolean;
@@ -52,7 +54,7 @@ export function actionSheet(title: string, items: Item[]) {
   d.innerHTML = `<div class="m-sheet-group">${title ? `<h2>${esc(title)}</h2>` : ""}${items
     .map(
       (x, i) =>
-        `<button type="button" data-i="${i}" class="${x.danger ? "quiet-danger" : ""}" ${x.disabled ? "disabled" : ""} ${x.checked === undefined ? "" : `role="menuitemcheckbox" aria-checked="${x.checked}"`}>${icon(x.icon)}<span>${esc(x.label)}</span>${x.checked ? icon("check") : ""}</button>`,
+        `<button type="button" data-i="${i}" class="${x.danger ? "quiet-danger" : ""}" ${x.disabled ? "disabled" : ""} ${x.checked === undefined ? "" : `role="menuitemcheckbox" aria-checked="${x.checked}"`}>${icon(x.icon)}<span>${esc(x.label)}${x.detail ? `<small>${esc(x.detail)}</small>` : ""}</span>${x.checked ? icon("check") : ""}</button>`,
     )
     .join("")}</div><div class="m-sheet-group"><button type="button" class="m-sheet-cancel">Cancel</button></div>`;
   d.addEventListener("click", (e) => {

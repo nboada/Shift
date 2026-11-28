@@ -484,21 +484,24 @@ const render: Record<string, () => string> = {
     ) +
     group(
       "Message list",
-      row(
-        "Layout",
-        segmented("appearance.layout", [
-          ["split", "Split"],
-          ["wide", "Wide list"],
-        ]),
-        "Wide list shows one email per line and opens emails full width.",
-      ) +
-        row(
-          "Density",
-          segmented("appearance.density", [
-            ["comfortable", "Comfortable"],
-            ["compact", "Compact"],
-          ]),
-        ) +
+      // The phone has one layout and one density.
+      (IS_IOS
+        ? ""
+        : row(
+            "Layout",
+            segmented("appearance.layout", [
+              ["split", "Split"],
+              ["wide", "Wide list"],
+            ]),
+            "Wide list shows one email per line and opens emails full width.",
+          ) +
+          row(
+            "Density",
+            segmented("appearance.density", [
+              ["comfortable", "Comfortable"],
+              ["compact", "Compact"],
+            ]),
+          )) +
         row("Show avatars", toggle("appearance.showAvatars")) +
         row(
           "Preview lines",
@@ -543,7 +546,9 @@ const render: Record<string, () => string> = {
       row(
         "New mail notifications",
         toggle("notifications.enabled"),
-        "For Inbox mail that arrives while Shift is open.",
+        IS_IOS
+          ? "For new Inbox mail. Your iPhone lets Shift check now and then in the background, and it checks right away when you open it."
+          : "For Inbox mail that arrives while Shift is open.",
       ) +
         row("Play a sound", toggle("notifications.sound")) +
         row(
@@ -557,7 +562,9 @@ const render: Record<string, () => string> = {
       row(
         "Try it",
         `<button class="secondary" data-cmd="test-notification"><i class="ti ti-bell"></i> Send a test notification</button>`,
-        "Uses your sound setting. If nothing shows, allow Shift in System Settings → Notifications.",
+        IS_IOS
+          ? "Uses your sound setting. If nothing shows, allow Shift in the iPhone's Settings → Apps → Shift → Notifications."
+          : "Uses your sound setting. If nothing shows, allow Shift in System Settings → Notifications.",
       ),
     ),
 
@@ -620,28 +627,35 @@ const render: Record<string, () => string> = {
       "Follow-ups",
       `<p class="group-note">When you reply, the conversation moves from your “needs my reply” label to your “waiting” label, and back when they write again. Pick a label for each to turn it on.</p><div id="follow-up-labels"></div>`,
     ) +
-    group("Sidebar", row("Show unread count", toggle("inbox.unreadBadge"), "In the sidebar and on Shift's Dock icon.")),
+    (IS_IOS
+      ? group("Mailboxes", row("Show unread count", toggle("inbox.unreadBadge"), "Next to Inbox in Mailboxes."))
+      : group(
+          "Sidebar",
+          row("Show unread count", toggle("inbox.unreadBadge"), "In the sidebar and on Shift's Dock icon."),
+        )),
 
   composer: () =>
     group(
       "Replying",
-      row(
-        "Write replies",
-        segmented("composer.replyIn", [
-          ["inline", "In the email"],
-          ["window", "In a window"],
-        ]),
-        "Replies and forwards open under the email, or in a window like a new email.",
-      ) +
-        row(
-          "Default reply",
-          segmented("composer.defaultReply", [
-            ["reply", "Reply"],
-            ["all", "Reply all"],
-          ]),
-          "What R and ⌘R do. The other is always ⇧R.",
-        ) +
-        row("Quote the original message", toggle("composer.quoteOriginal")),
+      // The phone always writes in its compose sheet and asks which reply each time.
+      (IS_IOS
+        ? ""
+        : row(
+            "Write replies",
+            segmented("composer.replyIn", [
+              ["inline", "In the email"],
+              ["window", "In a window"],
+            ]),
+            "Replies and forwards open under the email, or in a window like a new email.",
+          ) +
+          row(
+            "Default reply",
+            segmented("composer.defaultReply", [
+              ["reply", "Reply"],
+              ["all", "Reply all"],
+            ]),
+            "What R and ⌘R do. The other is always ⇧R.",
+          )) + row("Quote the original message", toggle("composer.quoteOriginal")),
     ) +
     group(
       "Sending",
@@ -686,26 +700,32 @@ const render: Record<string, () => string> = {
     ),
 
   accessibility: () =>
-    group(
-      "Zoom",
-      row(
-        "Zoom",
-        select(
-          "accessibility.zoom",
-          ZOOM_STEPS.map((z): [number, string] => [z, `${z}%`]),
-        ),
-        "Also ⌘+ ⌘− and ⌘0.",
-      ),
-    ) +
-    group(
-      "Text size",
-      row("Sidebar", segmented("accessibility.textSize.sidebar", TEXT_SIZES)) +
-        row(
-          "Message list",
-          segmented("accessibility.textSize.list", TEXT_SIZES),
-          "Email text size is in Appearance → Emails.",
-        ),
-    ) +
+    // On the phone, text follows the iPhone's own text size (Dynamic Type) instead of zoom and per-pane sizes.
+    (IS_IOS
+      ? `<p class="hint">Text follows your iPhone's text size, in Settings → Display &amp; Brightness → Text Size. Email text size is in Appearance → Emails.</p>`
+      : "") +
+    (IS_IOS
+      ? ""
+      : group(
+          "Zoom",
+          row(
+            "Zoom",
+            select(
+              "accessibility.zoom",
+              ZOOM_STEPS.map((z): [number, string] => [z, `${z}%`]),
+            ),
+            "Also ⌘+ ⌘− and ⌘0.",
+          ),
+        ) +
+        group(
+          "Text size",
+          row("Sidebar", segmented("accessibility.textSize.sidebar", TEXT_SIZES)) +
+            row(
+              "Message list",
+              segmented("accessibility.textSize.list", TEXT_SIZES),
+              "Email text size is in Appearance → Emails.",
+            ),
+        )) +
     group(
       "Motion",
       row("Reduce motion", toggle("accessibility.reduceMotion"), "Turns off animations and transitions."),
@@ -713,10 +733,11 @@ const render: Record<string, () => string> = {
 
   swipes: () =>
     group(
-      "Two-finger swipe on the message list",
+      IS_IOS ? "Swiping a conversation" : "Two-finger swipe on the message list",
       row("Swipe left", select("swipes.left", SWIPE_ACTIONS)) +
         row("Swipe right", select("swipes.right", SWIPE_ACTIONS)),
-    ) + `<p class="hint">Swipe a row sideways on the trackpad, or drag it on a touch screen.</p>`,
+    ) +
+    `<p class="hint">${IS_IOS ? "Swipe far enough that the icon grows, then let go. A shorter swipe springs back." : "Swipe a row sideways on the trackpad, or drag it on a touch screen."}</p>`,
 
   shortcuts: () => {
     const keys = keysFor(settings.shortcuts);
@@ -761,6 +782,8 @@ function show(section: string) {
     .querySelectorAll<HTMLElement>("[data-section]")
     .forEach((b) => b.classList.toggle("active", b.dataset.section === section));
   document.getElementById("settings-title")!.textContent = SECTIONS.find(([id]) => id === section)![1];
+  const back = root().querySelector(".settings-back span");
+  if (back) back.textContent = accountOpen && section === "accounts" ? "Accounts" : "Settings";
   panel().innerHTML = render[section]();
   placeThumbs();
   if (section === "ai") {
@@ -1056,19 +1079,42 @@ window.addEventListener(
 export function initSettings(c: Ctx) {
   ctx = c;
   const nav = root().querySelector(".settings-nav")!;
+  // The phone shows one pane at a time, like iOS Settings: the sections, then the one tapped, with a way back.
+  if (IS_IOS) {
+    root().classList.add("settings-phone");
+    root()
+      .querySelector(".settings-head")!
+      .insertAdjacentHTML(
+        "afterbegin",
+        `<button type="button" class="settings-back" data-cmd="sections" aria-label="Back to Settings"><i class="${iconClass("caret-left")}" aria-hidden="true"></i><span>Settings</span></button>`,
+      );
+  }
   nav.innerHTML =
-    `<button id="settings-close" class="icon settings-close" data-tip="Close (Esc)"><i class="ti ti-x"></i></button>` +
+    (IS_IOS
+      ? `<header class="settings-nav-head"><h2>Settings</h2><button id="settings-close" class="settings-done">Done</button></header>`
+      : `<button id="settings-close" class="icon settings-close" data-tip="Close (Esc)"><i class="ti ti-x"></i></button>`) +
     `<label class="settings-search"><i class="${iconClass("magnifying-glass")}" aria-hidden="true"></i><input id="settings-search" type="search" placeholder="Search" aria-label="Search settings" spellcheck="false" autocomplete="off" /></label>` +
     SECTIONS.filter(([id]) => !(IS_IOS && id === "shortcuts"))
       .map(
         ([id, label, icon]) =>
-          `<button data-section="${id}"><i class="${iconClass(icon)}"></i><span>${label}</span></button>`,
+          `<button data-section="${id}"><i class="${iconClass(icon)}"></i><span>${label}</span>${IS_IOS ? `<i class="${iconClass("caret-right")}" aria-hidden="true"></i>` : ""}</button>`,
       )
       .join("");
   nav.addEventListener("click", (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-section]");
-    if (b) show(b.dataset.section!);
+    if (!b) return;
+    show(b.dataset.section!);
+    paneOpen(true);
   });
+  root()
+    .querySelector(".settings-head")!
+    .addEventListener("click", (e) => {
+      if (!(e.target as Element).closest("[data-cmd=sections]")) return;
+      // An account's own page goes back to the list of accounts first.
+      if (!accountOpen || current !== "accounts") return paneOpen(false);
+      accountOpen = null;
+      show("accounts");
+    });
   const search = searchInput();
   search.addEventListener("input", () => (search.value.trim() ? showResults(search.value) : show(current)));
   search.addEventListener("keydown", (e) => {
@@ -1342,12 +1388,23 @@ export function initSettings(c: Ctx) {
   });
 }
 
-export function openSettings(section = current) {
+/** On the phone, whether a section is showing rather than the list of them. */
+function paneOpen(on: boolean) {
+  if (!IS_IOS) return;
+  root().classList.toggle("section-open", on);
+  root().querySelector<HTMLElement>(".settings-nav")!.inert = on;
+  root().querySelector<HTMLElement>(".settings-body")!.inert = !on;
+  if (on) panel().scrollTop = 0;
+}
+
+/** Without a section, the phone opens on the list of sections and the Mac on the last one shown. */
+export function openSettings(section?: string) {
   const r = root();
   r.classList.remove("closing");
   r.hidden = false;
   if (!r.open) r.showModal();
-  show(section);
+  show(section ?? current);
+  paneOpen(!!section);
 }
 
 const reducedMotion = () =>

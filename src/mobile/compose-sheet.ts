@@ -109,6 +109,7 @@ export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: st
     show(f, state) {
       hiding?.cancel();
       hiding = null;
+      d.classList.remove("leaving");
       $("#mc-title").textContent = state.title;
       rcpt.to.set(f.to ?? "");
       rcpt.cc.set(f.cc ?? "");
@@ -132,6 +133,8 @@ export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: st
     },
     hide() {
       (document.activeElement as HTMLElement | null)?.blur();
+      // The app behind comes forward while the sheet slides away.
+      d.classList.add("leaving");
       if (reduced()) return d.close();
       const from = d.style.transform || "translateY(0)";
       d.style.transform = "";
@@ -335,7 +338,7 @@ export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: st
   function later() {
     const times = quickTimes(new Date(), settings.scheduling);
     actionSheet("Send later", [
-      ...times.map((t): Item => ({ label: `${t.label} · ${formatWhen(t.at)}`, icon: "clock", run: () => void compose.schedule(t.at) })),
+      ...times.map((t): Item => ({ label: t.label, detail: formatWhen(t.at), icon: "clock", run: () => void compose.schedule(t.at) })),
       { label: "Pick Date & Time…", icon: "calendar", run: () => pickTime(times.find((t) => t.id === "tomorrow")!.at) },
     ]);
   }

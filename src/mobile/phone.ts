@@ -42,8 +42,11 @@ import { type Page, barButton, createStack } from "./stack";
 
 /** Rows drawn at a time; more as the list nears its end. */
 const PAGE = 60;
-/** How far a row slides before letting go runs its swipe action. */
-const SWIPE_AT = 80;
+/** How far a row slides before letting go runs its swipe action: a share of its width, at least SWIPE_MIN. */
+const SWIPE_AT = 0.35;
+const SWIPE_MIN = 110;
+/** How far a finger moves before a press turns into a swipe or a scroll, whichever way it went. */
+const SLOP = 8;
 /** How far the list is pulled down past its top before letting go checks for mail. */
 const PULL_AT = 70;
 /** How long a row is held before its menu opens. */
@@ -59,6 +62,10 @@ const SWIPES: Record<Exclude<SwipeAction, "none">, [label: string, icon: string]
   star: ["Pin", "push-pin"],
   spam: ["Spam", "warning-octagon"],
 };
+
+/** A tap of feedback from the phone (none on the Mac); a failure is no reason to interrupt anything. */
+const haptic = (style: "light" | "medium" | "selection" | "success") =>
+  void invoke("haptic", { style }).catch(() => {});
 
 /** Icons are decoration here: every control already has a name, so VoiceOver skips the glyph. */
 const icon = (name: string) => `<i class="${iconClass(name)}" aria-hidden="true"></i>`;
@@ -160,7 +167,9 @@ export function mountPhone(mail: MailCore) {
       `<button type="button" class="m-text m-select-all" data-act="select-all" hidden>Select All</button>`,
     );
     page.end.innerHTML = `<button type="button" class="m-text" data-act="edit">Edit</button>`;
-    page.content.innerHTML = `<button type="button" class="m-search m-search-open" aria-label="Search mail">${icon("magnifying-glass")}<span>Search</span></button>
+    page.content.innerHTML = `<p class="m-status" aria-live="polite"></p>
+      <button type="button" class="m-search m-search-open" aria-label="Search mail">${icon("magnifying-glass")}<span>Search</span></button>
+      <div class="m-banner" hidden><span></span><button type="button" class="m-text" data-act="empty"></button></div>
       <ul class="m-list" aria-label="Conversations"></ul>`;
     page.scroller.insertAdjacentHTML(
       "afterbegin",
@@ -168,10 +177,7 @@ export function mountPhone(mail: MailCore) {
     );
     page.el.insertAdjacentHTML(
       "beforeend",
-      `<footer class="m-toolbar m-list-tools">
-        <button type="button" class="m-text quiet-danger m-empty-box" data-act="empty" hidden></button>
-        <span class="m-status" aria-live="polite"></span>${barButton("compose", "pencil-simple-line", "New email")}
-      </footer>
+      `<button type="button" class="m-fab" data-act="compose" aria-label="New email">${icon("pencil-simple-line")}</button>
       <footer class="m-toolbar m-edit-tools" role="toolbar" aria-label="Selected conversations" hidden>
         ${tool("mark", "envelope-simple-open", "Mark")}${tool("move", "folder", "Move")}${tool("label", "tag", "Label")}${tool("archive", "archive", "Archive")}${tool("trash", "trash", "Delete")}
       </footer>`,
@@ -247,8 +253,20 @@ export function mountPhone(mail: MailCore) {
     return [SYSTEM.find(([s]) => s === mail.mailbox)?.[2] ?? "tag", title, text];
   }
 
+  /** A finger on a row (swiping or holding): redraws wait until it lets go, so the row stays under it. */
+  let touching = false;
+  let redrawLater = false;
+  function letGo() {
+    touching = false;
+    if (redrawLater) {
+      redrawLater = false;
+      renderList();
+    }
+  }
+
   /** Draws the list on screen: the search results while searching, otherwise the mailbox. */
   function renderList() {
+    if (touching) return void (redrawLater = true);
     if (searchView) return renderResults();
     if (!list) return;
     if (!editing) list.setTitle(boxName(mail.mailbox));
@@ -296,12 +314,13 @@ export function mountPhone(mail: MailCore) {
     const edit = el.querySelector<HTMLButtonElement>("[data-act=edit]")!;
     edit.hidden = mail.mailbox === "SCHEDULED";
     edit.disabled = !editing && !mail.threads.length;
-    const empty = el.querySelector<HTMLButtonElement>("[data-act=empty]")!;
+    const banner = el.querySelector<HTMLElement>(".m-banner")!;
     const box = mail.mailbox === "TRASH" || mail.mailbox === "SPAM" ? boxName(mail.mailbox) : null;
-    empty.hidden = !box;
+    banner.hidden = !box || !mail.threads.length || !!mail.search;
     if (box) {
-      empty.textContent = `Empty ${box}`;
-      empty.disabled = !mail.threads.length;
+      banner.querySelector("span")!.textContent =
+        box === "Trash" ? "Emails in Trash are deleted after 30 days." : "Emails in Spam are deleted after 30 days.";
+      banner.querySelector("button")!.textContent = `Empty ${box} Now`;
     }
   }
 
@@ -330,36 +349,49 @@ export function mountPhone(mail: MailCore) {
     });
 
     // Row swipes: the row slides over a strip in the colour of the action it will run, with its icon, which grows
-    // once letting go would run it. Archive and delete slide the row away; the others spring back. Holding still
-    // instead opens the row's menu.
+    // (with a tap of feedback) once letting go would run it. Archive and delete slide the row away; the others spring
+    // back. A move counts once it passes SLOP: mostly sideways makes it a swipe, otherwise the list scrolls. Holding
+    // still instead opens the row's menu.
     ul.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "mouse" || e.clientX < 24) return;
+      if (e.pointerType === "mouse" || e.clientX < 24 || touching) return;
       const li = (e.target as Element).closest<HTMLElement>(".m-row");
       if (!li || mail.mailbox === "SCHEDULED" || (editing && page === list)) return;
       const body = li.querySelector<HTMLElement>(".m-row-body")!;
       const strip = li.querySelector<HTMLElement>(".m-swipe")!;
+      const at = Math.max(SWIPE_MIN, li.clientWidth * SWIPE_AT);
       const x0 = e.clientX;
       const y0 = e.clientY;
       let dx = 0;
       let swiping = false;
+      let armed = false;
+      touching = true;
       li.classList.add("pressing");
       const press = window.setTimeout(() => {
         done();
+        letGo();
         suppressTap = true;
         setTimeout(() => (suppressTap = false), 600);
         const t = mail.threads.find((x) => x.id === li.dataset.id);
-        if (t) rowMenu(t, li);
+        if (!t) return;
+        haptic("medium");
+        rowMenu(t, li);
       }, PRESS_MS);
       const move = (ev: PointerEvent) => {
-        dx = ev.clientX - x0;
+        const mx = ev.clientX - x0;
+        const my = ev.clientY - y0;
         if (!swiping) {
-          if (Math.abs(ev.clientY - y0) > 10) return done();
-          if (Math.abs(dx) < 10) return;
+          if (Math.hypot(mx, my) < SLOP) return;
+          if (Math.abs(mx) < Math.abs(my) * 1.3) {
+            done();
+            return letGo();
+          }
           swiping = true;
           clearTimeout(press);
           li.classList.remove("pressing");
           li.setPointerCapture(ev.pointerId);
         }
+        // Measured from where the swipe was recognised, so the row doesn't jump by the slop.
+        dx = mx - Math.sign(mx) * SLOP;
         const action = dx < 0 ? settings.swipes.left : settings.swipes.right;
         if (action === "none") dx = Math.sign(dx) * Math.min(Math.abs(dx), 24);
         body.style.transform = `translateX(${dx}px)`;
@@ -367,32 +399,36 @@ export function mountPhone(mail: MailCore) {
         li.dataset.side = dx < 0 ? "left" : "right";
         strip.querySelector("i")!.className = action === "none" ? "" : swipeIcon(action, li);
         strip.querySelector("span")!.textContent = action === "none" ? "" : SWIPES[action][0];
-        li.classList.toggle("armed", action !== "none" && Math.abs(dx) > SWIPE_AT);
+        const now = action !== "none" && Math.abs(dx) > at;
+        if (now !== armed) haptic("light");
+        armed = now;
+        li.classList.toggle("armed", now);
       };
       const up = () => {
         done();
-        if (!swiping) return;
+        if (!swiping) return letGo();
         suppressTap = true;
         setTimeout(() => (suppressTap = false), 400);
         const action = dx < 0 ? settings.swipes.left : settings.swipes.right;
         const t = mail.threads.find((x) => x.id === li.dataset.id);
-        const go = t && action !== "none" && Math.abs(dx) > SWIPE_AT;
+        const go = t && armed;
         const asks = action === "trash" && (settings.general.confirmDelete || labelsOf(t!).includes("TRASH"));
         const away = go && ["archive", "trash", "spam"].includes(action) && !asks;
         const to = away ? Math.sign(dx) * li.clientWidth : 0;
         const anim = body.animate([{ transform: `translateX(${dx}px)` }, { transform: `translateX(${to}px)` }], {
-          duration: away ? 220 : 320,
-          easing: "cubic-bezier(0.32, 0.72, 0, 1)",
+          duration: away ? 240 : 380,
+          easing: away ? "cubic-bezier(0.4, 0, 1, 1)" : "cubic-bezier(0.32, 0.72, 0, 1)",
           fill: "forwards",
         });
         body.style.transform = "";
         void anim.finished.then(() => {
-          if (go) void act(action, [t]);
           if (!away || !li.isConnected) {
             anim.cancel();
             li.classList.remove("armed");
             delete li.dataset.swipe;
           }
+          letGo();
+          if (go) void act(action, [t]);
         });
       };
       const done = () => {
@@ -400,11 +436,21 @@ export function mountPhone(mail: MailCore) {
         li.classList.remove("pressing");
         li.removeEventListener("pointermove", move);
         li.removeEventListener("pointerup", up);
-        li.removeEventListener("pointercancel", up);
+        li.removeEventListener("pointercancel", cancel);
+      };
+      // The system took the touch (a scroll began, a call came in): the row goes back, nothing runs.
+      const cancel = () => {
+        if (!swiping) {
+          done();
+          return letGo();
+        }
+        dx = Math.sign(dx) * Math.min(Math.abs(dx), at - 1);
+        armed = false;
+        up();
       };
       li.addEventListener("pointermove", move);
       li.addEventListener("pointerup", up);
-      li.addEventListener("pointercancel", up);
+      li.addEventListener("pointercancel", cancel);
     });
   }
 
@@ -435,6 +481,7 @@ export function mountPhone(mail: MailCore) {
         if (over > PULL_AT && !armed && !editing) {
           armed = true;
           pull.classList.add("armed");
+          haptic("light");
         }
       },
       { passive: true },
@@ -478,7 +525,7 @@ export function mountPhone(mail: MailCore) {
     el.classList.toggle("m-editing", on);
     el.querySelector<HTMLElement>("[data-act=edit]")!.textContent = on ? "Done" : "Edit";
     el.querySelector<HTMLElement>("[data-act=edit]")!.classList.toggle("m-strong", on);
-    el.querySelector<HTMLElement>(".m-list-tools")!.hidden = on;
+    el.querySelector<HTMLElement>(".m-fab")!.hidden = on;
     el.querySelector<HTMLElement>(".m-edit-tools")!.hidden = !on;
     syncEdit();
   }
@@ -987,7 +1034,8 @@ export function mountPhone(mail: MailCore) {
 
   // ---- Conversation
 
-  let convo: { id: string; page: Page } | null = null;
+  /** `shown` settles once the page has slid in: emails (iframes) are drawn after that, so the slide stays smooth. */
+  let convo: { id: string; page: Page; shown: Promise<void> } | null = null;
 
   function openConversation(id: string) {
     const page = stack.page("", "m-convo");
@@ -1026,9 +1074,8 @@ export function mountPhone(mail: MailCore) {
       mail.closeThread();
       renderList();
     };
-    convo = { id, page };
+    convo = { id, page, shown: stack.push(page) };
     showConversation(id);
-    void stack.push(page);
   }
 
   function moreSheet(t: Thread) {
@@ -1059,8 +1106,10 @@ export function mountPhone(mail: MailCore) {
     page.content.innerHTML = "";
     page.scroller.scrollTop = 0;
     syncConvoTools();
+    const shown = convo.shown;
     mail
-      .openThread(id, (messages) => {
+      .openThread(id, async (messages) => {
+        await shown;
         if (convo?.id !== id) return;
         page.setTitle(messages[0]?.subject || t?.subject || "(no subject)");
         page.content.innerHTML = `<div class="m-chips"></div>`;
