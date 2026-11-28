@@ -1,9 +1,19 @@
 /* The iPhone interface (src/mobile). Colours, icons and the shared parts (avatars, message cards, invites, attachment
    chips, label chips) come from styles.css; the layout here is the phone's own. Sizes are in rem, which follows the
    phone's text size setting (Dynamic Type): 1rem is the body size, 17px at the default setting, and the rest follow
-   iOS's text styles (34 large title, 17 body, 15 subheadline, 13 footnote, 12 and 11 captions) in SF, like Mail. */
+   iOS's text styles (17 body, 15 subheadline, 13 footnote, 12 and 11 captions) in SF, with a heavy 44px title. The
+   look: white pages, ink text and controls, one orange (--brand) for what's new and what acts, and a dark dock of
+   controls floating at the bottom (ink on light, inverted on dark). */
 
-:root.phone-ui { --ease: cubic-bezier(0.32, 0.72, 0, 1); font: -apple-system-body; }
+:root.phone-ui {
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --accent: var(--brand);
+  --surface: color-mix(in srgb, var(--text) 3.5%, var(--pane));
+  --dock: var(--text);
+  --dock-fg: var(--pane);
+  --dock-muted: color-mix(in srgb, var(--pane), var(--text) 40%);
+  font: -apple-system-body;
+}
 :root.phone-ui body { background: #000; font-family: -apple-system, system-ui, sans-serif; }
 
 .phone {
@@ -28,7 +38,7 @@
   touch-action: pan-y;
   box-shadow: -1px 0 0 var(--line), -12px 0 32px rgb(0 0 0 / 0.08);
 }
-.m-page.m-boxes { background: var(--bg); }
+.m-page.m-boxes { background: var(--pane); }
 .m-page.m-convo { background: var(--bg); }
 .m-page.m-covered { visibility: hidden; }
 
@@ -50,7 +60,7 @@
   -webkit-backdrop-filter: blur(20px) saturate(1.8);
   backdrop-filter: blur(20px) saturate(1.8);
 }
-.m-boxes.m-scrolled .m-bar, .m-convo.m-scrolled .m-bar { background: color-mix(in srgb, var(--bg), transparent 12%); }
+.m-convo.m-scrolled .m-bar { background: color-mix(in srgb, var(--bg), transparent 12%); }
 .m-bar-title {
   grid-column: 2;
   max-width: 56vw;
@@ -71,32 +81,40 @@
   align-items: center;
   max-width: 100%;
   min-height: 44px;
-  padding: 0 8px 0 0;
-  color: var(--accent);
-  font-size: 1rem;
+  padding: 0 8px 0 4px;
+  color: var(--text);
+  font-size: 0.941rem;
+  font-weight: 500;
 }
-.m-back i { font-size: 1.65rem; }
+.m-back i { font-size: 1.5rem; }
 .m-back span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-bar-end { grid-column: 3; justify-self: end; display: flex; }
 .m-text {
   min-height: 44px;
   padding: 0 8px;
-  color: var(--accent);
+  color: var(--text);
   font-size: 1rem;
   white-space: nowrap;
   cursor: pointer;
 }
-.m-text.m-strong { font-weight: 600; }
+.m-text.m-strong { color: var(--brand); font-weight: 600; }
+.m-text.m-quiet { color: var(--muted); font-weight: 500; }
 .m-text:disabled { color: var(--muted); opacity: 0.5; }
 .m-text:active:not(:disabled) { opacity: 0.5; }
-.m-select-all { grid-column: 1; grid-row: 1; justify-self: start; }
+.m-select-all { grid-column: 1; grid-row: 1; justify-self: start; padding-left: 12px; }
+.m-bar-end { align-items: center; gap: 2px; padding-right: 8px; }
+/* The accounts in view, by the list's title: their initials, overlapping */
+.m-accounts { display: grid; place-items: center; min-width: 44px; height: 44px; cursor: pointer; }
+.m-accounts .acct-stack { display: flex; }
+.phone .acct-av { width: 26px; height: 26px; box-shadow: 0 0 0 2px var(--pane); font-size: 0.647rem; }
+.phone .acct-stack .acct-av + .acct-av { margin-left: -9px; }
 .m-back.m-gone { display: none; }
 .m-icon {
   display: inline-grid;
   place-items: center;
   min-width: 44px;
   height: 44px;
-  color: var(--accent);
+  color: var(--text);
   font-size: 1.41rem;
 }
 .m-icon, .m-cell, .m-row-body, .m-tool, .m-sheet button, .m-menu button, .m-choice, .m-search-open { cursor: pointer; }
@@ -111,8 +129,15 @@
   padding: calc(var(--bar) + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
 }
 .m-page:has(.m-toolbar) .m-scroll { padding-bottom: calc(var(--tools) + 24px + env(safe-area-inset-bottom)); }
-.m-title { margin: 2px 0 10px; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
-.m-convo .m-title { font-size: 1.294rem; letter-spacing: -0.01em; }
+.m-title { margin: 2px 0 12px; font-size: 2.588rem; font-weight: 800; letter-spacing: -0.035em; line-height: 1.1; }
+.m-convo .m-title { font-size: 1.529rem; font-weight: 750; letter-spacing: -0.02em; line-height: 1.2; }
+/* Over the title: a line of context in small capitals (the day and what's new, who owes a reply) */
+.m-eyebrow { margin: 14px 0 4px; color: var(--muted); font-size: 0.706rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
+.m-eyebrow:empty { visibility: hidden; }
+.m-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.m-head .m-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-jump { flex: none; display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: var(--muted); font-size: 0.882rem; font-weight: 500; cursor: pointer; }
+.m-jump:active { opacity: 0.5; }
 
 .m-toolbar {
   position: absolute;
@@ -128,45 +153,72 @@
   -webkit-backdrop-filter: blur(20px) saturate(1.8);
   backdrop-filter: blur(20px) saturate(1.8);
 }
-.m-toolbar .quiet-danger { height: 44px; padding: 0 10px; color: var(--text); font-size: 1rem; font-weight: 500; }
-.m-toolbar .quiet-danger:active:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger), transparent 90%); border-radius: 10px; }
-.m-edit-tools { justify-content: space-around; }
-.m-tool { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 56px; min-height: 48px; padding: 4px 0 0; color: var(--accent); font-size: 0.647rem; font-weight: 500; }
-.m-tool i { font-size: 1.36rem; }
-.m-tool:disabled { color: var(--muted); opacity: 0.45; }
-.m-tool:active:not(:disabled) { opacity: 0.5; }
-/* Under the large title, like Mail: "Checking for mail…" or how many are unread. */
-.m-status { margin: -8px 16px 10px; color: var(--muted); font-size: 0.765rem; }
-.m-status:empty { display: none; }
-
-/* New email: a round button floating over the list, clear of the home indicator. */
-.m-fab {
+/* The dock: controls floating over the bottom of the page, clear of the home indicator, with the page fading out
+   behind them. Lists get Search and New email, the selection its actions, a conversation its actions and Reply. */
+.m-dock, .m-edit-tools {
   position: absolute;
-  right: max(18px, env(safe-area-inset-right));
-  bottom: max(18px, env(safe-area-inset-bottom));
+  inset: auto max(20px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
   z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.m-dock[hidden], .m-edit-tools[hidden] { display: none; }
+.m-dock::before {
+  content: "";
+  position: absolute;
+  inset: -64px calc(-1 * max(20px, env(safe-area-inset-right))) calc(-1 * max(16px, env(safe-area-inset-bottom))) calc(-1 * max(20px, env(safe-area-inset-left)));
+  z-index: -1;
+  background: linear-gradient(color-mix(in srgb, var(--pane), transparent 100%), var(--pane) 62%);
+  pointer-events: none;
+}
+.m-convo .m-dock::before { background: linear-gradient(color-mix(in srgb, var(--bg), transparent 100%), var(--bg) 62%); }
+.m-search-pill, .m-dock-pill, .m-edit-tools .m-tools {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 56px;
+  border-radius: 999px;
+  background: var(--dock);
+  color: var(--dock-fg);
+}
+.m-search-pill { gap: 10px; padding: 0 22px; color: var(--dock-muted); font-size: 0.882rem; font-weight: 500; cursor: pointer; }
+.m-search-pill i { color: var(--dock-fg); font-size: 1.1rem; }
+.m-search-pill:active { opacity: 0.85; }
+.m-dock-pill { justify-content: space-around; padding: 0 8px; }
+.m-dock-pill .m-icon { color: var(--dock-fg); }
+.m-dock-pill .m-icon:disabled { color: var(--dock-muted); }
+.m-fab {
+  flex: none;
   display: grid;
   place-items: center;
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--brand);
   color: #fff;
-  font-size: 1.5rem;
-  box-shadow: 0 6px 20px rgb(0 0 0 / 0.22), 0 1px 3px rgb(0 0 0 / 0.16);
+  font-size: 1.41rem;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--brand), transparent 70%);
   cursor: pointer;
   transition: transform 0.2s var(--ease), opacity 0.2s;
 }
 .m-fab:active { transform: scale(0.92); }
-.m-page.m-list-page .m-scroll { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+.m-edit-tools { justify-content: space-around; height: 64px; min-height: 0; padding: 0 6px; border: 0; border-radius: 999px; background: var(--dock); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.m-tool { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 56px; min-height: 52px; padding: 6px 0 0; color: var(--dock-fg); font-size: 0.647rem; font-weight: 500; }
+.m-tool i { font-size: 1.3rem; }
+.m-tool[data-edit="trash"] { color: var(--brand); }
+.m-tool:disabled { color: var(--dock-muted); }
+.m-tool:active:not(:disabled) { opacity: 0.5; }
+.m-page.m-list-page .m-scroll, .m-page.m-convo .m-scroll { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
 
 /* Trash and Spam: how long mail stays, and emptying them now. */
-.m-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; margin: 0 16px 8px; padding: 8px 4px 8px 14px; border-radius: 12px; background: var(--card); color: var(--muted); font-size: 0.765rem; }
+.m-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; margin: 0 12px 8px; padding: 8px 6px 8px 16px; border-radius: 16px; background: var(--surface); color: var(--muted); font-size: 0.765rem; }
 .m-banner .m-text { min-height: 36px; color: var(--danger); font-size: 0.882rem; font-weight: 600; }
 
 /* ---- grouped lists (mailboxes, accounts) */
 
-.m-group-title { margin: 22px 16px 6px; color: var(--muted); font-size: 0.765rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.02em; }
+.m-group-title { margin: 22px 16px 6px; color: var(--muted); font-size: 0.706rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; }
 .m-group { overflow: hidden; margin-bottom: 8px; border-radius: 12px; background: var(--card); }
 .m-cell {
   display: flex;
@@ -190,10 +242,26 @@
 .m-cell[aria-checked="true"] > i:last-child { color: var(--accent); opacity: 1; }
 .account-dot { display: inline-block; border-radius: 50%; background: var(--acct, var(--accent)); }
 
+/* Mailboxes: rows straight on the page, the open one on a soft card; the accounts as chips under the title */
+.m-boxes .m-scroll { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+.m-boxes .m-eyebrow, .m-boxes .m-title { margin-left: 12px; margin-right: 12px; }
+.m-boxes .m-group-title { margin: 22px 12px 4px; }
+.m-chip-row { display: flex; gap: 8px; margin: 0 -12px 14px; padding: 0 24px; overflow-x: auto; scrollbar-width: none; }
+.m-chip { flex: none; display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 14px; border-radius: 999px; background: var(--surface); color: var(--text); font-size: 0.824rem; font-weight: 500; cursor: pointer; }
+.m-chip:has(.acct-av) { padding-left: 5px; }
+.m-chip .acct-av { width: 24px; height: 24px; box-shadow: none; }
+.m-chip[aria-checked="true"] { background: var(--dock); color: var(--dock-fg); font-weight: 600; }
+.m-cells .m-cell { min-height: 50px; padding: 0 12px; border-radius: 14px; }
+.m-cells .m-cell::before { display: none; }
+.m-cells .m-cell > i:first-child { color: var(--text); font-size: 1.3rem; }
+.m-cells .m-cell.on { background: var(--surface); font-weight: 600; }
+.m-cells .m-cell small { font-size: 0.882rem; font-weight: 500; }
+.m-cells .m-cell.inbox small { color: var(--brand); font-weight: 600; }
+
 /* ---- conversation list */
 
-.m-list-page .m-scroll { padding-left: 0; padding-right: 0; }
-.m-list-page .m-title, .m-search { margin-left: 16px; margin-right: 16px; }
+.m-list-page .m-scroll { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+.m-list-page .m-eyebrow, .m-list-page .m-head { margin-left: 12px; margin-right: 12px; }
 .m-search {
   display: flex;
   align-items: center;
@@ -206,8 +274,6 @@
   color: var(--muted);
 }
 .m-search i { font-size: 1.05rem; }
-.m-search-open { width: calc(100% - 32px); font-size: max(16px, 1rem); text-align: left; }
-.m-search-open:active { opacity: 0.7; }
 .m-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--text); font: inherit; font-size: max(16px, 1rem); }
 
 /* Pull to refresh: the arrow waits in the bounce above the title; while checking, the spinner takes room there and
@@ -233,21 +299,26 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 16px 16px 4px;
+  padding: 22px 12px 6px;
   color: var(--muted);
-  font-size: 0.765rem;
-  font-weight: 600;
+  font-size: 0.706rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
-.m-row { position: relative; overflow: hidden; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.m-section:first-child { padding-top: 4px; }
+/* Rows: new mail on a soft card, the rest straight on the page */
+.m-row { position: relative; overflow: hidden; margin-bottom: 2px; border-radius: 20px; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 .m-row-body {
   position: relative;
   display: flex;
-  gap: 10px;
-  padding: 10px 16px 10px 6px;
+  gap: 14px;
+  padding: 12px;
   background: var(--pane);
 }
-.m-row + .m-row .m-row-body::before { content: ""; position: absolute; inset: 0 0 auto 60px; border-top: 0.5px solid var(--line); }
+.m-row.unread .m-row-body, .m-row.due .m-row-body { padding-top: 14px; padding-bottom: 14px; background: var(--surface); }
 .m-row-body:active, .m-row.pressing .m-row-body { background: var(--hover); }
+.m-row.unread .m-row-body:active, .m-row.unread.pressing .m-row-body { background: color-mix(in srgb, var(--text) 7%, var(--pane)); }
 .m-row.pressing .m-row-body { transition: background-color 0.3s; }
 .m-check {
   flex: none;
@@ -256,7 +327,6 @@
   align-self: center;
   width: 24px;
   height: 24px;
-  margin-left: 10px;
   border-radius: 50%;
   box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--muted), transparent 30%);
   color: #fff;
@@ -266,28 +336,45 @@
 .m-editing .m-list .m-check { display: grid; }
 .m-row.picked .m-check { background: var(--accent); box-shadow: none; }
 .m-row.picked .m-check i { visibility: visible; }
-.m-editing .m-row.picked .m-row-body { background: color-mix(in srgb, var(--accent), var(--pane) 90%); }
-.m-unread-dot { flex: none; align-self: flex-start; width: 10px; height: 10px; margin-top: 7px; border-radius: 50%; }
-.m-row.unread .m-unread-dot { background: var(--accent); }
-.m-ava { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; }
-.m-ava .avatar { width: 40px; height: 40px; font-size: 0.85rem; }
+.m-row.picked .m-check { background: var(--brand); }
+.m-editing .m-row.picked .m-row-body { background: color-mix(in srgb, var(--brand), var(--pane) 90%); }
+.m-ava { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; }
+/* Initials on a soft tint of the sender's colour, rather than the Mac's solid one */
+.phone .avatar:not(.logo) { background: color-mix(in srgb, var(--c) 16%, var(--pane)); color: color-mix(in srgb, var(--c) 80%, var(--text)); }
+.phone .avatar.c0 { --c: #f41b1e; }
+.phone .avatar.c1 { --c: #ec00b2; }
+.phone .avatar.c2 { --c: #e80069; }
+.phone .avatar.c3 { --c: #1c97ec; }
+.phone .avatar.c4 { --c: #c86cda; }
+.phone .avatar.c5 { --c: #fd300c; }
+.phone .avatar.c6 { --c: #9400df; }
+.phone .avatar.c7 { --c: #1f74ff; }
+.m-ava .avatar { width: 44px; height: 44px; font-size: 0.882rem; font-weight: 700; }
 .m-ava[class*="acct-"] { box-shadow: inset 0 0 0 2px var(--acct); }
-.m-ava[class*="acct-"] .avatar { width: 32px; height: 32px; font-size: 0.706rem; }
-.m-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.m-ava[class*="acct-"] .avatar { width: 36px; height: 36px; font-size: 0.765rem; }
+.m-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .m-row-top { display: flex; align-items: baseline; gap: 6px; }
-.m-from { flex: 1; min-width: 0; overflow: hidden; font-size: 1rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.m-row.unread .m-from { font-weight: 650; }
-.m-from em { margin-left: 6px; color: var(--muted); font-size: 0.765rem; font-style: normal; font-weight: 500; }
+.m-from { flex: 1; min-width: 0; overflow: hidden; font-size: 0.941rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.m-row.unread .m-from { font-weight: 700; }
+.m-from em { margin-left: 5px; color: var(--muted); font-size: 0.765rem; font-style: normal; font-weight: 500; }
 .m-row-top > i { color: var(--pin); font-size: 0.85rem; }
-.m-row-top time { flex: none; color: var(--muted); font-size: 0.875rem; }
-.m-subject { overflow: hidden; font-size: 0.882rem; text-overflow: ellipsis; white-space: nowrap; }
-.m-row.unread .m-subject { font-weight: 600; }
-.m-snippet { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 0.882rem; line-height: 1.3; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-:root[data-snippet="0"] .m-snippet { display: none; }
-:root[data-snippet="1"] .m-snippet { -webkit-line-clamp: 1; }
-.m-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.m-row-top time { flex: none; color: var(--muted); font-size: 0.706rem; font-weight: 500; }
+.m-row.unread time, .m-row.due time { color: var(--brand); font-weight: 600; }
+/* The subject in ink, then the start of the email: grey once read */
+.m-preview { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 0.882rem; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.m-preview b { color: var(--text); font-weight: 600; }
+.m-row.unread .m-preview { color: var(--text); }
+:root[data-snippet="0"] .m-preview { -webkit-line-clamp: 1; }
+:root[data-snippet="0"] .m-preview > span { display: none; }
+:root[data-snippet="1"] .m-preview { -webkit-line-clamp: 1; }
+:root[data-snippet="3"] .m-preview, .m-row.unread .m-preview { -webkit-line-clamp: 3; }
+.m-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 .m-chips .row-label { font-size: 0.706rem; }
 .m-convo .m-chips { margin: -4px 0 12px; }
+/* Waiting's Nudge and Drop it, and the row's other one-tap actions */
+.m-pill { min-height: 30px; padding: 0 12px; border-radius: 999px; background: var(--pane); box-shadow: inset 0 0 0 1px var(--line); color: var(--text); font-size: 0.706rem; font-weight: 600; cursor: pointer; }
+.m-pill-go { background: var(--brand); box-shadow: none; color: #fff; }
+.m-pill:active { opacity: 0.6; }
 
 /* swipes: the row slides over its action's colour and icon; the icon grows once letting go would run it */
 .m-swipe { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 0 24px; background: var(--muted); color: #fff; font-size: 0.706rem; font-weight: 600; }
@@ -305,28 +392,36 @@
 /* ---- search */
 
 .m-search-page { background: var(--pane); }
-.m-search-page .m-bar { display: block; padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); border-bottom-color: var(--line); background: var(--pane); }
+.m-search-page { --bar: 64px; }
+.m-search-page .m-bar { display: block; padding-left: max(20px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); background: var(--pane); }
 .m-search-page .m-bar > :not(.m-search-bar) { display: none; }
 .m-search-bar { display: flex; align-items: center; gap: 4px; height: var(--bar); }
-.m-search-bar .m-search { flex: 1; margin: 0; }
-.m-search-bar .m-text { padding-right: 8px; }
-.m-search-clear { display: grid; place-items: center; width: 32px; height: 36px; margin-right: -6px; color: var(--muted); cursor: pointer; }
+.m-search-bar .m-search { flex: 1; min-width: 0; height: 48px; margin: 0; padding: 0 12px 0 18px; gap: 10px; border-radius: 999px; background: var(--dock); color: var(--dock-fg); }
+.m-search-bar .m-search input { color: var(--dock-fg); font-weight: 500; caret-color: var(--brand); }
+.m-search-bar .m-search input::placeholder { color: var(--dock-muted); }
+.m-search-bar .m-text { padding: 0 8px 0 10px; }
+.m-search-clear { display: grid; place-items: center; width: 32px; height: 36px; margin-right: -6px; color: var(--dock-muted); cursor: pointer; }
 .m-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
-.m-search-page .m-scroll { padding-left: 0; padding-right: 0; }
+.m-search-page .m-scroll { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+.m-search-page .m-group { background: none; }
+.m-search-page .m-cell { padding: 0 12px; border-radius: 14px; }
+.m-search-page .m-cell::before { display: none; }
+.m-search-page .m-cell > i:first-child { color: var(--muted); }
 .m-search-page .m-title { display: none; }
-.m-search-help { margin: 0 16px; }
+.m-search-help .m-group-title { margin-left: 12px; }
 .m-search-help .m-empty { padding-top: 96px; }
 .m-search-head { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 0; }
 .m-search-head { margin-top: 12px; }
-.m-search-head .m-group-title { margin: 0 16px; }
+.m-search-head .m-group-title { margin: 0 12px; }
 .m-search-head .m-text { font-size: 0.882rem; }
 .m-search-help > .m-group-title:first-child { margin-top: 18px; }
-.m-suggest .m-ava { flex: none; width: 32px; height: 32px; }
-.m-suggest .m-ava .avatar { width: 32px; height: 32px; font-size: 0.706rem; }
+.m-suggest { min-height: 60px; }
+.m-cell.m-suggest > .m-ava { flex: none; width: 36px; height: 36px; }
+.m-suggest .m-ava .avatar { width: 36px; height: 36px; font-size: 0.765rem; }
 .m-suggest > span:last-child { display: flex; flex-direction: column; min-width: 0; }
 .m-suggest strong { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .m-suggest small { overflow: hidden; color: var(--muted); font-size: 0.765rem; text-overflow: ellipsis; white-space: nowrap; }
-.m-search-status { margin: 14px 16px 4px; color: var(--muted); font-size: 0.765rem; font-weight: 500; }
+.m-search-status { margin: 22px 12px 6px; color: var(--muted); font-size: 0.706rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
 .m-search-status:empty { display: none; }
 
 .m-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 72px 32px; color: var(--muted); text-align: center; }
@@ -336,7 +431,7 @@
 
 /* ---- conversation */
 
-.m-convo .message { border-radius: 14px; }
+.m-convo .message { border-color: transparent; border-radius: 18px; box-shadow: none; }
 .m-convo .message header { padding: 12px; }
 .m-convo .message .meta strong { font-size: 1rem; }
 .m-convo .message .meta span, .m-convo .message time { font-size: 0.765rem; }
@@ -350,7 +445,7 @@
 .m-convo .attachment-open { min-height: 40px; }
 .m-convo .attachment-name { max-width: 60vw; }
 .m-error { color: var(--danger); }
-.m-convo-tools { justify-content: space-around; }
+
 
 /* ---- action sheet */
 
@@ -369,20 +464,21 @@
 .m-sheet[open] { animation: m-sheet-in 0.4s var(--ease, cubic-bezier(0.32, 0.72, 0, 1)); }
 .m-sheet::backdrop { background: rgb(0 0 0 / 0.3); animation: fade-in 0.2s ease; }
 @keyframes m-sheet-in { from { transform: translateY(100%); } }
-.m-sheet-group { overflow: hidden; margin-bottom: 8px; border-radius: 14px; background: var(--card); }
+.m-sheet-group { overflow: hidden; margin-bottom: 8px; border-radius: 20px; background: var(--card); }
 .m-sheet-group h2 { margin: 0; padding: 12px 16px; border-bottom: 0.5px solid var(--line); color: var(--muted); font-size: 0.765rem; font-weight: 500; text-align: center; }
 .m-sheet-group button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 18px; border-radius: 0; color: var(--text); font-size: 1rem; }
 .m-sheet-group button + button { border-top: 0.5px solid var(--line); }
-.m-sheet-group button i:first-child { width: 24px; color: var(--accent); font-size: 1.27rem; }
+.m-sheet-group button i:first-child { width: 24px; color: var(--text); font-size: 1.27rem; }
 .m-sheet-group button > span { flex: 1; text-align: left; }
 .m-sheet-group button small { display: block; color: var(--muted); font-size: 0.765rem; }
+.m-sheet-group button:has(small) > span { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .m-sheet-group button:has(small) { padding-top: 8px; padding-bottom: 8px; }
 .m-sheet-group button > i:last-child:not(:first-child) { color: var(--accent); }
 .m-sheet-group button:active:not(:disabled) { background: var(--hover); }
 .m-sheet-group button:disabled { opacity: 0.4; }
 .m-sheet, .m-sheet button { outline: none; }
 .m-sheet-group button.quiet-danger, .m-sheet .quiet-danger i:first-child { color: var(--danger); }
-.m-sheet .m-sheet-cancel { justify-content: center; color: var(--accent); font-weight: 600; }
+.m-sheet .m-sheet-cancel { justify-content: center; color: var(--text); font-weight: 600; }
 .m-sheet.closing::backdrop { opacity: 0; transition: opacity 0.26s; }
 
 /* confirmation: what will happen, then the action in the danger colour */
@@ -399,8 +495,8 @@
   display: flex;
   flex-direction: column;
   max-height: calc(100% - env(safe-area-inset-top) - 12px);
-  border-radius: 14px 14px 0 0;
-  background: var(--bg);
+  border-radius: 20px 20px 0 0;
+  background: var(--pane);
   box-shadow: 0 -8px 30px rgb(0 0 0 / 0.12);
 }
 .m-list-sheet[open] { animation: none; }
@@ -418,7 +514,7 @@
 .m-choice + .m-choice::before { content: ""; position: absolute; inset: 0 0 auto 52px; border-top: 0.5px solid var(--card-line); }
 .m-choice:active:not(:disabled) { background: var(--hover); }
 .m-choice:disabled { opacity: 0.4; }
-.m-choice > i:first-child { width: 24px; color: var(--accent); font-size: 1.27rem; text-align: center; }
+.m-choice > i:first-child { width: 24px; color: var(--text); font-size: 1.27rem; text-align: center; }
 .m-choice > .label-dot { width: 12px; height: 12px; margin: 0 6px; }
 .m-choice > span:not(.label-dot) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-choice > i:last-child:not(:first-child) { color: var(--accent); font-size: 1.125rem; }
@@ -519,11 +615,18 @@
   touch-action: none;
 }
 .mc-grab { position: absolute; top: 6px; left: 50%; width: 36px; height: 5px; margin-left: -18px; border-radius: 3px; background: var(--line); }
-.mc-cancel { justify-self: start; min-height: 44px; padding: 0 8px; color: var(--accent); font-size: 1rem; }
-.mc-title { grid-column: 2; max-width: 50vw; margin: 0; overflow: hidden; font-size: 1rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.mc-send { justify-self: end; display: grid; place-items: center; width: 34px; height: 34px; margin: 5px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 1.18rem; }
+.mc-cancel { justify-self: start; min-height: 44px; padding: 0 8px; color: var(--muted); font-size: 0.941rem; font-weight: 500; }
+.mc-title { grid-column: 2; max-width: 34vw; margin: 0; overflow: hidden; font-size: 1rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+/* From: the account as a chip at the top right */
+.mc-from { grid-column: 3; justify-self: end; display: inline-flex; align-items: center; gap: 6px; max-width: 34vw; min-height: 32px; padding: 0 10px 0 4px; border-radius: 999px; background: var(--surface); color: var(--text); font-size: 0.765rem; font-weight: 600; cursor: pointer; }
+.mc-from[hidden] { display: none; }
+.mc-from .acct-av { width: 24px; height: 24px; box-shadow: none; }
+.mc-from > span:not(.acct-av) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-from i { color: var(--muted); font-size: 0.824rem; }
+/* Send: an orange pill at the end of the tools, over the keyboard */
+.mc-send { flex: none; display: inline-flex; align-items: center; gap: 8px; height: 44px; margin-left: auto; padding: 0 20px; border-radius: 999px; background: var(--brand); color: #fff; font-size: 0.941rem; font-weight: 600; cursor: pointer; }
 .mc-send:disabled { opacity: 0.4; }
-.mc-send:active:not(:disabled), .mc-cancel:active { opacity: 0.6; }
+.mc-send:active:not(:disabled), .mc-cancel:active, .mc-from:active { opacity: 0.6; }
 
 .mc-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .mc-row {
@@ -535,6 +638,10 @@
   border-bottom: 0.5px solid var(--line);
 }
 .mc-row > span:first-child { flex: none; color: var(--muted); }
+/* The subject is the email's headline */
+.mc-subject-row { min-height: 56px; }
+.mc-subject-row .mc-subject { font-size: 1.176rem; font-weight: 700; letter-spacing: -0.01em; }
+.mc-subject::placeholder { color: var(--muted); font-weight: 600; }
 .mc-row > input, .m-compose .rcpt input { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font: inherit; font-size: max(16px, 1rem); outline: none; }
 .m-compose .rcpt input { min-width: 120px; }
 .m-compose .rchip { font-size: 0.882rem; }
@@ -561,13 +668,17 @@
 .mc-tools {
   display: flex;
   align-items: center;
-  min-height: calc(46px + env(safe-area-inset-bottom));
-  padding: 0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-left));
-  border-top: 0.5px solid var(--line);
-  background: color-mix(in srgb, var(--pane), var(--bg) 50%);
+  min-height: calc(60px + env(safe-area-inset-bottom));
+  padding: 0 max(12px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(8px, env(safe-area-inset-left));
+  background: var(--pane);
 }
-.m-compose.keyboard .mc-tools { min-height: 46px; padding-bottom: 0; }
-.mc-tools .m-icon { min-width: 40px; font-size: 1.27rem; }
+.m-compose.keyboard .mc-tools { min-height: 60px; padding-bottom: 0; }
+.mc-tools .m-icon { min-width: 40px; color: var(--text); font-size: 1.27rem; }
+/* Aa swaps the attach, Send later and AI buttons for the text formats */
+.mc-format { display: none; }
+.mc-tools.formatting .mc-format { display: contents; }
+.mc-tools.formatting > [data-act="attach"], .mc-tools.formatting > [data-act="later"], .mc-tools.formatting > [data-act="ai"], .mc-tools.formatting .mc-status { display: none; }
+.mc-tools [data-act="format"][aria-pressed="true"] { background: var(--hover); border-radius: 8px; }
 .mc-tools .m-icon.on { color: var(--text); background: var(--hover); border-radius: 8px; }
 .mc-tools .m-icon.busy i { animation: ai-pulse 1s ease-in-out infinite; color: var(--brand); }
 .mc-status { flex: 1; overflow: hidden; color: var(--muted); font-size: 0.706rem; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
@@ -579,7 +690,7 @@
 .m-sheet .mc-schedule { justify-content: center; border-top: 0.5px solid var(--line); color: var(--accent); font-weight: 600; }
 
 /* toasts sit above the bottom toolbar, and above the keyboard while writing */
-:root.phone-ui .toast { bottom: calc(var(--tools, 50px) + 24px + env(safe-area-inset-bottom)); max-width: calc(100vw - 24px); font-size: 0.882rem; }
+:root.phone-ui .toast { bottom: calc(84px + max(16px, env(safe-area-inset-bottom))); max-width: calc(100vw - 24px); font-size: 0.882rem; }
 :root.phone-ui:has(.m-compose.keyboard) .toast { bottom: calc(100dvh - var(--visible-height, 100dvh) + 58px); }
 
 /* ---- sheets over the app: Settings and the compose sheet open as iOS page sheets, with the app shrinking back
@@ -601,8 +712,8 @@
   display: block;
   width: auto;
   height: auto;
-  border-radius: 12px 12px 0 0;
-  background: var(--bg);
+  border-radius: 20px 20px 0 0;
+  background: var(--surface);
   box-shadow: none;
   animation: m-sheet-in 0.5s var(--ease) both;
 }
@@ -611,46 +722,36 @@
 .settings-phone .settings-nav, .settings-phone .settings-body {
   position: absolute;
   inset: 0;
-  background: var(--bg);
+  background: var(--surface);
   transition: transform 0.45s var(--ease);
 }
 .settings-phone .settings-nav { display: block; padding: 0 max(16px, env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); overflow-y: auto; }
 .settings-phone .settings-body { visibility: hidden; transform: translateX(100%); box-shadow: -1px 0 0 var(--line), -12px 0 32px rgb(0 0 0 / 0.08); transition: transform 0.45s var(--ease), visibility 0s 0.45s; }
 .settings-phone.section-open .settings-body { visibility: visible; transform: none; transition: transform 0.45s var(--ease); }
 .settings-phone.section-open .settings-nav { transform: translateX(-30%); }
-.settings-nav-head { position: sticky; top: 0; z-index: 1; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 56px; margin: 0 -16px 8px; padding: 0 8px; background: var(--bg); }
-.settings-nav-head h2 { grid-column: 2; margin: 0; font-size: 1rem; font-weight: 600; }
-.settings-phone .settings-nav .settings-done { grid-column: 3; justify-self: end; display: block; min-height: 44px; padding: 0 8px; background: none; box-shadow: none; color: var(--accent); font-size: 1rem; font-weight: 600; }
+.settings-nav-head { display: grid; margin: 0 0 14px; padding-top: 6px; }
+.settings-nav-head h2 { grid-row: 2; margin: 0 8px; font-size: 2.588rem; font-weight: 800; letter-spacing: -0.035em; line-height: 1.1; }
+.settings-phone .settings-nav .settings-done { grid-row: 1; justify-self: end; display: block; min-height: 44px; margin-right: -8px; padding: 0 8px; background: none; box-shadow: none; color: var(--brand); font-size: 1rem; font-weight: 600; }
+.settings-card { overflow: hidden; margin-bottom: 16px; border-radius: 20px; background: var(--card); }
 .settings-phone .settings-search { display: none; }
-.settings-phone .settings-nav button[data-section] { gap: 14px; width: 100%; min-height: 48px; padding: 0 14px 0 12px; border-radius: 0; background: var(--card); box-shadow: none; color: var(--text); font-size: 1rem; }
-.settings-phone .settings-nav button[data-section]:first-of-type { border-radius: 12px 12px 0 0; }
-.settings-phone .settings-nav button[data-section]:last-of-type { border-radius: 0 0 12px 12px; }
+.settings-phone .settings-nav button[data-section] { gap: 14px; width: 100%; min-height: 50px; padding: 0 16px; border-radius: 0; background: var(--card); box-shadow: none; color: var(--text); font-size: 1rem; }
 .settings-phone .settings-nav button[data-section] + button[data-section] { position: relative; }
-.settings-phone .settings-nav button[data-section] + button[data-section]::before { content: ""; position: absolute; inset: 0 0 auto 55px; border-top: 0.5px solid var(--card-line); }
+.settings-phone .settings-nav button[data-section] + button[data-section]::before { content: ""; position: absolute; inset: 0 0 auto 52px; border-top: 0.5px solid var(--card-line); }
 .settings-phone .settings-nav button[data-section]:active { background: var(--hover); }
-.settings-phone .settings-nav button[data-section] > i:first-child { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 7px; background: var(--ico, #8e8e93); color: #fff; font-size: 1.1rem; }
+.settings-phone .settings-nav button[data-section] > i:first-child { width: 22px; color: var(--text); font-size: 1.3rem; text-align: center; }
 .settings-phone .settings-nav button[data-section] span { flex: 1; }
 .settings-phone .settings-nav button[data-section] > i:last-child { color: var(--muted); font-size: 1rem; opacity: 0.6; }
-[data-section="appearance"] { --ico: #007aff; }
-[data-section="accounts"] { --ico: #34c759; }
-[data-section="ai"] { --ico: #af52de; }
-[data-section="notifications"] { --ico: #ff3b30; }
-[data-section="scheduling"] { --ico: #ff9500; }
-[data-section="inbox"] { --ico: #5856d6; }
-[data-section="composer"] { --ico: #30b0c7; }
-[data-section="accessibility"] { --ico: #0a84ff; }
-[data-section="swipes"] { --ico: #ff2d55; }
 
 .settings-phone .settings-body { display: flex; flex-direction: column; }
 .settings-phone .settings-head { position: relative; display: grid; grid-template-columns: 1fr auto 1fr; height: 56px; padding: 0 8px; }
 .settings-phone .settings-head h2 { grid-column: 2; font-size: 1rem; font-weight: 600; }
-.settings-back { grid-column: 1; grid-row: 1; justify-self: start; display: inline-flex; align-items: center; min-height: 44px; color: var(--accent); font-size: 1rem; }
+.settings-back { grid-column: 1; grid-row: 1; justify-self: start; display: inline-flex; align-items: center; min-height: 44px; color: var(--text); font-size: 0.941rem; font-weight: 500; }
 .settings-back i { font-size: 1.65rem; }
 .settings-phone .settings-panel { padding: 0 max(16px, env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); overscroll-behavior: contain; user-select: none; }
 .settings-phone .settings-panel > * { max-width: none; }
 
 /* iOS's inset grouped lists: the heading above the card, rows of body text, notes in footnote grey */
-.settings-phone .setting-group { position: relative; margin: 36px 0 0; padding: 0 16px; border: 0; border-radius: 12px; }
+.settings-phone .setting-group { position: relative; margin: 36px 0 0; padding: 0 16px; border: 0; border-radius: 20px; }
 .settings-phone .setting-group:not(:has(> h3)) { margin-top: 12px; }
 .settings-phone .setting-group > h3 { position: absolute; top: -24px; left: 16px; margin: 0; font-size: 0.765rem; font-weight: 400; letter-spacing: 0; }
 .settings-phone .group-title { margin: 28px 16px 8px; font-size: 0.765rem; font-weight: 400; text-transform: uppercase; color: var(--muted); }
@@ -667,7 +768,7 @@
 .settings-phone .swatch { width: 28px; height: 28px; }
 .settings-phone .switch { width: 51px; height: 31px; }
 .settings-phone .switch::before { width: 27px; height: 27px; }
-.settings-phone .switch:checked { background: #34c759; }
+.settings-phone .switch:checked { background: var(--brand); }
 .settings-phone .switch:checked::before { transform: translateX(20px); }
 .settings-phone .dropdown { min-height: 36px; padding: 0 8px 0 12px; border: 0; background: var(--search); font-size: 0.882rem; }
 .settings-phone button.secondary, .settings-phone button.primary { min-height: 40px; font-size: 0.882rem; }
@@ -683,40 +784,41 @@
 /* ---- the first-run walkthrough, full screen: what each step is about, its choices, Continue under the thumb */
 
 .onboarding.ob-phone { padding: 0; place-items: stretch; background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
-.ob-phone .ob-card { width: 100%; max-height: none; border: 0; border-radius: 0; background: var(--bg); box-shadow: none; animation: none; }
+.onboarding.ob-phone { background: var(--pane); }
+.ob-phone .ob-card { width: 100%; max-height: none; border: 0; border-radius: 0; background: var(--pane); box-shadow: none; animation: none; }
 .ob-phone .ob-progress { margin: calc(env(safe-area-inset-top) + 12px) 24px 0; }
 .ob-phone .ob-step { flex: 1; padding: 28px max(24px, env(safe-area-inset-right)) 12px max(24px, env(safe-area-inset-left)); overscroll-behavior: contain; }
 .ob-phone .ob-step.in { animation: ob-phone-in 0.45s var(--ease, cubic-bezier(0.32, 0.72, 0, 1)); }
 @keyframes ob-phone-in { from { opacity: 0; transform: translateX(24px); } }
 .ob-phone .ob-head { margin-bottom: 26px; }
-.ob-phone .ob-badge { width: 60px; height: 60px; margin-bottom: 18px; border-radius: 16px; font-size: 1.9rem; }
-.ob-phone .ob-head small { font-size: 0.765rem; }
-.ob-phone .ob-head h2 { margin: 4px 0 10px; font-size: 1.65rem; font-weight: 700; }
-.ob-phone .ob-head p { font-size: 1rem; line-height: 1.4; }
+.ob-phone .ob-badge { display: none; }
+.ob-phone .ob-head small { color: var(--muted); font-size: 0.706rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
+.ob-phone .ob-head h2 { margin: 12px 0 14px; font-size: 2.118rem; font-weight: 800; letter-spacing: -0.035em; line-height: 1.08; }
+.ob-phone .ob-head p { color: var(--muted); font-size: 1rem; line-height: 1.5; }
 .ob-phone .ob-body h3 { font-size: 0.765rem; font-weight: 400; text-transform: uppercase; }
-.ob-phone .ob-accounts li { min-height: 52px; border: 0; background: var(--card); font-size: 1rem; }
-.ob-phone .ob-add { min-height: 48px; font-size: 1rem; }
-.ob-phone .ob-choice { padding: 14px 10px 12px; background: var(--card); font-size: 0.882rem; }
+.ob-phone .ob-accounts li { min-height: 60px; border: 0; border-radius: 18px; background: var(--surface); font-size: 1rem; }
+.ob-phone .ob-add { min-height: 52px; border-radius: 18px; color: var(--brand); font-size: 1rem; font-weight: 600; }
+.ob-phone .ob-choice { padding: 14px 10px 12px; border-radius: 18px; background: var(--surface); font-size: 0.882rem; }
 .ob-phone .ob-swatch { height: 56px; }
-.ob-phone .ob-rows { border: 0; border-radius: 12px; background: var(--card); }
+.ob-phone .ob-rows { border: 0; border-radius: 18px; background: var(--surface); }
 .ob-phone .ob-row { min-height: 56px; font-size: 1rem; }
 .ob-phone .ob-row small, .ob-phone .ob-note { font-size: 0.765rem; }
 .ob-phone .switch { width: 51px; height: 31px; }
 .ob-phone .switch::before { width: 27px; height: 27px; }
-.ob-phone .switch:checked { background: #34c759; }
+.ob-phone .switch:checked { background: var(--brand); }
 .ob-phone .switch:checked::before { transform: translateX(20px); }
-.ob-allow { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 50px; margin-bottom: 16px; border-radius: 14px; background: color-mix(in srgb, var(--brand), transparent 86%); color: var(--brand); box-shadow: none; font-size: 1rem; font-weight: 600; }
+.ob-allow { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 56px; margin-bottom: 16px; border-radius: 999px; background: color-mix(in srgb, var(--brand), transparent 86%); color: var(--brand); box-shadow: none; font-size: 1rem; font-weight: 600; }
 .ob-phone .ob-row strong { font-weight: 500; }
-.ob-allow:disabled { background: var(--card); color: var(--success); opacity: 1; }
-.ob-gestures { display: grid; margin: 0; padding: 0 16px; border-radius: 12px; background: var(--card); list-style: none; }
+.ob-allow:disabled { background: var(--surface); color: var(--success); opacity: 1; }
+.ob-gestures { display: grid; margin: 0; padding: 0 16px; border-radius: 18px; background: var(--surface); list-style: none; }
 .ob-gestures li { display: flex; align-items: center; gap: 14px; min-height: 60px; }
 .ob-gestures li + li { border-top: 0.5px solid var(--line); }
-.ob-gestures i { width: 28px; color: var(--brand); font-size: 1.4rem; text-align: center; }
+.ob-gestures i { width: 28px; color: var(--text); font-size: 1.4rem; text-align: center; }
 .ob-gestures span { display: grid; gap: 1px; }
 .ob-gestures strong { font-size: 1rem; font-weight: 500; }
 .ob-gestures small { color: var(--muted); font-size: 0.882rem; }
 .ob-phone .ob-card footer { flex-direction: column-reverse; gap: 6px; padding: 12px max(24px, env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); }
-.ob-phone .ob-next { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 50px; border-radius: 14px; font-size: 1rem; font-weight: 600; }
+.ob-phone .ob-next { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 56px; border-radius: 999px; background: var(--brand); font-size: 1rem; font-weight: 600; }
 .ob-phone .ob-back { min-height: 44px; font-size: 1rem; }
 
 @media (prefers-reduced-motion: reduce) {

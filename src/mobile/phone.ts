@@ -102,35 +102,50 @@ export function mountPhone(mail: MailCore) {
   const boxes = stack.page("Mailboxes", "m-boxes");
   boxes.end.innerHTML = barButton("settings", "gear-six", "Settings");
   boxes.end.addEventListener("click", () => openSettings());
+  boxes.scroller.querySelector(".m-title")!.insertAdjacentHTML("beforebegin", `<p class="m-eyebrow"></p>`);
+  /** An account's initial in its colour. */
+  const accountAv = (a: string) =>
+    `<span class="acct-av acct-${accountSettings(a).color}" aria-hidden="true">${esc(accountName(a).trim().charAt(0).toUpperCase() || "?")}</span>`;
 
   function renderBoxes() {
     labelColorCss([...mail.labels, ...[...mail.accountLabels.values()].flat()].map((l) => l.color ?? ""));
     const unread = new Map(mail.labels.map((l) => [l.id, l.unread]));
     const badge = settings.inbox.unreadBadge;
     const row = (id: string | null, name: string, glyph: string, count = 0, color?: string | null) =>
-      `<button type="button" class="m-cell" data-box="${esc(id ?? "")}" aria-label="${esc(count ? `${name}, ${count} unread` : name)}">
-        ${glyph ? icon(glyph) : labelDot(name, color ?? null)}<span>${esc(name)}</span>${count ? `<small>${count}</small>` : ""}${icon("caret-right")}</button>`;
+      `<button type="button" class="m-cell${id === mail.mailbox && !mail.search ? " on" : ""}${id === "INBOX" ? " inbox" : ""}" data-box="${esc(id ?? "")}" aria-label="${esc(count ? `${name}, ${count} unread` : name)}">
+        ${glyph ? icon(glyph) : labelDot(name, color ?? null)}<span>${esc(name)}</span>${count ? `<small>${count}</small>` : ""}</button>`;
     const { order, hidden } = settings.sidebar;
-    const system = arrange(SYSTEM, ([id]) => id ?? "ALL", order, hidden).map(([id, name, glyph]) =>
+    // The Waiting label (Settings → Inbox → Follow-ups) sits under the Inbox, which it's the other half of.
+    const waiting = waitingLabel();
+    const system = arrange(SYSTEM, ([id]) => id ?? "ALL", order, hidden).flatMap(([id, name, glyph]) => [
       row(id, name, glyph, badge && id === "INBOX" ? unread.get(id) : 0),
-    );
-    const labels = arrange(mail.userLabels, (l) => l.id, order, hidden).map((l) =>
-      row(l.id, l.name, "", badge ? l.unread : 0, l.color),
-    );
+      ...(id === "INBOX" && waiting ? [row(waiting.id, waiting.name, "clock")] : []),
+    ]);
+    const labels = arrange(
+      mail.userLabels.filter((l) => l !== waiting),
+      (l) => l.id,
+      order,
+      hidden,
+    ).map((l) => row(l.id, l.name, "", badge ? l.unread : 0, l.color));
     const one = mail.scope?.length === 1 ? mail.scope[0] : null;
-    const pick = (id: string, name: string, lead: string, on: boolean) =>
-      `<button type="button" class="m-cell" data-scope="${esc(id)}" role="radio" aria-checked="${on}">${lead}<span>${esc(name)}</span>${on ? icon("check") : ""}</button>`;
+    const chip = (id: string, name: string, lead: string, on: boolean) =>
+      `<button type="button" class="m-chip" data-scope="${esc(id)}" role="radio" aria-checked="${on}">${lead}<span>${esc(name)}</span></button>`;
     const accounts = multi()
-      ? `<h3 class="m-group-title" id="m-accounts">Accounts</h3><div class="m-group" role="radiogroup" aria-labelledby="m-accounts">${pick("", "All accounts", icon("users"), !mail.scope)}${mail.accounts
-          .map((a) =>
-            pick(a, accountName(a), `<span class="account-dot acct-${accountSettings(a).color}"></span>`, one === a),
-          )
+      ? `<div class="m-chip-row" role="radiogroup" aria-label="Accounts">${chip("", "All", "", !mail.scope)}${mail.accounts
+          .map((a) => chip(a, accountName(a), accountAv(a), one === a))
           .join("")}</div>`
       : "";
+    const fresh = unread.get("INBOX") ?? 0;
+    boxes.el.querySelector(".m-eyebrow")!.textContent = [
+      multi() ? `${mail.accounts.length} accounts` : mail.accounts[0] ? accountName(mail.accounts[0]) : "",
+      fresh ? `${fresh} new` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
     boxes.content.innerHTML =
       accounts +
-      `<div class="m-group">${system.join("")}</div>` +
-      (labels.length ? `<h3 class="m-group-title">Labels</h3><div class="m-group">${labels.join("")}</div>` : "");
+      `<div class="m-cells">${system.join("")}</div>` +
+      (labels.length ? `<h3 class="m-group-title">Labels</h3><div class="m-cells">${labels.join("")}</div>` : "");
   }
 
   boxes.content.addEventListener("click", (e) => {
@@ -164,22 +179,33 @@ export function mountPhone(mail: MailCore) {
     const page = list;
     page.bar.insertAdjacentHTML(
       "afterbegin",
-      `<button type="button" class="m-text m-select-all" data-act="select-all" hidden>Select All</button>`,
+      `<button type="button" class="m-text m-select-all" data-act="done" hidden>Cancel</button>`,
     );
-    page.end.innerHTML = `<button type="button" class="m-text" data-act="edit">Edit</button>`;
-    page.content.innerHTML = `<p class="m-status" aria-live="polite"></p>
-      <button type="button" class="m-search m-search-open" aria-label="Search mail">${icon("magnifying-glass")}<span>Search</span></button>
-      <div class="m-banner" hidden><span></span><button type="button" class="m-text" data-act="empty"></button></div>
+    page.end.innerHTML = `<button type="button" class="m-text m-quiet" data-act="edit">Select</button>
+      <button type="button" class="m-text m-strong" data-act="select-all" hidden>Select all</button>
+      <button type="button" class="m-accounts" data-act="accounts" hidden></button>`;
+    page.content.innerHTML = `<div class="m-banner" hidden><span></span><button type="button" class="m-text" data-act="empty"></button></div>
       <ul class="m-list" aria-label="Conversations"></ul>`;
+    // The heading: a small line of context over the large title, and a link to the view next to this one.
+    const title = page.scroller.querySelector<HTMLElement>(".m-title")!;
+    const head = document.createElement("div");
+    head.className = "m-head";
+    title.before(head);
+    head.append(title);
+    head.insertAdjacentHTML("beforeend", `<button type="button" class="m-jump" data-act="jump" hidden></button>`);
+    head.insertAdjacentHTML("beforebegin", `<p class="m-eyebrow" aria-live="polite"></p>`);
     page.scroller.insertAdjacentHTML(
       "afterbegin",
       `<div class="m-pull" aria-hidden="true"><span>${icon("arrows-clockwise")}</span></div>`,
     );
     page.el.insertAdjacentHTML(
       "beforeend",
-      `<button type="button" class="m-fab" data-act="compose" aria-label="New email">${icon("pencil-simple-line")}</button>
+      `<div class="m-dock">
+        <button type="button" class="m-search-pill" data-act="search">${icon("magnifying-glass")}<span>Search mail</span></button>
+        <button type="button" class="m-fab" data-act="compose" aria-label="New email">${icon("pencil-simple-line")}</button>
+      </div>
       <footer class="m-toolbar m-edit-tools" role="toolbar" aria-label="Selected conversations" hidden>
-        ${tool("mark", "envelope-simple-open", "Mark")}${tool("move", "folder", "Move")}${tool("label", "tag", "Label")}${tool("archive", "archive", "Archive")}${tool("trash", "trash", "Delete")}
+        ${tool("archive", "archive", "Archive")}${tool("move", "folder", "Move")}${tool("label", "tag", "Label")}${tool("mark", "envelope-simple-open", "Mark")}${tool("trash", "trash", "Delete")}
       </footer>`,
     );
     page.el.addEventListener("click", (e) => {
@@ -190,16 +216,23 @@ export function mountPhone(mail: MailCore) {
         case "compose":
           return void host.write();
         case "edit":
-          return setEditing(!editing);
+          return setEditing(true);
+        case "done":
+          return setEditing(false);
+        case "accounts":
+          return accountSheet();
         case "select-all":
           if (picked.size === mail.threads.length) picked.clear();
           else mail.threads.forEach((t) => picked.add(t.id));
           return syncEdit();
         case "empty":
           return void emptyBox();
+        case "search":
+          return openSearch();
+        case "jump":
+          if (b.dataset.box !== undefined) openBox(b.dataset.box || null);
       }
     });
-    page.content.querySelector(".m-search-open")!.addEventListener("click", openSearch);
     page.onClose = () => {
       if (list === page) list = null;
     };
@@ -213,26 +246,45 @@ export function mountPhone(mail: MailCore) {
   const tool = (act: string, glyph: string, label: string) =>
     `<button type="button" class="m-tool" data-edit="${act}">${icon(glyph)}<span>${label}</span></button>`;
 
+  /** Days a conversation has waited for an answer before Waiting puts it forward with Nudge and Drop it. */
+  const DUE_DAYS = 3;
+  const daysSince = (date: number) => Math.floor((Date.now() - date) / 86_400_000);
+  /** The user's "waiting for a reply" label (Settings → Inbox → Follow-ups), when they've chosen one. */
+  const waitingLabel = () => mail.userLabels.find((l) => l.name && l.name === settings.inbox.followUps.waiting);
+  const inWaiting = () => !mail.search && !!mail.mailbox && mail.mailbox === waitingLabel()?.id;
+
   function rowHtml(t: Thread) {
     const ring = multi() && mail.scope?.length !== 1 ? ` acct-${accountSettings(t.account).color}` : "";
     const name = displayName(t.sender) || "(no sender)";
     const subject = t.subject || "(no subject)";
     const chips = labelChips(t, mail.accountLabels.get(t.account) ?? []);
-    const said = `${t.unread ? "Unread. " : ""}${t.starred ? "Pinned. " : ""}${name}. ${subject}. ${shortDate(t.date)}`;
+    const waiting = inWaiting() && !searchView;
+    const days = daysSince(t.date);
+    const due = waiting && days >= DUE_DAYS;
+    const when = waiting ? (days < 1 ? "Today" : `${days} ${days === 1 ? "day" : "days"}`) : shortDate(t.date);
+    const said = `${t.unread ? "Unread. " : ""}${t.starred ? "Pinned. " : ""}${name}. ${subject}. ${when}`;
     const label = multi() ? `${said}. ${accountName(t.account)}` : said;
     const on = picked.has(t.id);
     const role = editing && !searchView ? `role="checkbox" aria-checked="${on}"` : `role="button"`;
-    return `<li class="m-row${t.unread ? " unread" : ""}${on ? " picked" : ""}" data-id="${esc(t.id)}">
+    // Below the preview, one line for small extras: label chips, Waiting's Nudge and Drop it, and later more (codes).
+    const extras = [
+      ...(due
+        ? [
+            `<button type="button" class="m-pill m-pill-go" data-row-act="nudge">Nudge</button>`,
+            `<button type="button" class="m-pill" data-row-act="drop">Drop it</button>`,
+          ]
+        : []),
+      ...chips.slice(0, 3),
+    ];
+    return `<li class="m-row${t.unread ? " unread" : ""}${due ? " due" : ""}${on ? " picked" : ""}" data-id="${esc(t.id)}">
       <div class="m-swipe" aria-hidden="true"><i></i><span></span></div>
       <div class="m-row-body" ${role} tabindex="0" aria-label="${esc(label)}">
         <span class="m-check" aria-hidden="true">${icon("check")}</span>
-        <span class="m-unread-dot"></span>
         ${settings.appearance.showAvatars ? `<span class="m-ava${ring}">${avatar(t.sender)}</span>` : ""}
         <span class="m-row-main">
-          <span class="m-row-top"><span class="m-from">${esc(name)}${t.count > 1 ? `<em>${t.count}</em>` : ""}</span>${t.starred ? icon("push-pin") : ""}<time>${shortDate(t.date)}</time></span>
-          <span class="m-subject">${esc(subject)}</span>
-          <span class="m-snippet">${esc(decodeEntities(t.snippet))}</span>
-          ${chips.length ? `<span class="m-chips">${chips.slice(0, 3).join("")}</span>` : ""}
+          <span class="m-row-top"><span class="m-from">${esc(name)}${t.count > 1 ? `<em>${t.count}</em>` : ""}</span>${t.starred ? icon("push-pin") : ""}<time>${esc(when)}</time></span>
+          <span class="m-preview">${waiting ? "You: " : ""}<b>${esc(subject)}</b> <span>${esc(decodeEntities(t.snippet))}</span></span>
+          ${extras.length ? `<span class="m-chips">${extras.join("")}</span>` : ""}
         </span>
       </div>
     </li>`;
@@ -300,19 +352,52 @@ export function mountPhone(mail: MailCore) {
       .join("");
   }
 
+  /** The line over the title: the day and what's new, how many are waiting on others, or that mail is being checked. */
   function setStatus() {
-    const s = list?.el.querySelector(".m-status");
+    const s = list?.el.querySelector(".m-eyebrow");
     if (!s) return;
     const unread = mail.threads.filter((t) => t.unread).length;
-    s.textContent = syncing ? "Checking for mail…" : unread && !mail.search ? `${unread} unread` : "";
+    const people = new Set(mail.threads.map((t) => bareEmail(t.sender))).size;
+    const day = new Date().toLocaleDateString(undefined, { weekday: "long" });
+    s.textContent = editing
+      ? boxName(mail.mailbox)
+      : syncing
+      ? "Checking for mail…"
+      : inWaiting()
+        ? people
+          ? `${people} ${people === 1 ? "person owes" : "people owe"} you a reply`
+          : "Nobody owes you a reply"
+        : unread
+          ? `${day} · ${unread} new`
+          : day;
+  }
+
+  /** The link by the title: Inbox to Waiting (once there's a Waiting label), Waiting to Sent. */
+  function syncJump() {
+    const jump = list?.el.querySelector<HTMLButtonElement>(".m-jump");
+    if (!jump) return;
+    const waiting = waitingLabel();
+    const to = mail.mailbox === "INBOX" && waiting ? waiting : inWaiting() ? { id: "SENT", name: "Sent" } : null;
+    jump.hidden = !to || editing;
+    if (!to) return;
+    jump.dataset.box = to.id;
+    jump.innerHTML = `${esc(to.name)} ${icon("arrow-right")}`;
   }
 
   /** The list's bars: Edit where it applies, and Empty Trash or Empty Spam in those two. */
   function syncListTools() {
     if (!list) return;
+    syncJump();
+    setStatus();
     const el = list.el;
     const edit = el.querySelector<HTMLButtonElement>("[data-act=edit]")!;
-    edit.hidden = mail.mailbox === "SCHEDULED";
+    edit.hidden = mail.mailbox === "SCHEDULED" || editing;
+    const accts = el.querySelector<HTMLButtonElement>("[data-act=accounts]")!;
+    accts.hidden = !multi() || editing;
+    if (multi()) {
+      accts.innerHTML = `<span class="acct-stack">${inView().map(accountAv).join("")}</span>`;
+      accts.setAttribute("aria-label", `Accounts: ${mail.scope ? accountName(mail.scope[0]) : "All"}`);
+    }
     edit.disabled = !editing && !mail.threads.length;
     const banner = el.querySelector<HTMLElement>(".m-banner")!;
     const box = mail.mailbox === "TRASH" || mail.mailbox === "SPAM" ? boxName(mail.mailbox) : null;
@@ -333,6 +418,9 @@ export function mountPhone(mail: MailCore) {
       const li = (e.target as Element).closest<HTMLElement>(".m-row");
       const id = li?.dataset.id;
       if (!id) return;
+      const rowAct = (e.target as Element).closest<HTMLElement>("[data-row-act]")?.dataset.rowAct;
+      const t = mail.threads.find((x) => x.id === id);
+      if (rowAct && t) return void (rowAct === "nudge" ? replyFromList(t, "reply") : dropWaiting(t));
       if (editing && page === list && !searchView) {
         if (picked.has(id)) picked.delete(id);
         else picked.add(id);
@@ -523,9 +611,8 @@ export function mountPhone(mail: MailCore) {
     picked.clear();
     const el = list.el;
     el.classList.toggle("m-editing", on);
-    el.querySelector<HTMLElement>("[data-act=edit]")!.textContent = on ? "Done" : "Edit";
-    el.querySelector<HTMLElement>("[data-act=edit]")!.classList.toggle("m-strong", on);
-    el.querySelector<HTMLElement>(".m-fab")!.hidden = on;
+    el.querySelector<HTMLElement>(".m-dock")!.hidden = on;
+    syncListTools();
     el.querySelector<HTMLElement>(".m-edit-tools")!.hidden = !on;
     syncEdit();
   }
@@ -537,9 +624,10 @@ export function mountPhone(mail: MailCore) {
     for (const id of picked) if (!mail.threads.some((t) => t.id === id)) picked.delete(id);
     const all = el.querySelector<HTMLElement>("[data-act=select-all]")!;
     all.hidden = !editing;
+    el.querySelector<HTMLElement>("[data-act=done]")!.hidden = !editing;
     el.querySelector<HTMLElement>(".m-back")!.classList.toggle("m-gone", editing);
-    all.textContent = picked.size && picked.size === mail.threads.length ? "Deselect All" : "Select All";
-    list.setTitle(editing ? (picked.size ? `${picked.size} Selected` : "Select Emails") : boxName(mail.mailbox));
+    all.textContent = picked.size && picked.size === mail.threads.length ? "Deselect all" : "Select all";
+    list.setTitle(editing ? (picked.size ? `${picked.size} selected` : "Select emails") : boxName(mail.mailbox));
     const none = !picked.size;
     el.querySelectorAll<HTMLButtonElement>("[data-edit]").forEach((b) => (b.disabled = none));
     const ts = pickedThreads();
@@ -765,6 +853,20 @@ export function mountPhone(mail: MailCore) {
     ]);
   }
 
+  /** The accounts in view, from the avatars by the list's title. */
+  function accountSheet() {
+    const one = mail.scope?.length === 1 ? mail.scope[0] : null;
+    const show = (scope: string[] | null) => () => {
+      mail.setScope(scope);
+      mail.openMailbox(mail.mailbox);
+      renderBoxes();
+    };
+    actionSheet("Show mail from", [
+      { label: "All accounts", icon: "users", checked: !mail.scope, run: show(null) },
+      ...mail.accounts.map((a) => ({ label: accountName(a), icon: "user-circle", checked: one === a, run: show([a]) })),
+    ]);
+  }
+
   async function emptyBox() {
     const id = mail.mailbox;
     if (id !== "TRASH" && id !== "SPAM") return;
@@ -784,6 +886,13 @@ export function mountPhone(mail: MailCore) {
     } catch (e) {
       toast(`Couldn't empty ${name}: ${e}`, { kind: "error" });
     }
+  }
+
+  /** Waiting's Drop it: stop waiting on this conversation (takes its Waiting label off), with Undo. */
+  function dropWaiting(t: Thread) {
+    const name = waitingLabel()?.name;
+    const id = name && labelIn(name)(t.account);
+    if (id) change(changesFor([t], [], [id]), "No longer waiting");
   }
 
   /** Reply, Reply All or Forward from the list, without opening the conversation. */
@@ -860,7 +969,7 @@ export function mountPhone(mail: MailCore) {
     page.bar.insertAdjacentHTML(
       "beforeend",
       `<form class="m-search-bar" role="search">
-        <label class="m-search">${icon("magnifying-glass")}<input type="search" placeholder="Search" aria-label="Search mail" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" /><button type="button" class="m-search-clear" aria-label="Clear search" hidden>${icon("circle-x")}</button></label>
+        <label class="m-search">${icon("magnifying-glass")}<input type="search" placeholder="Search mail" aria-label="Search mail" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" /><button type="button" class="m-search-clear" aria-label="Clear search" hidden>${icon("circle-x")}</button></label>
         <button type="button" class="m-text" data-act="cancel">Cancel</button>
       </form>`,
     );
@@ -1010,7 +1119,7 @@ export function mountPhone(mail: MailCore) {
       return;
     }
     help.innerHTML = senders.length
-      ? `<h3 class="m-group-title" id="m-suggest">Suggestions</h3><div class="m-group" role="group" aria-labelledby="m-suggest">${senders
+      ? `<h3 class="m-group-title" id="m-suggest">People</h3><div class="m-group" role="group" aria-labelledby="m-suggest">${senders
           .map(
             (s) =>
               `<button type="button" class="m-cell m-suggest" data-query="from:${esc(bareEmail(s))}" aria-label="${esc(`Mail from ${displayName(s) || bareEmail(s)}`)}"><span class="m-ava">${avatar(s)}</span><span><strong>${esc(displayName(s) || bareEmail(s))}</strong><small>${esc(bareEmail(s))}</small></span></button>`,
@@ -1049,8 +1158,9 @@ export function mountPhone(mail: MailCore) {
     });
     page.el.insertAdjacentHTML(
       "beforeend",
-      `<footer class="m-toolbar m-convo-tools">
-        ${barButton("archive", "archive", "Archive")}${barButton("trash", "trash", "Delete")}${barButton("move", "folder", "Move")}${barButton("more", "dots-circle-horizontal", "More actions")}${barButton("reply", "arrow-bend-up-left", "Reply")}
+      `<footer class="m-dock m-convo-tools">
+        <span class="m-dock-pill">${barButton("archive", "archive", "Archive")}${barButton("trash", "trash", "Delete")}${barButton("move", "folder", "Move")}${barButton("more", "dots", "More actions")}</span>
+        <button type="button" class="m-fab" data-act="reply" aria-label="Reply">${icon("arrow-bend-up-left")}</button>
       </footer>`,
     );
     page.el.querySelector(".m-convo-tools")!.addEventListener("click", (e) => {
@@ -1059,12 +1169,8 @@ export function mountPhone(mail: MailCore) {
       if (!action || !t) return;
       if (action === "move") return moveSheet([t]);
       if (action === "more") return moreSheet(t);
-      if (action === "reply")
-        return actionSheet("Reply", [
-          { label: "Reply", icon: "arrow-bend-up-left", run: () => host.reply("reply") },
-          { label: "Reply All", icon: "arrow-bend-double-up-left", run: () => host.reply("all") },
-          { label: "Forward", icon: "arrow-bend-up-right", run: () => host.reply("forward") },
-        ]);
+      // Reply All and Forward are on each email's card.
+      if (action === "reply") return void host.reply("reply");
       void act(action, [t]);
     });
     wireReader(page.content, mail, (kind, m) => host.reply(kind, m));

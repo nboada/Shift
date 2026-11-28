@@ -208,6 +208,17 @@ button.primary:disabled { opacity: 0.6; }
   .signin-card { padding: 24px; }
   .signin-points { width: auto; }
 }
+/* The iPhone's sign-in, before any account (and before the phone stylesheet loads): a big headline at the left, the sign-in buttons under the thumb */
+
+:root.ios .signin { display: flex; align-items: stretch; background: var(--pane); }
+:root.ios .signin-card { display: flex; flex-direction: column; width: 100%; padding: calc(env(safe-area-inset-top) + 72px) max(28px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left)); text-align: left; }
+:root.ios .signin-mark { width: 60px; height: 60px; }
+:root.ios .signin-card h1 { margin: 24px 0 16px; font-size: 2.588rem; font-weight: 800; letter-spacing: -0.035em; line-height: 1.05; }
+:root.ios .signin-card p { margin: 0 0 18px; font-size: 1rem; line-height: 1.5; }
+:root.ios .signin-points { width: auto; margin: 0 0 auto; gap: 12px; font-size: 0.882rem; color: var(--muted); }
+:root.ios .signin-points i { color: var(--text); }
+:root.ios #signin-btn { align-self: center; margin-top: 32px; }
+:root.ios #signin-other { width: 100%; min-height: 56px; margin-top: 12px; border-radius: 999px; background: color-mix(in srgb, var(--text) 3.5%, var(--pane)); color: var(--text); font-size: 1rem; font-weight: 600; text-decoration: none; }
 
 /* First-run walkthrough: a card over the frosted inbox, so layout and theme choices show live behind it. */
 .onboarding { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / 0.22); -webkit-backdrop-filter: blur(8px) saturate(1.2); backdrop-filter: blur(8px) saturate(1.2); animation: ob-fade 0.3s ease; }
