@@ -578,7 +578,7 @@ button.primary:disabled { opacity: 0.6; }
   font: inherit;
 }
 
-.threads { list-style: none; margin: 0; padding: 0 6px 8px; overflow-y: auto; flex: 1; outline: 0; }
+.threads { list-style: none; margin: 0; padding: 0 6px 8px; overflow-y: auto; flex: 1; outline: 0; border-bottom-left-radius: inherit; border-bottom-right-radius: inherit; }
 .threads li[data-id] {
   display: grid;
   grid-template-columns: 8px 32px minmax(0, 1fr) auto;
