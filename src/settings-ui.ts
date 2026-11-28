@@ -34,6 +34,21 @@ const SECTIONS: [string, string, string][] = [
   ["shortcuts", "Keyboard shortcuts", "keyboard"],
 ];
 
+/** The phone's list: accounts on their own, then the rest by how often they're reached for, in plainer words. */
+const PHONE_ORDER = [
+  "appearance",
+  "notifications",
+  "inbox",
+  "swipes",
+  "composer",
+  "scheduling",
+  "ai",
+  "accessibility",
+  "general",
+];
+const PHONE_NAMES: Record<string, string> = { composer: "Writing", scheduling: "Send later" };
+const sectionName = (id: string) => (IS_IOS && PHONE_NAMES[id]) || SECTIONS.find(([s]) => s === id)![1];
+
 const SWIPE_ACTIONS: [string, string][] = [
   ["none", "Nothing"],
   ["archive", "Archive"],
@@ -781,7 +796,7 @@ function show(section: string) {
   root()
     .querySelectorAll<HTMLElement>("[data-section]")
     .forEach((b) => b.classList.toggle("active", b.dataset.section === section));
-  document.getElementById("settings-title")!.textContent = SECTIONS.find(([id]) => id === section)![1];
+  document.getElementById("settings-title")!.textContent = sectionName(section);
   const back = root().querySelector(".settings-back span");
   if (back) back.textContent = accountOpen && section === "accounts" ? "Accounts" : "Settings";
   panel().innerHTML = render[section]();
@@ -1076,6 +1091,9 @@ window.addEventListener(
 
 // ---- wiring ----
 
+const navButton = (id: string) =>
+  `<button data-section="${id}"><i class="${iconClass(SECTIONS.find(([s]) => s === id)![2])}"></i><span>${sectionName(id)}</span>${IS_IOS ? `<i class="${iconClass("caret-right")}" aria-hidden="true"></i>` : ""}</button>`;
+
 export function initSettings(c: Ctx) {
   ctx = c;
   const nav = root().querySelector(".settings-nav")!;
@@ -1094,12 +1112,9 @@ export function initSettings(c: Ctx) {
       ? `<header class="settings-nav-head"><h2>Settings</h2><button id="settings-close" class="settings-done">Done</button></header>`
       : `<button id="settings-close" class="icon settings-close" data-tip="Close (Esc)"><i class="ti ti-x"></i></button>`) +
     `<label class="settings-search"><i class="${iconClass("magnifying-glass")}" aria-hidden="true"></i><input id="settings-search" type="search" placeholder="Search" aria-label="Search settings" spellcheck="false" autocomplete="off" /></label>` +
-    SECTIONS.filter(([id]) => !(IS_IOS && id === "shortcuts"))
-      .map(
-        ([id, label, icon]) =>
-          `<button data-section="${id}"><i class="${iconClass(icon)}"></i><span>${label}</span>${IS_IOS ? `<i class="${iconClass("caret-right")}" aria-hidden="true"></i>` : ""}</button>`,
-      )
-      .join("");
+    (IS_IOS
+      ? `<div class="settings-card">${navButton("accounts")}</div><div class="settings-card">${PHONE_ORDER.map(navButton).join("")}</div>`
+      : SECTIONS.map(([id]) => navButton(id)).join(""));
   nav.addEventListener("click", (e) => {
     const b = (e.target as Element).closest<HTMLElement>("[data-section]");
     if (!b) return;

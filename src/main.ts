@@ -74,6 +74,7 @@ const accountName = (a: string) => accountSettings(a).title || a;
 
 const setView = (v: "mailboxes" | "list" | "reader") => (app.dataset.view = v);
 // The iOS keyboard covers the page without resizing it; full-screen sheets size to what's still visible (--visible-height).
+document.documentElement.classList.toggle("ios", IS_IOS);
 if (IS_IOS && window.visualViewport) {
   const vv = window.visualViewport;
   const fit = () => document.documentElement.style.setProperty("--visible-height", `${vv.height}px`);

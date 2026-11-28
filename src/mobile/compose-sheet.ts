@@ -33,22 +33,23 @@ export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: st
       <div class="mc-grab" aria-hidden="true"></div>
       <button type="button" class="mc-cancel" data-act="cancel">Cancel</button>
       <h1 id="mc-title" class="mc-title"></h1>
-      <button type="button" class="mc-send" data-act="send" aria-label="Send">${icon("arrow-up")}</button>
+      <button type="button" class="mc-from" data-act="from" hidden></button>
     </header>
     <div class="mc-scroll">
-      <div class="mc-row mc-from" hidden><span>From:</span><button type="button" data-act="from"></button></div>
       <div class="mc-row"><span>To:</span><div class="rcpt" data-rcpt="to"><input type="email" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="next" aria-label="To" /></div><button type="button" class="mc-cc-toggle" data-act="cc">Cc/Bcc</button></div>
       <div class="mc-row" data-row="cc" hidden><span>Cc:</span><div class="rcpt" data-rcpt="cc"><input type="email" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Cc" /></div></div>
       <div class="mc-row" data-row="bcc" hidden><span>Bcc:</span><div class="rcpt" data-rcpt="bcc"><input type="email" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Bcc" /></div></div>
-      <label class="mc-row"><span>Subject:</span><input class="mc-subject" autocomplete="off" enterkeyhint="next" /></label>
+      <label class="mc-row mc-subject-row"><input class="mc-subject" placeholder="Subject" aria-label="Subject" autocomplete="off" enterkeyhint="next" /></label>
       <div class="mc-files attachments" hidden></div>
       <p class="mc-error" role="alert"></p>
       <div class="mc-body"></div>
     </div>
     <footer class="mc-tools" role="toolbar" aria-label="Formatting">
-      ${tool("bold", "bold", "Bold")}${tool("italic", "italic", "Italic")}${tool("bulletList", "list", "Bulleted list")}${tool("orderedList", "list-numbers", "Numbered list")}${tool("link", "link", "Link")}
-      <span class="mc-status" aria-live="polite"></span>
       ${tool("attach", "paperclip", "Attach photos or files")}${tool("later", "clock", "Send later")}${tool("ai", "message-ai", "Write with AI")}
+      <button type="button" class="m-icon" data-act="format" aria-label="Formatting" aria-pressed="false">${icon("text-aa")}</button>
+      <span class="mc-format">${tool("bold", "bold", "Bold")}${tool("italic", "italic", "Italic")}${tool("bulletList", "list", "Bulleted list")}${tool("orderedList", "list-numbers", "Numbered list")}${tool("link", "link", "Link")}</span>
+      <span class="mc-status" aria-live="polite"></span>
+      <button type="button" class="mc-send" data-act="send">Send ${icon("arrow-up")}</button>
     </footer>
     <div class="mc-float" hidden><input /></div>
     <input type="file" class="mc-file" multiple hidden />`;
@@ -81,12 +82,13 @@ export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: st
 
   function renderFrom() {
     const s = compose.state;
-    const row = $(".mc-from");
-    row.hidden = mail.accounts.length < 2 || !s || !!s.context;
-    if (row.hidden || !s) return;
+    const from = $(".mc-from");
+    from.hidden = mail.accounts.length < 2 || !s || !!s.context;
+    if (from.hidden || !s) return;
     const a = accountSettings(s.account);
-    row.querySelector("button")!.innerHTML =
-      `<span class="account-dot acct-${a.color}"></span>${esc(a.title || s.account)}${icon("caret-up-down")}`;
+    const name = a.title || s.account;
+    from.setAttribute("aria-label", `From ${name}`);
+    from.innerHTML = `<span class="acct-av acct-${a.color}" aria-hidden="true">${esc(name.charAt(0).toUpperCase())}</span><span>${esc(name)}</span>${icon("caret-up-down")}`;
   }
 
   function renderFiles() {
@@ -225,6 +227,10 @@ export function createComposeSheet(mail: MailCore, on: { discarded?: (thread: st
         return later();
       case "ai":
         return aiMenu();
+      case "format": {
+        const on = tools.classList.toggle("formatting");
+        return $("[data-act=format]").setAttribute("aria-pressed", String(on));
+      }
     }
   }
 
