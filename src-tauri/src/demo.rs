@@ -150,6 +150,12 @@ const INVOICE: &str = r#"<table style="font-family:-apple-system,sans-serif;max-
 <tr><td>Amount paid <strong>$1,250.00 AUD</strong></td></tr><tr><td>Date paid 24 Nov 2026</td></tr>
 <tr><td style="padding-top:16px;color:#666">Website retainer &ndash; November</td></tr></table>"#;
 
+const VERIFY: &str = r#"<table style="font-family:-apple-system,sans-serif;max-width:480px;margin:auto">
+<tr><td style="padding:24px 0 8px"><strong style="font-size:20px">Confirm it's you</strong></td></tr>
+<tr><td>Enter this verification code in Fieldnote to finish setting up your account:</td></tr>
+<tr><td style="padding:16px 0;font-size:32px;letter-spacing:6px;font-weight:600">FN-73920</td></tr>
+<tr><td style="color:#666">The code expires in 15 minutes. Fieldnote will never ask you for it by phone.</td></tr></table>"#;
+
 fn system_labels() -> Vec<gmail::Label> {
     [
         "INBOX",
@@ -518,6 +524,24 @@ pub fn seed(conn: &mut Connection) -> Result<()> {
                 "Maya Chen has invited you to Sprint planning.\n\nJoin with Google Meet: meet.example/abc-defg-hij",
             )],
         ),
+        // One-time codes, minutes old, so the Copy chip shows.
+        thread(
+            "t22",
+            "Your Lumen sign-in code",
+            &["INBOX", "UNREAD", "CATEGORY_UPDATES"],
+            &[(
+                "Lumen <no-reply@lumen.example>",
+                ME,
+                0.05,
+                "Hi Alex,\n\nUse this code to sign in to Lumen:\n\n482 913\n\nIt expires in 10 minutes. If you didn't try to sign in, you can ignore this email.\n\nThe Lumen team",
+            )],
+        ),
+        thread(
+            "t23",
+            "Verify your email address",
+            &["INBOX", "CATEGORY_UPDATES"],
+            &[("Fieldnote <verify@fieldnote.example>", ME, 0.3, VERIFY)],
+        ),
     ];
     for t in &mut threads {
         match t.id.as_str() {
@@ -563,7 +587,25 @@ mod tests {
         let mut c = db::open(std::path::Path::new(":memory:")).unwrap();
         seed(&mut c).unwrap();
         let inbox = db::threads(&c, Some("INBOX")).unwrap();
-        assert_eq!(inbox.len(), 16);
+        assert_eq!(inbox.len(), 18);
+        let code = |id: &str| {
+            inbox
+                .iter()
+                .find(|t| t.id == id)
+                .and_then(|t| t.code.clone())
+        };
+        assert_eq!(code("t22").as_deref(), Some("482913"));
+        assert_eq!(code("t23").as_deref(), Some("FN-73920"));
+        assert_eq!(code("t05"), None, "a receipt has no code");
+        let old = thread(
+            "old",
+            "Your code",
+            &["INBOX"],
+            &[(ME, EMAIL, 2.0, "Your code is 551204")],
+        );
+        db::upsert_thread(&mut c, &old, true).unwrap();
+        let rows = db::threads_by_ids(&c, &["old".into()]).unwrap();
+        assert_eq!(rows[0].code, None, "a code two hours old is stale");
         assert!(
             db::messages(&c, "t21").unwrap()[0].invite.is_some(),
             "the invite has its event"

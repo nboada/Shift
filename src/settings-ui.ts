@@ -623,6 +623,16 @@ const render: Record<string, () => string> = {
           "Notifications are Gmail's Promotions, Updates, Social and Forums.",
         ),
     ) +
+    (IS_IOS
+      ? ""
+      : group(
+          "One-time codes",
+          row(
+            "Archive after copying the code",
+            toggle("inbox.archiveAfterCode"),
+            "Copying a sign-in or verification code from the list, the email or its notification archives the email.",
+          ),
+        )) +
     group(
       "Follow-ups",
       `<p class="group-note">When you reply, the conversation moves from your “needs my reply” label to your “waiting” label, and back when they write again. Pick a label for each to turn it on.</p><div id="follow-up-labels"></div>`,

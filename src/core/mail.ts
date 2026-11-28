@@ -19,6 +19,8 @@ export type Thread = {
   labels: string;
   /** Address of the account the thread belongs to. */
   account: string;
+  /** The one-time code in the newest email, while it's fresh (under an hour old). */
+  code?: string | null;
 };
 export type Message = {
   id: string;
@@ -38,6 +40,8 @@ export type Message = {
   invite: Invite | null;
   /** An unsent draft of the user's in this conversation. */
   draft?: boolean;
+  /** The one-time code in the email, while it's fresh. */
+  code?: string | null;
 };
 export type Fields = { to?: string; cc?: string; bcc?: string; subject?: string; body?: string };
 export type Scheduled = {

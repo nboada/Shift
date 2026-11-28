@@ -36,6 +36,8 @@ export const DEFAULTS = {
     unreadBadge: true,
     /** Label names; with both set, a new message moves a conversation between them (see `move_follow_ups`). */
     followUps: { needsReply: "", waiting: "" },
+    /** Archive an email once its one-time code is copied. */
+    archiveAfterCode: false,
   },
   composer: {
     signature: "",

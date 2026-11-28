@@ -100,6 +100,11 @@ function siteDomain(domain: string) {
   return parts.slice(-n).join(".");
 }
 
+/** The Copy button for an email's one-time code. Clicks are the interface's to handle, by `data-code`. */
+export function codeChip(code: string) {
+  return `<button type="button" class="code-chip" data-code="${esc(code)}" data-tip="Copy code" aria-label="Copy code ${esc(code)}"><i class="ti ti-copy" aria-hidden="true"></i>Copy ${esc(code)}</button>`;
+}
+
 /** Company logo for work domains, coloured initials otherwise (and whenever the logo is missing). */
 export function avatar(addr: string) {
   const email = bareEmail(addr);
