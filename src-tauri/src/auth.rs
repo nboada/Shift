@@ -332,8 +332,12 @@ pub async fn refresh(http: &reqwest::Client, email: &str) -> Result<Token> {
         let (status, body) = (resp.status(), resp.text().await.unwrap_or_default());
         // Revoked in Google's settings, expired (7 days while the OAuth app is in Testing), or a changed password.
         if body.contains("invalid_grant") {
+            let reason = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v["error_description"].as_str().map(str::to_owned))
+                .unwrap_or_default();
             bail!(
-                "{email}'s sign-in has expired or was revoked: sign in again in Settings → Accounts → Add account"
+                "sign-in has expired or was revoked (Google: {reason}). Sign in again in Settings → Accounts → Add account"
             );
         }
         bail!(
