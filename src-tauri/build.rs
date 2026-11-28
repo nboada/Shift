@@ -38,6 +38,8 @@ fn main() {
             "load_more",
             "quit_now",
             "test_notification",
+            "allow_notifications",
+            "haptic",
             "empty_mailbox",
             "delete_forever",
             "create_label",

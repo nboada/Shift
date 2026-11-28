@@ -357,8 +357,9 @@ fn now_ms() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
-/// iOS shows notifications only after the user allows them; macOS asks on its own at the first one. Asked once
-/// there's an account, so the prompt doesn't greet a first launch. iOS remembers the answer and doesn't ask again.
+/// iOS shows notifications only after the user allows them; macOS asks on its own at the first one. On the phone the
+/// walkthrough asks (`allow_notifications`); this catches a later launch when its user skipped that. iOS remembers
+/// the answer and doesn't ask again.
 fn ask_to_notify(app: &AppHandle) {
     #[cfg(mobile)]
     {
@@ -758,6 +759,36 @@ fn test_notification(app: AppHandle) -> R<()> {
     PRESENT_NEXT.store(true, std::sync::atomic::Ordering::SeqCst);
     n.show().map_err(anyhow::Error::from)?;
     Ok(())
+}
+
+/// The phone walkthrough's Allow button: shows iOS's prompt (once; later calls return the saved answer). Whether
+/// notifications are allowed.
+#[tauri::command(async)]
+fn allow_notifications(app: AppHandle) -> R<bool> {
+    #[cfg(mobile)]
+    {
+        use tauri_plugin_notification::{NotificationExt, PermissionState};
+        Ok(app.notification().request_permission()? == PermissionState::Granted)
+    }
+    #[cfg(desktop)]
+    {
+        let _ = app;
+        Ok(true)
+    }
+}
+
+/// A tap of feedback on the iPhone (swipes, pull to refresh); nothing on the Mac.
+#[tauri::command(async)]
+fn haptic(app: AppHandle, style: String) {
+    #[cfg(target_os = "ios")]
+    {
+        use tauri_plugin_phone::PhoneExt;
+        if let Err(e) = app.phone().haptic(&style) {
+            eprintln!("haptic: {e}");
+        }
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = (app, style);
 }
 
 /// Set by the test notification: show the next banner even though Shift is the frontmost app.
@@ -1319,7 +1350,6 @@ async fn add_account(app: AppHandle, s: tauri::State<'_, State>) -> R<String> {
         }
     };
     *account.token.lock().await = Some(token);
-    ask_to_notify(&app);
     spawn_sync(&app);
     Ok(email)
 }
@@ -1358,7 +1388,6 @@ async fn add_imap_account(
         accounts.retain(|x| !x.email.eq_ignore_ascii_case(&email));
         accounts.push(a);
     }
-    ask_to_notify(&app);
     spawn_sync(&app);
     Ok(email)
 }
@@ -3035,7 +3064,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
     #[cfg(target_os = "ios")]
-    let builder = builder.plugin(tauri_plugin_web_auth::init());
+    let builder = builder
+        .plugin(tauri_plugin_web_auth::init())
+        .plugin(tauri_plugin_phone::init());
     // The updater, window size and position, and the app menu are Mac-only; iOS has none of them.
     #[cfg(desktop)]
     let builder = builder
@@ -3146,7 +3177,9 @@ pub fn run() {
                     .read_timeout(Duration::from_secs(300))
                     .build()?,
             });
-            if !app.state::<State>().all().is_empty() {
+            let s = app.state::<State>();
+            let onboarded = settings::load(&s.dir)["onboarding"]["done"].as_bool() == Some(true);
+            if onboarded && !s.all().is_empty() {
                 ask_to_notify(app.handle());
             }
             let handle = app.handle().clone();
@@ -3158,6 +3191,22 @@ pub fn run() {
                     tokio::time::sleep(Duration::from_secs(wait)).await;
                 }
             });
+            // shortcut: iOS runs a background refresh when it chooses (rarely for an app opened seldom, never after
+            // the user force-quits it), so mail arriving in between waits; instant alerts need Gmail push and an APNs
+            // server.
+            #[cfg(target_os = "ios")]
+            {
+                use tauri_plugin_phone::PhoneExt;
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    while handle.phone().next_refresh().await.is_ok() {
+                        sync(&handle).await;
+                        if let Err(e) = handle.phone().refresh_done(true) {
+                            eprintln!("background refresh: {e}");
+                        }
+                    }
+                });
+            }
             app.manage(updates::Updates::default());
             updates::spawn_checks(app.handle());
             // A click on a new-mail notification brings Shift forward and opens what it announced. Set up before
@@ -3213,6 +3262,8 @@ pub fn run() {
             load_more,
             quit_now,
             test_notification,
+            allow_notifications,
+            haptic,
             empty_mailbox,
             delete_forever,
             create_label,

@@ -56,6 +56,8 @@ apple-native-keyring-store = { version = "1.0.3", features = ["protected"] }
 # Google sign-in through the system sheet (ASWebAuthenticationSession); iOS refuses the desktop loopback redirect.
 # Vendored: see plugins/web-auth/Cargo.toml.
 tauri-plugin-web-auth = { path = "plugins/web-auth" }
+# Keyboard accessory bar, haptics and background refresh: see plugins/phone.
+tauri-plugin-phone = { path = "plugins/phone" }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

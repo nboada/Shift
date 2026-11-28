@@ -42,5 +42,13 @@
 	</array>
 	<key>UIDesignRequiresCompatibility</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>au.com.talkk.shift.refresh</string>
+	</array>
 </dict>
 </plist>

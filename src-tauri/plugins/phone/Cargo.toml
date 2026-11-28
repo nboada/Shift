@@ -1,0 +1,15 @@
+[package]
+name = "tauri-plugin-phone"
+version = "0.1.0"
+description = "The iPhone app's native pieces: no keyboard accessory bar, haptics, and background refresh."
+license = "MIT"
+edition = "2024"
+links = "tauri-plugin-phone"
+publish = false
+
+[dependencies]
+tauri = { version = "2" }
+serde_json = "1"
+
+[build-dependencies]
+tauri-plugin = { version = "2.2.0", features = ["build"] }

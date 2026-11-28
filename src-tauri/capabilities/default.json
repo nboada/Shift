@@ -36,6 +36,8 @@
     "allow-load-more",
     "allow-quit-now",
     "allow-test-notification",
+    "allow-allow-notifications",
+    "allow-haptic",
     "allow-empty-mailbox",
     "allow-delete-forever",
     "allow-create-label",
