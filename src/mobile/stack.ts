@@ -5,7 +5,7 @@ import { iconClass } from "../icons";
 import { settings } from "../settings";
 
 const EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
-const DURATION = 500;
+const DURATION = 440;
 /** How far the page underneath sits to the left while covered, as a share of the width (UIKit's parallax). */
 const UNDER = 0.3;
 
@@ -150,14 +150,16 @@ export function createStack(root: HTMLElement) {
     let last = { x: x0, t: e.timeStamp };
     let speed = 0;
     const move = (ev: PointerEvent) => {
-      const dx = Math.max(0, ev.clientX - x0);
+      const mx = ev.clientX - x0;
+      const my = ev.clientY - y0;
       if (!dragging) {
-        if (Math.abs(ev.clientY - y0) > 10) return end();
-        if (dx < 8) return;
+        if (Math.hypot(mx, my) < 8) return;
+        if (mx < Math.abs(my) * 1.3) return end();
         dragging = true;
         root.setPointerCapture(ev.pointerId);
         under.el.classList.remove("m-covered");
       }
+      const dx = Math.max(0, mx - 8);
       speed = (ev.clientX - last.x) / Math.max(1, ev.timeStamp - last.t);
       last = { x: ev.clientX, t: ev.timeStamp };
       top.el.style.transform = `translateX(${dx}px)`;
@@ -166,7 +168,7 @@ export function createStack(root: HTMLElement) {
     const up = (ev: PointerEvent) => {
       end();
       if (!dragging) return;
-      const f = Math.max(0, ev.clientX - x0) / w;
+      const f = Math.max(0, ev.clientX - x0 - 8) / w;
       if (f > 0.35 || speed > 0.5) return void pop(f);
       moving = true;
       top.el.style.transform = under.el.style.transform = "";
