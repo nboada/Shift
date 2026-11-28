@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS labels (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind
 CREATE TABLE IF NOT EXISTS threads (
   id TEXT PRIMARY KEY, subject TEXT NOT NULL, sender TEXT NOT NULL,
   snippet TEXT NOT NULL, date INTEGER NOT NULL, count INTEGER NOT NULL,
-  full INTEGER NOT NULL DEFAULT 0, live INTEGER NOT NULL DEFAULT 1);
+  full INTEGER NOT NULL DEFAULT 0, live INTEGER NOT NULL DEFAULT 1, code TEXT);
 CREATE INDEX IF NOT EXISTS threads_date ON threads(date DESC);
 CREATE TABLE IF NOT EXISTS thread_labels (
   label_id TEXT NOT NULL, thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
@@ -49,7 +49,7 @@ CREATE INDEX IF NOT EXISTS imap_uids_id ON imap_uids(id);
 ";
 
 /// Schema version, kept in `PRAGMA user_version`. Bump it and add an `if version < N` step to `open` for each change.
-const VERSION: i64 = 4;
+const VERSION: i64 = 5;
 
 pub fn open(path: &std::path::Path) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
@@ -94,6 +94,10 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
             "UPDATE threads SET full = 0 WHERE full = 1 AND id IN (SELECT thread_id FROM thread_labels WHERE label_id = 'DRAFT')",
             [],
         )?;
+    }
+    if version < 5 {
+        // The one-time code in the newest message, found when it's fetched. Older mail has none worth showing.
+        add_column(&tx, "threads", "code TEXT")?;
     }
     tx.execute_batch(&format!("PRAGMA user_version = {VERSION}"))?;
     tx.commit()?;
@@ -406,13 +410,27 @@ pub fn upsert_thread(conn: &mut Connection, t: &gmail::Thread, full: bool) -> Re
             }
         }
     }
+    let code = t
+        .messages
+        .iter()
+        .rev()
+        .find(|m| !m.label_ids.iter().any(|l| l == "DRAFT"))
+        .filter(|m| crate::otp::fresh(m.date_ms(), crate::now_ms()))
+        .and_then(|m| {
+            crate::otp::in_message(
+                &m.header("Subject"),
+                m.body("text/plain").as_deref(),
+                m.body("text/html").as_deref(),
+                &m.snippet,
+            )
+        });
     let tx = conn.transaction()?;
     // An upsert, not INSERT OR REPLACE: replacing deletes the row first, and the delete cascades into `ai_labels`.
     tx.execute(
-        "INSERT INTO threads (id, subject, sender, snippet, date, count, full, live) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO threads (id, subject, sender, snippet, date, count, full, live, code) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(id) DO UPDATE SET subject = excluded.subject, sender = excluded.sender, snippet = excluded.snippet,
-           date = excluded.date, count = excluded.count, full = excluded.full, live = excluded.live",
-        params![t.id, first.header("Subject"), sender, last.snippet, last.date_ms(), t.messages.len() as i64, full, live],
+           date = excluded.date, count = excluded.count, full = excluded.full, live = excluded.live, code = excluded.code",
+        params![t.id, first.header("Subject"), sender, last.snippet, last.date_ms(), t.messages.len() as i64, full, live, code],
     )?;
     tx.execute("DELETE FROM thread_labels WHERE thread_id = ?1", [&t.id])?;
     tx.execute("DELETE FROM messages WHERE thread_id = ?1", [&t.id])?;
@@ -645,7 +663,7 @@ pub fn labels(conn: &Connection) -> Result<Vec<LabelRow>> {
 pub struct ThreadRow {
     /// Which account the thread belongs to; filled in by the caller, since each account has its own database.
     pub account: String,
-    id: String,
+    pub id: String,
     subject: String,
     sender: String,
     snippet: String,
@@ -657,6 +675,8 @@ pub struct ThreadRow {
     primary: bool,
     /// Space-separated Gmail label ids.
     labels: String,
+    /// The one-time code in the newest message, while it's fresh.
+    pub code: Option<String>,
 }
 
 const THREAD_COLS: &str = "t.id, t.subject, t.sender, t.snippet, t.date, t.count,
@@ -664,7 +684,7 @@ const THREAD_COLS: &str = "t.id, t.subject, t.sender, t.snippet, t.date, t.count
   EXISTS(SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id = 'STARRED'),
   NOT EXISTS(SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id
     AND x.label_id IN ('CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'CATEGORY_UPDATES', 'CATEGORY_FORUMS')),
-  (SELECT group_concat(x.label_id, ' ') FROM thread_labels x WHERE x.thread_id = t.id)";
+  (SELECT group_concat(x.label_id, ' ') FROM thread_labels x WHERE x.thread_id = t.id), t.code";
 
 fn thread_row(r: &rusqlite::Row) -> rusqlite::Result<ThreadRow> {
     Ok(ThreadRow {
@@ -679,6 +699,9 @@ fn thread_row(r: &rusqlite::Row) -> rusqlite::Result<ThreadRow> {
         starred: r.get(7)?,
         primary: r.get(8)?,
         labels: r.get::<_, Option<String>>(9)?.unwrap_or_default(),
+        code: r
+            .get::<_, Option<String>>(10)?
+            .filter(|_| crate::otp::fresh(r.get(4).unwrap_or(0), crate::now_ms())),
     })
 }
 
@@ -719,6 +742,7 @@ pub struct NewMail {
     pub date: i64,
     /// False for Gmail's Promotions/Social/Updates/Forums tabs.
     pub primary: bool,
+    pub code: Option<String>,
 }
 
 /// Unread Inbox threads whose latest message is newer than `since` (ms), oldest first.
@@ -739,6 +763,7 @@ pub fn inbox_mail(conn: &Connection, since: i64, unread_only: bool) -> Result<Ve
             snippet: t.snippet,
             date: t.date,
             primary: t.primary,
+            code: t.code,
         })
         .collect();
     out.reverse();
@@ -891,6 +916,8 @@ pub struct MessageRow {
     pub attachments: Vec<AttachmentRow>,
     /// The calendar event, when the email is an invite or an answer to one.
     pub invite: Option<crate::invite::Invite>,
+    /// The one-time code in the email, while it's fresh.
+    code: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -908,23 +935,35 @@ pub fn messages(conn: &Connection, thread: &str) -> Result<Vec<MessageRow>> {
          FROM messages WHERE thread_id = ?1 ORDER BY date",
     )?;
     let me = get_meta(conn, "email")?.unwrap_or_default();
+    let now = crate::now_ms();
     let rows = st.query_map([thread], |r| {
         let ics: Option<String> = r.get(11)?;
+        let (date, subject, html, text, draft): (
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            bool,
+        ) = (r.get(4)?, r.get(5)?, r.get(8)?, r.get(9)?, r.get(12)?);
+        let code = (!draft && crate::otp::fresh(date, now))
+            .then(|| crate::otp::in_message(&subject, text.as_deref(), html.as_deref(), ""))
+            .flatten();
         Ok(MessageRow {
             id: r.get(0)?,
             sender: r.get(1)?,
             recipients: r.get(2)?,
             cc: r.get(3)?,
-            date: r.get(4)?,
-            subject: r.get(5)?,
+            date,
+            subject,
             message_id: r.get(6)?,
             refs: r.get(7)?,
-            html: r.get(8)?,
-            text: r.get(9)?,
+            html,
+            text,
             reply_to: r.get(10)?,
-            draft: r.get(12)?,
+            draft,
             attachments: Vec::new(),
             invite: ics.and_then(|ics| crate::invite::parse(&ics, &me)),
+            code,
         })
     })?;
     let mut out: Vec<MessageRow> = rows.collect::<Result<_, _>>()?;

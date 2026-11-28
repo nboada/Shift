@@ -7,6 +7,7 @@ mod fake_gmail;
 mod gmail;
 mod imap;
 mod invite;
+mod otp;
 mod settings;
 mod updates;
 
@@ -416,7 +417,13 @@ fn notify_new_mail(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
         }
     };
     let (title, body) = match mail.as_slice() {
-        [one] => (name(&one.sender), one.subject.clone()),
+        [one] => (
+            name(&one.sender),
+            one.code.as_ref().map_or_else(
+                || one.subject.clone(),
+                |c| format!("Code {c} · {}", one.subject),
+            ),
+        ),
         many => {
             let mut senders: Vec<String> = many.iter().map(|m| name(&m.sender)).collect();
             senders.dedup();
@@ -432,11 +439,54 @@ fn notify_new_mail(app: &AppHandle, a: &Account) -> anyhow::Result<()> {
         .extra("account", &a.email);
     if let [one] = mail.as_slice() {
         n = n.extra("thread", &one.id);
+        if let Some(code) = &one.code {
+            n = n.extra("code", code).action_type_id(COPY_CODE_TYPE);
+        }
     }
     if cfg.sound {
         n = n.sound("default");
     }
     n.show()?;
+    Ok(())
+}
+
+/// The notification action type with the Copy code button, registered at launch.
+const COPY_CODE_TYPE: &str = "code";
+
+/// Copy code on a new-mail notification: puts the code on the clipboard without bringing Shift forward, and tells the
+/// window, which confirms it and archives the email when Settings → Inbox says so.
+fn copy_code_from_notification(
+    app: &AppHandle,
+    extra: &std::collections::HashMap<String, serde_json::Value>,
+) {
+    let Some(code) = extra.get("code").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    if let Err(e) = pbcopy(code) {
+        eprintln!("couldn't copy the code: {e:#}");
+        return;
+    }
+    let _ = app.emit(
+        "code-copied",
+        serde_json::json!({ "account": extra.get("account"), "thread": extra.get("thread"), "code": code }),
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn pbcopy(text: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use std::io::Write;
+    let mut child = std::process::Command::new("/usr/bin/pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .context("pbcopy didn't start")?;
+    child
+        .stdin
+        .take()
+        .context("pbcopy has no input")?
+        .write_all(text.as_bytes())?;
+    anyhow::ensure!(child.wait()?.success(), "pbcopy failed");
     Ok(())
 }
 
@@ -3213,14 +3263,28 @@ pub fn run() {
             // the first notification: ones shown earlier report no clicks.
             {
                 use tauri_plugin_notification::NotificationExt;
+                // shortcut: Copy code is a Mac button only; register it on the phone too (and copy with UIPasteboard)
+                // once the phone redesign lands.
+                #[cfg(desktop)]
+                {
+                    use tauri_plugin_notification::{Action, ActionType};
+                    app.notification().register_action_types(vec![
+                        ActionType::builder(COPY_CODE_TYPE)
+                            .actions(vec![Action::builder("copy-code", "Copy code").build()])
+                            .build(),
+                    ])?;
+                }
                 let handle = app.handle().clone();
                 app.notification().on_action(move |action| {
-                    if action.action_id() != "tap" {
-                        return;
-                    }
                     let Some(extra) = action.notification().map(tauri_plugin_notification::ActiveNotification::extra) else {
                         return;
                     };
+                    if action.action_id() == "copy-code" {
+                        return copy_code_from_notification(&handle, extra);
+                    }
+                    if action.action_id() != "tap" {
+                        return;
+                    }
                     #[cfg(desktop)]
                     if let Some(window) = handle.get_webview_window("main") {
                         let _ = window.unminimize();

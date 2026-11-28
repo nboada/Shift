@@ -43,6 +43,7 @@ import {
   LABEL_COLORS,
   avatar,
   bareEmail,
+  codeChip,
   quoted,
   renderQuote,
   dateGroup,
@@ -261,7 +262,7 @@ function threadRow(t: Thread) {
         <span class="avatar-ring${multi() ? ` acct-${accountSettings(t.account).color}` : ""}" ${multi() ? `data-tip="${esc(accountName(t.account))}"` : ""}>${avatar(t.sender)}</span>
         <span class="from">${esc(displayName(t.sender) || "(no sender)")}${t.count > 1 ? `<em>${t.count}</em>` : ""}${t.starred ? '<i class="ti ti-pinned pin"></i>' : ""}</span>
         <span class="date">${shortDate(t.date)}</span>
-        <span class="subject">${t.count > 1 ? `<em class="subject-count">${t.count}</em>` : ""}<span class="subject-text">${esc(t.subject || "(no subject)")}</span></span>
+        <span class="subject">${t.count > 1 ? `<em class="subject-count">${t.count}</em>` : ""}<span class="subject-text">${esc(t.subject || "(no subject)")}</span>${t.code ? codeChip(t.code) : ""}</span>
         <span class="snippet">${esc(decodeEntities(t.snippet))}</span>${rowLabels(t)}
         ${mail.mailbox === "SCHEDULED" ? "" : rowActions(t)}
       </li>`;
@@ -460,9 +461,50 @@ async function openThread(id: string) {
     reader.innerHTML = `<div class="reader-head"><h1>${esc(mail.messages[0]?.subject || thread?.subject || "(no subject)")}</h1></div>`;
     syncToolbar();
     renderMessages(reader, mail.messages, thread?.account ?? defaultAccount());
+    reader.querySelectorAll(".message > header").forEach((header, i) => {
+      const code = mail.messages[i]?.code;
+      if (code) header.querySelector("time")?.insertAdjacentHTML("beforebegin", codeChip(code));
+    });
     reader.scrollTop = 0;
     scrollToLatest();
   }
+}
+
+reader.addEventListener("click", (e) => {
+  const chip = (e.target as Element).closest<HTMLElement>("[data-code]");
+  if (chip)
+    void copyCode(
+      chip.dataset.code!,
+      mail.threads.find((t) => t.id === mail.selected),
+    );
+});
+
+/** Copies a one-time code (unless a notification already did), then archives its email if Settings → Inbox says so. */
+async function copyCode(code: string, t: Thread | undefined, copied = false) {
+  if (!copied) {
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch (err) {
+      return void toast(`Couldn't copy: ${err}`, { kind: "error" });
+    }
+  }
+  if (!settings.inbox.archiveAfterCode || !t?.labels.split(" ").includes("INBOX")) {
+    return void toast(`Copied ${code}`, { kind: "success", icon: "copy" });
+  }
+  removeAndAdvance(t.id);
+  void mail.undoable(t, [], ["INBOX"]);
+  toast(`Copied ${code} and archived the email`, {
+    kind: "success",
+    icon: "copy",
+    action: {
+      label: "Undo",
+      key: keyLabel("undo"),
+      run: () => {
+        void mail.undo();
+        toast("Undone", { kind: "success" });
+      },
+    },
+  });
 }
 
 wireReader(
@@ -2031,7 +2073,13 @@ threadList.addEventListener("click", (e) => {
   const li = (e.target as Element).closest<HTMLElement>("li[data-id]");
   if (!li) return;
   const rowAction = (e.target as Element).closest<HTMLElement>("[data-row-action]")?.dataset.rowAction;
-  if (rowAction) act(rowAction, li.dataset.id);
+  const code = (e.target as Element).closest<HTMLElement>("[data-code]")?.dataset.code;
+  if (code)
+    void copyCode(
+      code,
+      mail.threads.find((t) => t.id === li.dataset.id),
+    );
+  else if (rowAction) act(rowAction, li.dataset.id);
   else if ((e.metaKey || e.shiftKey) && mail.mailbox !== "SCHEDULED") pick(li.dataset.id!, e.shiftKey);
   else openThread(li.dataset.id!);
 });
@@ -2817,6 +2865,13 @@ listen<{ account?: string; thread?: string }>("open-from-notification", async ({
   if (mail.mailbox !== "INBOX" || mail.search) openMailbox("INBOX");
   await mail.loadThreads();
   if (payload.thread && mail.threads.some((t) => t.id === payload.thread)) await openThread(payload.thread);
+});
+// Copy code on a new-mail notification: the backend has copied it already.
+listen<{ account?: string; thread?: string; code: string }>("code-copied", ({ payload: { account, thread, code } }) => {
+  const listed = mail.threads.find((t) => t.id === thread && t.account === account);
+  // Not in the list on screen (another mailbox is open): the notification was for Inbox mail.
+  const t = listed ?? (thread && account ? ({ id: thread, account, labels: "INBOX" } as Thread) : undefined);
+  void copyCode(code, t, true);
 });
 // Messages from the backend, such as the outcome of Shift → Check for Updates….
 listen<string>("app-toast", (e) => toast(e.payload));
